@@ -44,12 +44,12 @@ def test_highway_topology():
     for cat_name in highway_categories:
         assert cat_name in CATEGORY_DEFINITIONS, f"Category '{cat_name}' not found"
         cat_def = CATEGORY_DEFINITIONS[cat_name]
-        assert cat_def.required_topology == TopologyType.HIGHWAY, \
-            f"Category '{cat_name}' has topology {cat_def.required_topology}, expected HIGHWAY"
+        assert cat_def.map.topology == TopologyType.HIGHWAY, \
+            f"Category '{cat_name}' has topology {cat_def.map.topology}, expected HIGHWAY"
         print(f"   ✓ '{cat_name}' uses TopologyType.HIGHWAY")
-        print(f"     - needs_on_ramp: {cat_def.needs_on_ramp}")
-        print(f"     - needs_merge: {cat_def.needs_merge}")
-        print(f"     - needs_multi_lane: {cat_def.needs_multi_lane}")
+        print(f"     - needs_on_ramp: {cat_def.map.needs_on_ramp}")
+        print(f"     - needs_merge: {cat_def.map.needs_merge}")
+        print(f"     - needs_multi_lane: {cat_def.map.needs_multi_lane}")
     
     # Test 4: Check CropFeatures has is_highway field
     print("\n4. Checking CropFeatures model...")

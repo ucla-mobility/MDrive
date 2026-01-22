@@ -89,6 +89,7 @@ def refine_picked_paths_with_model(
     prompt_out: Optional[str] = None,
     nodes_root: Optional[str] = None,
     carla_assets: Optional[str] = None,
+    schema_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     t_refiner_start = time.time()
     t0 = time.time()
@@ -133,6 +134,7 @@ def refine_picked_paths_with_model(
         model=model,
         tokenizer=tokenizer,
         max_new_tokens=max_new_tokens,
+        schema_payload=schema_payload,
     )
     print(f"[TIMING] refiner LLM constraint extraction: {time.time() - t0:.2f}s", flush=True)
 

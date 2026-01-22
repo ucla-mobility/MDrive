@@ -15,6 +15,12 @@ def crop_satisfies_spec(spec: GeometrySpec, crop: CropFeatures) -> bool:
             return False
         if crop.lane_count_est < 3:  # Highways must have 3+ lanes
             return False
+    elif spec.topology == "two_lane_corridor":
+        # Enforce corridor-like geometry: no intersections/highways and at most 2 lanes.
+        if crop.is_four_way or crop.is_t_junction or crop.is_highway:
+            return False
+        if crop.lane_count_est > 2:
+            return False
     elif spec.topology == "t_junction":
         if not crop.is_t_junction:
             return False

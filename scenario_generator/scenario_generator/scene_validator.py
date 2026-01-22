@@ -229,7 +229,7 @@ class SceneValidator:
         """
         if expected_flags:
             topo = expected_flags.get("required_topology")
-            if topo in {TopologyType.CORRIDOR, TopologyType.HIGHWAY}:
+            if topo in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY}:
                 return False
 
         if expected_relationships:
@@ -620,7 +620,7 @@ class SceneValidator:
             expected_relationships=expected_relationships,
             expected_maneuvers=expected_maneuvers,
         )
-        if expected_flags and expected_flags.get("required_topology") in {TopologyType.CORRIDOR, TopologyType.HIGHWAY}:
+        if expected_flags and expected_flags.get("required_topology") in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY}:
             requires_intersection = False
         
         polylines = self._extract_polylines_from_scene(scene_data)
@@ -1414,11 +1414,11 @@ class SceneValidator:
             cat = CATEGORY_DEFINITIONS.get(category)
             if cat:
                 if flags["required_topology"] is None:
-                    flags["required_topology"] = cat.required_topology
-                flags["needs_oncoming"] = flags["needs_oncoming"] or cat.needs_oncoming
-                flags["needs_on_ramp"] = flags["needs_on_ramp"] or cat.needs_on_ramp
-                flags["needs_merge"] = flags["needs_merge"] or cat.needs_merge
-                flags["needs_multi_lane"] = flags["needs_multi_lane"] or cat.needs_multi_lane
+                    flags["required_topology"] = cat.map.topology
+                flags["needs_oncoming"] = flags["needs_oncoming"] or cat.map.needs_oncoming
+                flags["needs_on_ramp"] = flags["needs_on_ramp"] or cat.map.needs_on_ramp
+                flags["needs_merge"] = flags["needs_merge"] or cat.map.needs_merge
+                flags["needs_multi_lane"] = flags["needs_multi_lane"] or cat.map.needs_multi_lane
                 if "weaving" in cat.name.lower():
                     flags["needs_lane_change"] = True
                 if "lane drop" in cat.name.lower():

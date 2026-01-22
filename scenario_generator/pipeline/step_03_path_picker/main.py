@@ -30,6 +30,7 @@ def pick_paths_with_model(
     model_id: Optional[str] = None,
     require_straight: bool = False,
     require_on_ramp: bool = False,
+    schema_constraints: Optional[Dict[str, Any]] = None,
 ):
     """
     Run the path picker using a provided model/tokenizer if given.
@@ -100,12 +101,30 @@ def pick_paths_with_model(
 
     # -------------------------
     # Stage A: constraint extraction (LLM) + deterministic CSP solve
+    # If schema_constraints is provided, try deterministic CSP first.
     # -------------------------
     import time as time_module
     parsed: Optional[Dict[str, Any]] = None
     description = _extract_description_from_prompt(prompt)
 
-    if description:
+    if schema_constraints:
+        try:
+            t0_csp_stage = time_module.time()
+            csp_items = _solve_paths_csp(
+                schema_constraints,
+                candidates,
+                description=description,
+                require_straight=require_straight,
+                require_on_ramp=require_on_ramp,
+                lane_counts_by_road=agg.get("lane_counts_by_road") if isinstance(agg, dict) else None,
+                skip_evidence_filter=True,
+            )
+            parsed = {"vehicles": csp_items}
+            print(f"[TIMING] path_picker schema CSP solve: {time_module.time() - t0_csp_stage:.2f}s", flush=True)
+        except Exception as e:
+            print(f"[WARNING] Schema constraints CSP solve failed; falling back to LLM. Reason: {e}")
+
+    if parsed is None and description:
         t0_csp_stage = time_module.time()
         constraints_prompt = _build_constraints_prompt(description)
         constraints_text = _generate_text(constraints_prompt)

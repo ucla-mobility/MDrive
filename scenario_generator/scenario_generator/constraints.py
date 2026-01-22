@@ -261,6 +261,35 @@ class ScenarioSpec:
                 return "continues straight"
         
         # Helper to describe approach context
+        def cardinal_phrase(veh: EgoVehicleSpec) -> str:
+            """
+            Provide a canonical cardinal phrasing for entry/exit to reduce ambiguity
+            for downstream path picking. We map main vs side to perpendicular axes.
+            """
+            if self.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}:
+                if veh.entry_road == "main":
+                    entry = "from west to east (main road)"
+                elif veh.entry_road == "side":
+                    entry = "from south to north (side road)"
+                else:
+                    entry = "from an unspecified approach"
+
+                if veh.exit_road == "main":
+                    exit_dir = "continuing eastbound"
+                elif veh.exit_road == "side":
+                    exit_dir = "continuing northbound"
+                else:
+                    exit_dir = "continuing through"
+
+                return f"enters {entry} and {exit_dir}"
+
+            if self.topology == TopologyType.HIGHWAY:
+                if veh.entry_road == "main":
+                    return "travels along the mainline"
+                if veh.entry_road == "side":
+                    return "enters from an on-ramp onto the mainline"
+            return "approaches"
+
         def approach_phrase(veh: EgoVehicleSpec) -> str:
             if veh.entry_road == "main":
                 if self.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}:
@@ -311,18 +340,18 @@ class ScenarioSpec:
                 # Describe the shared approach
                 approach_verb = "both approach" if len(group_vehicles) == 2 else "all approach"
                 if first_veh.entry_road == "main":
-                    parts.append(f"{veh_list} {approach_verb} from the same road (the main road).")
+                    parts.append(f"{veh_list} {approach_verb} from the same road (the main road), entering west to east.")
                 elif first_veh.entry_road == "side":
                     if self.needs_on_ramp or self.topology == TopologyType.HIGHWAY:
                         parts.append(f"{veh_list} {approach_verb} from the same road (the on-ramp).")
                     else:
-                        parts.append(f"{veh_list} {approach_verb} from the same road (the side road).")
+                        parts.append(f"{veh_list} {approach_verb} from the same road (the side road), entering south to north.")
                 else:
                     parts.append(f"{veh_list} {approach_verb} from the same road.")
                 
                 # Now describe each vehicle's individual maneuver
                 for veh in group_vehicles:
-                    parts.append(f"{veh.vehicle_id} {maneuver_phrase(veh)}.")
+                    parts.append(f"{veh.vehicle_id} {maneuver_phrase(veh)} ({cardinal_phrase(veh)}).")
                     described_vehicles.add(veh.vehicle_id)
         
         # Describe remaining vehicles that are not in any same_approach group
@@ -367,7 +396,7 @@ class ScenarioSpec:
                 else:
                     veh_parts.append(approach_phrase(veh))
                 
-                veh_parts.append(f"and {maneuver_phrase(veh)}")
+                veh_parts.append(f"and {maneuver_phrase(veh)} ({cardinal_phrase(veh)})")
                 parts.append(" ".join(veh_parts) + ".")
                 described_vehicles.add(veh.vehicle_id)
         
@@ -528,7 +557,13 @@ def validate_spec(spec: ScenarioSpec) -> Tuple[bool, List[str]]:
         errors.append(f"Category '{spec.category}' is not supported by current pipeline")
     
     # Check topology is supported
-    if spec.topology not in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION, TopologyType.CORRIDOR, TopologyType.HIGHWAY}:
+    if spec.topology not in {
+        TopologyType.INTERSECTION,
+        TopologyType.T_JUNCTION,
+        TopologyType.CORRIDOR,
+        TopologyType.TWO_LANE_CORRIDOR,
+        TopologyType.HIGHWAY,
+    }:
         errors.append(f"Topology '{spec.topology.value}' is not supported")
     
     # Check ego vehicle count
@@ -561,12 +596,16 @@ def validate_spec(spec: ScenarioSpec) -> Tuple[bool, List[str]]:
     # Check that required features are consistent
     cat = CATEGORY_DEFINITIONS.get(spec.category)
     if cat:
-        if cat.needs_oncoming and not spec.needs_oncoming:
+        if cat.map.topology and spec.topology != cat.map.topology:
+            errors.append(f"Category {spec.category} requires topology {cat.map.topology.value}")
+        if cat.map.needs_oncoming and not spec.needs_oncoming:
             errors.append(f"Category {spec.category} requires oncoming traffic")
-        if cat.needs_multi_lane and not spec.needs_multi_lane:
+        if cat.map.needs_multi_lane and not spec.needs_multi_lane:
             errors.append(f"Category {spec.category} requires multi-lane")
-        if cat.needs_on_ramp and not spec.needs_on_ramp:
+        if cat.map.needs_on_ramp and not spec.needs_on_ramp:
             errors.append(f"Category {spec.category} requires on-ramp")
+        if cat.map.needs_merge and not spec.needs_merge:
+            errors.append(f"Category {spec.category} requires merge")
     
     return (len(errors) == 0, errors)
 

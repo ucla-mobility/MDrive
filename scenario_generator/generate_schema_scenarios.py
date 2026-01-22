@@ -57,6 +57,10 @@ def main():
         help="CARLA town to use for T-junction categories (default: Town02)"
     )
     parser.add_argument(
+        "--two-lane-corridor-town", default="Town02",
+        help="CARLA town to use for two-lane corridor categories (default: Town02)"
+    )
+    parser.add_argument(
         "--model", default="Qwen/Qwen2.5-32B-Instruct-AWQ",
         help="HuggingFace model ID (default: Qwen/Qwen2.5-32B-Instruct-AWQ)"
     )
@@ -149,6 +153,7 @@ def main():
         town=args.town,
         highway_town=args.highway_town,
         t_junction_town=args.t_junction_town,
+        two_lane_corridor_town=args.two_lane_corridor_town,
         model_id=args.model,
         viz_objects=True,
         routes_out_dir=routes_out_dir,
@@ -175,6 +180,7 @@ def main():
     print(f"Town (default):   {config.town}")
     print(f"Town (highway):   {config.highway_town or config.town}")
     print(f"Town (t-junction):{config.t_junction_town or config.town}")
+    print(f"Town (2-lane):    {config.two_lane_corridor_town or config.town}")
     print(f"Template only:    {config.template_only}")
     print(f"Routes out dir:   {config.routes_out_dir or 'disabled'}")
     print(f"Align routes:     {config.align_routes} (CARLA {config.carla_host}:{config.carla_port})")

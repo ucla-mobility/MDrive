@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simple test to verify Phase 1 implementation without complex terminal interaction"""
+"""Simple sanity checks for schema prompt/content without complex terminal interaction."""
 
 import sys
 import os

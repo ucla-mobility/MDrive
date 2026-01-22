@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""
-Phase 1 Validation Script - Tests that schema generation properly handles constraints
-
-Run this after implementing Phase 1 changes to verify:
-1. D2 scenarios have 1+ active constraints
-2. D3 scenarios have 2+ active constraints  
-3. LLM reasoning blocks are generated
-4. Passive-only constraints rejected at D2+
-"""
+"""Phase 1 Validation Script - sanity checks for schema generation outputs."""
 
 import json
 import sys
@@ -101,7 +93,7 @@ def validate_interactive(spec):
     return checks, analysis
 
 
-def run_test(category='highway', num_runs=3):
+def run_test(category='Highway On-Ramp Merge', num_runs=3):
     """Run basic interaction checks for generated specs."""
     print(f"\n{'='*70}")
     print(f"Testing category '{category}'")

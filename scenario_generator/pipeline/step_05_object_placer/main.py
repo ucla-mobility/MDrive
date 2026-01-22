@@ -110,43 +110,49 @@ def run_object_placer(args, model=None, tokenizer=None):
         print(f"[TIMING] object_placer model load: {time.time() - t0:.2f}s", flush=True)
 
     # --------------------------
-    # Stage 1: extract entities
+    # Stage 1: extract entities (or use schema-provided actors)
     # --------------------------
     t_stage1_start = time.time()
-    stage1_prompt = build_stage1_prompt(args.description)
-    t0 = time.time()
-    stage1_text = generate_with_model(
-        model=model,
-        tokenizer=tokenizer,
-        prompt=stage1_prompt,
-        max_new_tokens=args.max_new_tokens,
-        do_sample=args.do_sample,
-        temperature=args.temperature,
-        top_p=args.top_p,
-    )
-    print(f"[TIMING] Stage1 LLM generation: {time.time() - t0:.2f}s", flush=True)
-    t0 = time.time()
-    # Stage 1 parse (with repair if the model didn't output JSON)
-    try:
-        stage1_obj = parse_llm_json(stage1_text, required_top_keys=["entities"])
-    except Exception:
-        _bump("object_stage1_json_repair")
-        repair_prompt = (
-            "Return JSON ONLY with top-level key 'entities' (a list). No prose.\n"
-            "If you previously wrote anything else, convert it into the required JSON now.\n\n"
-            "RAW OUTPUT:\n" + stage1_text
-        )
-        repair_text = generate_with_model(
+    schema_entities = getattr(args, "schema_entities", None)
+    if schema_entities is not None:
+        print("[INFO] Using schema-provided actors; skipping Stage1 LLM.")
+        stage1_obj = {"entities": schema_entities}
+    else:
+        t_stage1_start = time.time()
+        stage1_prompt = build_stage1_prompt(args.description)
+        t0 = time.time()
+        stage1_text = generate_with_model(
             model=model,
             tokenizer=tokenizer,
-            prompt=repair_prompt,
+            prompt=stage1_prompt,
             max_new_tokens=args.max_new_tokens,
             do_sample=args.do_sample,
             temperature=args.temperature,
             top_p=args.top_p,
         )
-        stage1_obj = parse_llm_json(repair_text, required_top_keys=["entities"])
-    print(f"[TIMING] Stage1 parse+repair: {time.time() - t0:.2f}s", flush=True)
+        print(f"[TIMING] Stage1 LLM generation: {time.time() - t0:.2f}s", flush=True)
+        t0 = time.time()
+        # Stage 1 parse (with repair if the model didn't output JSON)
+        try:
+            stage1_obj = parse_llm_json(stage1_text, required_top_keys=["entities"])
+        except Exception:
+            _bump("object_stage1_json_repair")
+            repair_prompt = (
+                "Return JSON ONLY with top-level key 'entities' (a list). No prose.\n"
+                "If you previously wrote anything else, convert it into the required JSON now.\n\n"
+                "RAW OUTPUT:\n" + stage1_text
+            )
+            repair_text = generate_with_model(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=repair_prompt,
+                max_new_tokens=args.max_new_tokens,
+                do_sample=args.do_sample,
+                temperature=args.temperature,
+                top_p=args.top_p,
+            )
+            stage1_obj = parse_llm_json(repair_text, required_top_keys=["entities"])
+        print(f"[TIMING] Stage1 parse+repair: {time.time() - t0:.2f}s", flush=True)
 
     entities = stage1_obj.get("entities", [])
     if not isinstance(entities, list):
@@ -818,6 +824,46 @@ def run_object_placer(args, model=None, tokenizer=None):
     apply_after_turn_segment_corrections(actors, stage1_obj.get("entities", []), picked, seg_by_id)
     # Guardrail: if Stage1 said "in_intersection", keep it on a turn-connector segment.
     apply_in_intersection_segment_corrections(actors, stage1_obj.get("entities", []), picked, seg_by_id)
+
+    # Guardrail: re-anchor actors to Stage1 affects_vehicle when drifted.
+    stage1_affects = {
+        str(e.get("entity_id")): str(e.get("affects_vehicle", "") or "").strip()
+        for e in stage1_obj.get("entities", [])
+        if e.get("entity_id")
+    }
+    filtered_actors: List[Dict[str, Any]] = []
+    for actor in actors:
+        ent_id = str(actor.get("entity_id") or actor.get("id") or "")
+        intended = stage1_affects.get(ent_id, "")
+        placement = actor.get("placement", {}) if isinstance(actor.get("placement", {}), dict) else {}
+        placed_tv = str(placement.get("target_vehicle") or "").strip()
+        if intended and intended.lower() not in ("", "none", "unknown") and placed_tv not in (intended, ""):
+            # Try to re-anchor to intended vehicle's first segment midpoint
+            picked_entry = next((p for p in picked if p.get("vehicle") == intended), None)
+            if picked_entry:
+                seg_ids = (picked_entry.get("signature", {}) or {}).get("segment_ids", [])
+                segs = (picked_entry.get("signature", {}) or {}).get("segments_detailed", [])
+                if seg_ids:
+                    placement = dict(placement)
+                    placement["target_vehicle"] = intended
+                    placement["segment_index"] = 1
+                    placement["seg_id"] = seg_ids[0]
+                    placement["s_along"] = 0.2
+                    placement.setdefault("lateral_relation", "center")
+                    actor = dict(actor)
+                    actor["placement"] = placement
+                    print(
+                        f"[WARNING] Re-anchoring actor {ent_id} to {intended} (was {placed_tv or 'none'})",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[WARNING] Could not re-anchor actor {ent_id}: no segments for {intended}",
+                        flush=True,
+                    )
+                    continue
+        filtered_actors.append(actor)
+    actors = filtered_actors
 
     # Expand quantity>1 entities for llm_anchor placement mode.
     if args.placement_mode == "llm_anchor":

@@ -1,3 +1,4 @@
+import json
 import math
 import textwrap
 from typing import Any, Dict, List, Optional, Tuple
@@ -174,6 +175,34 @@ def visualize(
 
     def _wrap_label(label: str, width: int = 32) -> str:
         return "\n".join(textwrap.fill(line, width=width) for line in label.splitlines())
+
+    def _scene_summary_text(raw_description: Any) -> Optional[str]:
+        """
+        Prefer the `description` field when the provided description is a schema JSON.
+        Falls back to the raw string when parsing fails or no description exists.
+        """
+        if raw_description is None:
+            return None
+        if isinstance(raw_description, dict):
+            desc_val = raw_description.get("description")
+            if isinstance(desc_val, str) and desc_val.strip():
+                return desc_val.strip()
+            raw_str = str(raw_description).strip()
+            return raw_str or None
+
+        raw_str = str(raw_description).strip()
+        if not raw_str:
+            return None
+
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, dict):
+                desc_val = parsed.get("description")
+                if isinstance(desc_val, str) and desc_val.strip():
+                    return desc_val.strip()
+        except Exception:
+            pass
+        return raw_str
 
     def _actor_bbox_dims_from_actor_or_cache(a: Dict[str, Any]) -> Tuple[float, float]:
         """
@@ -632,8 +661,9 @@ def visualize(
     # Title
     # ------------------------------------------------------------
     lines = []
-    if description:
-        desc_clean = " ".join(str(description).split())
+    scene_summary = _scene_summary_text(description)
+    if scene_summary:
+        desc_clean = " ".join(scene_summary.split())
         scene_text = textwrap.fill(desc_clean, width=90)
         lines.append(r"$\bf{Scene:}$ " + scene_text)
     lines.append(rf"$\bf{{Placed\ actors\ (n={len(actors_world)})}}$")

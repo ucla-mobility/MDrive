@@ -43,8 +43,13 @@ def geometry_spec_from_scenario_spec(spec: ScenarioSpec) -> GeometrySpec:
 
     needs_merge_onto_same_road = bool(spec.needs_merge or spec.needs_on_ramp)
     needs_multi_lane = bool(spec.needs_multi_lane)
-    # Highways require minimum 3 lanes, other topologies default to 2 for multi-lane
-    min_lane_count = 3 if spec.topology == TopologyType.HIGHWAY else (2 if needs_multi_lane else 1)
+    # Highways require minimum 3 lanes; two-lane corridors force 2; others default to 2 for multi-lane
+    if spec.topology == TopologyType.HIGHWAY:
+        min_lane_count = 3
+    elif spec.topology == TopologyType.TWO_LANE_CORRIDOR:
+        min_lane_count = 2
+    else:
+        min_lane_count = 2 if needs_multi_lane else 1
 
     return GeometrySpec(
         topology=topology,

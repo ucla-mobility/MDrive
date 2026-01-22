@@ -13,7 +13,8 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import json
 
 
 class GenerationLogger:
@@ -63,6 +64,154 @@ def mute_stdout():
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+
+
+def _schema_to_text(schema: Optional[Dict[str, Any]]) -> str:
+    """Pretty-print a schema dict for prompts/logging."""
+    if not schema:
+        return ""
+    try:
+        return json.dumps(schema, indent=2, sort_keys=True)
+    except Exception:
+        return str(schema)
+
+
+def _constraints_from_schema(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Build a path-picker constraints payload directly from a schema dict.
+
+    This mirrors the structure expected by step_03_path_picker:
+    {
+      "vehicles": [{"vehicle": "Vehicle 1", "maneuver": "left", ...}],
+      "constraints": [{"type": "same_approach_as", "a": "Vehicle 1", "b": "Vehicle 2"}]
+    }
+    """
+    if not schema or not isinstance(schema, dict):
+        return None
+
+    vehicles = []
+    for ego in schema.get("ego_vehicles", []):
+        if not isinstance(ego, dict):
+            continue
+        vid = ego.get("vehicle_id")
+        if not vid:
+            continue
+        vehicles.append(
+            {
+                "vehicle": str(vid),
+                "maneuver": str(ego.get("maneuver", "unknown")).lower(),
+                "lane_change_phase": str(ego.get("lane_change_phase", "unknown")).lower(),
+                "approach_direction": "unknown",
+                "entry_road": str(ego.get("entry_road", "unknown")).lower(),
+                "exit_road": str(ego.get("exit_road", "unknown")).lower(),
+            }
+        )
+
+    constraints = []
+    for c in schema.get("vehicle_constraints", []):
+        if not isinstance(c, dict):
+            continue
+        ctype = c.get("type")
+        a = c.get("a")
+        b = c.get("b")
+        if not ctype or not a or not b:
+            continue
+        constraints.append(
+            {
+                "type": str(ctype).lower(),
+                "a": str(a),
+                "b": str(b),
+            }
+        )
+
+    if not vehicles:
+        return None
+
+    return {"vehicles": vehicles, "constraints": constraints}
+
+
+def _normalize_lateral_for_stage1(value: Optional[str]) -> Optional[str]:
+    """Clamp lateral positions to the small set allowed by stage1 prompts."""
+    allowed = {
+        "center",
+        "half_right",
+        "right_edge",
+        "right_lane",
+        "half_left",
+        "left_edge",
+        "left_lane",
+    }
+    if not value:
+        return None
+    val = str(value).lower()
+    if val in allowed:
+        return val
+    # Map offroad/sidewalk variants to edges to avoid rejection
+    if "right" in val:
+        return "right_edge"
+    if "left" in val:
+        return "left_edge"
+    return None
+
+
+def _entities_from_schema(schema: Optional[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """
+    Build Stage 1 object-placer entities directly from schema actors.
+
+    This bypasses the need to re-extract actors from natural language.
+    """
+    if not schema or not isinstance(schema, dict):
+        return None
+
+    actors = schema.get("actors", [])
+    if not isinstance(actors, list) or not actors:
+        return []
+
+    entities: List[Dict[str, Any]] = []
+    for idx, actor in enumerate(actors):
+        if not isinstance(actor, dict):
+            continue
+        ent_id = f"entity_{idx + 1}"
+        mention = str(actor.get("actor_id", ent_id))
+        evidence = mention  # evidence must be substring of description; schema text will include actor_id
+        motion = str(actor.get("motion", "unknown")).lower()
+        if motion == "cross_perpendicular":
+            motion_hint = "crossing"
+        elif motion == "follow_lane":
+            motion_hint = "follow_lane"
+        elif motion == "static":
+            motion_hint = "static"
+        else:
+            motion_hint = "unknown"
+
+        direction_rel = None
+        dir_rel_val = actor.get("direction_relative_to")
+        if dir_rel_val and actor.get("affects_vehicle"):
+            direction_rel = {"vehicle": actor.get("affects_vehicle"), "direction": dir_rel_val}
+
+        entities.append(
+            {
+                "entity_id": ent_id,
+                "mention": mention,
+                "evidence": evidence,
+                "actor_kind": actor.get("kind", "static_prop"),
+                "quantity": actor.get("quantity", 1),
+                "group_pattern": actor.get("group_pattern", "unknown"),
+                "start_lateral": _normalize_lateral_for_stage1(actor.get("start_lateral")),
+                "end_lateral": _normalize_lateral_for_stage1(actor.get("end_lateral")),
+                "affects_vehicle": actor.get("affects_vehicle"),
+                "when": actor.get("timing_phase", "unknown"),
+                "lateral_relation": _normalize_lateral_for_stage1(actor.get("lateral_position")) or "unknown",
+                "motion_hint": motion_hint,
+                "crossing_direction": actor.get("crossing_direction"),
+                "speed_hint": actor.get("speed", "unknown"),
+                "trigger": None,
+                "action": None,
+                "direction_relative_to": direction_rel,
+            }
+        )
+
+    return entities
 
 
 class PipelineRunner:
@@ -123,9 +272,10 @@ class PipelineRunner:
 
     def run_full_pipeline(
         self,
-        scenario_text: str,
         category: str,
         scenario_id: str,
+        scenario_text: str = "",
+        scenario_schema: Optional[Dict[str, Any]] = None,
         town: str = "Town05",
         mute: bool = True,
         model_id: str = "Qwen/Qwen2.5-32B-Instruct-AWQ",
@@ -140,6 +290,9 @@ class PipelineRunner:
         """
         self._ensure_model(model_id)
 
+        schema_text = _schema_to_text(scenario_schema)
+        payload_text = scenario_text or schema_text
+
         safe_name = scenario_id.replace(" ", "_").replace("/", "_")
         out_dir = self.output_base_dir / safe_name
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -147,26 +300,33 @@ class PipelineRunner:
         with open(out_dir / "scenario_input.txt", "w") as f:
             f.write(f"Category: {category}\n")
             f.write(f"Town: {town}\n")
-            f.write(f"Text: {scenario_text}\n")
+            if schema_text:
+                f.write("Schema:\n")
+                f.write(schema_text + "\n")
+            if payload_text and payload_text != schema_text:
+                f.write("Payload text:\n")
+                f.write(payload_text + "\n")
 
         try:
             if mute:
                 with mute_stdout():
                     return self._run_pipeline_direct(
                         out_dir,
-                        scenario_text,
+                        payload_text,
                         town,
                         scenario_id,
                         category=category,
+                        scenario_schema=scenario_schema,
                         geometry_spec=geometry_spec,
                         stats=stats,
                     )
             return self._run_pipeline_direct(
                 out_dir,
-                scenario_text,
+                payload_text,
                 town,
                 scenario_id,
                 category=category,
+                scenario_schema=scenario_schema,
                 geometry_spec=geometry_spec,
                 stats=stats,
             )
@@ -181,6 +341,7 @@ class PipelineRunner:
         town: str,
         scenario_id: str,
         category: str = "",
+        scenario_schema: Optional[Dict[str, Any]] = None,
         geometry_spec: Optional[Any] = None,
         stats: Optional[dict] = None,
     ) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -189,9 +350,9 @@ class PipelineRunner:
 
         require_straight = False
         cat_info = CATEGORY_DEFINITIONS.get(category)
-        if cat_info and cat_info.required_topology in {TopologyType.CORRIDOR, TopologyType.HIGHWAY}:
+        if cat_info and cat_info.map.topology in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY}:
             require_straight = True
-            print(f"[INFO] Category '{category}' requires {cat_info.required_topology.value} topology, filtering to straight paths")
+            print(f"[INFO] Category '{category}' requires {cat_info.map.topology.value} topology, filtering to straight paths")
 
         parent_dir = Path(__file__).parent.parent
         if str(parent_dir) not in sys.path:
@@ -227,6 +388,9 @@ class PipelineRunner:
         refined_paths_path = out_dir / "picked_paths_refined.json"
         scene_json_path = out_dir / "scene_objects.json"
         scene_png_path = out_dir / "scene_objects.png"
+
+        schema_constraints = _constraints_from_schema(scenario_schema)
+        schema_entities = _entities_from_schema(scenario_schema)
 
         if geometry_spec is None:
             extractor = crop_picker.LLMGeometryExtractor(model_name="", device="cuda")
@@ -377,9 +541,10 @@ class PipelineRunner:
 
         prompt_text = legal_prompt_path.read_text(encoding="utf-8").strip()
         prompt_text += (
-            "\n\nUSER SCENARIO DESCRIPTION:\n"
+            "\n\nUSER SCENARIO SCHEMA (JSON):\n"
             + scenario_text
-            + "\n(Only assign paths to moving vehicles; ignore static/parked props.)\n"
+            + "\nUse this structured schema (not prose) to choose ego paths and constraints.\n"
+            + "(Only assign paths to moving vehicles; ignore static/parked props.)\n"
         )
         picker_prompt_path.write_text(prompt_text, encoding="utf-8")
 
@@ -404,6 +569,7 @@ class PipelineRunner:
             top_p=0.95,
             require_straight=require_straight,
             require_on_ramp=require_on_ramp,
+            schema_constraints=schema_constraints,
         )
 
         refine_picked_paths_with_model(
@@ -414,6 +580,7 @@ class PipelineRunner:
             tokenizer=self._tokenizer,
             max_new_tokens=self.refiner_max_new_tokens,
             carla_assets=str(parent_dir / "carla_assets.json"),
+            schema_payload=scenario_schema,
         )
 
         from types import SimpleNamespace
@@ -432,6 +599,7 @@ class PipelineRunner:
             temperature=self.placer_temperature,
             top_p=self.placer_top_p,
             placement_mode="csp",
+            schema_entities=schema_entities,
         )
         if stats is not None:
             placer_args.stats = stats

@@ -173,6 +173,7 @@ def _solve_paths_csp(
     require_straight: bool = False,
     require_on_ramp: bool = False,
     lane_counts_by_road: Optional[Dict[int, int]] = None,
+    skip_evidence_filter: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Soft CSP/backtracking over candidate paths.
@@ -187,8 +188,9 @@ def _solve_paths_csp(
     if not norm:
         raise ValueError("Invalid constraints object (missing vehicles list).")
 
-    norm = _filter_constraints_with_evidence(description, norm)
-    norm = _infer_constraints_from_description(description, norm)
+    if not skip_evidence_filter:
+        norm = _filter_constraints_with_evidence(description, norm)
+        norm = _infer_constraints_from_description(description, norm)
     vehicles = [v["vehicle"] for v in norm["vehicles"]]
     unary = {v["vehicle"]: v for v in norm["vehicles"]}
     constraints = norm.get("constraints", [])
@@ -301,6 +303,50 @@ def _solve_paths_csp(
         if saw_unknown:
             return None
         return False
+
+    def _lane_cohesion_adjust(
+        cand_v: Dict[str, Any],
+        cand_o: Dict[str, Any],
+        v_name: str,
+        o_name: str,
+    ) -> float:
+        """
+        Soft bias: if two vehicles share the same entry road and have compatible maneuvers
+        (straight/right, no pre-intersection lane change), reward same-lane or adjacent-lane starts.
+        Apply only when approach direction matches and lane ids are known.
+        """
+        u_v = unary.get(v_name, {})
+        u_o = unary.get(o_name, {})
+        entry_road_v = str(u_v.get("entry_road", "unknown")).lower()
+        entry_road_o = str(u_o.get("entry_road", "unknown")).lower()
+        if not entry_road_v or entry_road_v != entry_road_o:
+            return 0.0
+
+        # Require matching approach cardinals to avoid cross approaches.
+        if _candidate_entry_cardinal(cand_v) != _candidate_entry_cardinal(cand_o):
+            return 0.0
+
+        # Skip if either vehicle needs a lane change before the intersection.
+        if v_name in vehicles_with_lane_change or o_name in vehicles_with_lane_change:
+            return 0.0
+
+        allowed_maneuvers = {"straight", "right"}
+        man_v = str(u_v.get("maneuver", "unknown")).lower()
+        man_o = str(u_o.get("maneuver", "unknown")).lower()
+        if man_v not in allowed_maneuvers or man_o not in allowed_maneuvers:
+            return 0.0
+
+        lid_v = _candidate_entry_lane_id(cand_v)
+        lid_o = _candidate_entry_lane_id(cand_o)
+        if lid_v is None or lid_o is None:
+            return 0.0
+
+        if lid_v == lid_o:
+            return -0.2  # prefer same lane when safe
+        diff = abs(lid_v - lid_o)
+        if diff == 1:
+            return -0.1  # prefer adjacent lane
+        return 0.05  # mild penalty for widely separated lanes
 
     def _candidate_effective_length(cand: Dict[str, Any], vehicle: str) -> float:
         base = _candidate_length(cand)
@@ -765,6 +811,8 @@ def _solve_paths_csp(
                     other = asn[a]
                 if other is not None:
                     add_pen += _constraint_penalty(cand, other, t, v_is_a=(a == vname))
+                    # Soft cohesion bonus/penalty for same-entry vehicles with compatible maneuvers
+                    add_pen += _lane_cohesion_adjust(cand, other, vname, a if b == vname else b)
             asn[vname] = cand
             new_has_ramp = has_ramp or (cand.get("name") in ramp_candidates)
             backtrack(

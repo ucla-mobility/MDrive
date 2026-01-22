@@ -51,33 +51,22 @@ _MOTION_VALUES = [m.value for m in MotionType]
 _SPEED_VALUES = [s.value for s in SpeedHint]
 
 
-def _parse_variation_axes(cat_info: Any) -> Dict[str, List[str]]:
-    axes: Dict[str, List[str]] = {}
-    for axis in cat_info.variation_axes:
-        if ": " in axis:
-            axis_name, options_str = axis.split(": ", 1)
-            options = [opt.strip() for opt in options_str.split(" vs ") if opt.strip()]
-            if options:
-                axes[axis_name] = options
-    return axes
-
-
 def select_variation_values(
     cat_info: Any,
     used_combinations: Optional[Set[str]] = None,
 ) -> Dict[str, str]:
-    axes = _parse_variation_axes(cat_info)
+    axes = getattr(cat_info, "vary", []) or []
     used_combinations = used_combinations or set()
     if not axes:
         return {}
 
     for _ in range(50):
-        selections = {name: random.choice(options) for name, options in axes.items()}
+        selections = {axis.name: random.choice(axis.options) for axis in axes if axis.options}
         combo_key = "|".join(f"{k}={v}" for k, v in sorted(selections.items()))
         if combo_key not in used_combinations:
             return selections
 
-    return {name: random.choice(options) for name, options in axes.items()}
+    return {axis.name: random.choice(axis.options) for axis in axes if axis.options}
 
 
 def _enum_list(values: List[str]) -> str:
@@ -101,22 +90,38 @@ def build_schema_generation_prompt(
     """
     Build a compact prompt for schema generation without level-based scaling.
     """
+    summary = getattr(cat_info, "summary", "")
+    intent = getattr(cat_info, "intent", "")
+    must_include = getattr(cat_info, "must_include", []) or []
+    avoid = getattr(cat_info, "avoid", []) or []
+
+    topology = cat_info.map.topology if hasattr(cat_info, "map") else TopologyType.UNKNOWN
+    needs_oncoming = getattr(cat_info.map, "needs_oncoming", False)
+    needs_multi_lane = getattr(cat_info.map, "needs_multi_lane", False)
+    needs_on_ramp = getattr(cat_info.map, "needs_on_ramp", False)
+    needs_merge = getattr(cat_info.map, "needs_merge", False)
+
     required_flags = []
-    if cat_info.needs_oncoming:
+    if needs_oncoming:
         required_flags.append("needs_oncoming=true")
-    if cat_info.needs_multi_lane:
+    if needs_multi_lane:
         required_flags.append("needs_multi_lane=true")
-    if cat_info.needs_on_ramp:
+    if needs_on_ramp:
         required_flags.append("needs_on_ramp=true")
-    if cat_info.needs_merge:
+    if needs_merge:
         required_flags.append("needs_merge=true")
     required_flags_str = ", ".join(required_flags) if required_flags else "none"
 
     variation_lines = []
+    axes = getattr(cat_info, "vary", []) or []
+    for axis in axes:
+        opts = ", ".join(axis.options)
+        why = f" (why: {axis.why})" if getattr(axis, "why", "") else ""
+        variation_lines.append(f"- {axis.name}: options = {opts}{why}")
     if forced_variations:
         for k, v in forced_variations.items():
             variation_lines.append(f"- {k}: {v}")
-    variation_block = "\n".join(variation_lines) if variation_lines else "- (no forced variation)"
+    variation_block = "\n".join(variation_lines) if variation_lines else "- (no variation axes defined)"
 
     schema = f"""  "category": "{category}",
   "topology": "{_enum_list(_TOPOLOGY_VALUES)}",
@@ -181,8 +186,14 @@ Edit the prior JSON directly and fix the problems. Do not invent new keys.
     prompt = (
         f"Generate a JSON scenario spec for the driving pipeline.\n"
         f"Category: {category}\n"
-        f"Topology: {cat_info.required_topology.value}\n"
+        f"Summary: {summary}\n"
+        f"Intent: {intent}\n"
+        f"Topology: {topology.value}\n"
         f"Required flags: {required_flags_str}\n"
+        "Must include:\n"
+        + "\n".join(f"- {item}" for item in must_include) + "\n"
+        "Avoid:\n"
+        + ("\n".join(f"- {item}" for item in avoid) if avoid else "- none") + "\n"
         f"Variation targets:\n{variation_block}\n"
         "Rules:\n"
         "- Output ONLY JSON (no markdown/comments).\n"
@@ -213,13 +224,13 @@ def build_schema_repair_prompt(
     valid_constraint_types = _enum_list(_CONSTRAINT_VALUES)
     error_lines = "\n".join(f"- {e}" for e in errors) if errors else "- (unknown errors)"
     required_flags = []
-    if cat_info.needs_oncoming:
+    if cat_info.map.needs_oncoming:
         required_flags.append("oncoming")
-    if cat_info.needs_multi_lane:
+    if cat_info.map.needs_multi_lane:
         required_flags.append("multi_lane")
-    if cat_info.needs_on_ramp:
+    if cat_info.map.needs_on_ramp:
         required_flags.append("on_ramp")
-    if cat_info.needs_merge:
+    if cat_info.map.needs_merge:
         required_flags.append("merge")
     flags_line = ", ".join(required_flags) if required_flags else "none"
 
@@ -227,13 +238,13 @@ def build_schema_repair_prompt(
         "- If more than one vehicle: include at least one ACTIVE constraint (perpendicular/opposite/lane/merge/same_lane_as).",
         "- All constraints must reference existing vehicles; no duplicates.",
     ]
-    if cat_info.needs_on_ramp:
+    if cat_info.map.needs_on_ramp:
         critical_reminders.extend([
             "- Include entry_road='main' for at least one vehicle (mainline).",
             "- Include entry_road='side' for at least one vehicle (on-ramp).",
             "- Include merges_into_lane_of from side vehicle to main vehicle.",
         ])
-    if cat_info.needs_multi_lane or cat_info.needs_merge:
+    if cat_info.map.needs_multi_lane or cat_info.map.needs_merge:
         critical_reminders.append("- Include a lane/merge relation: left_lane_of/right_lane_of/same_lane_as/merges_into_lane_of.")
 
     reminders_block = "\n".join(critical_reminders)
@@ -241,7 +252,7 @@ def build_schema_repair_prompt(
     return (
         "Fix the JSON scenario spec to satisfy the errors below. Edit the prior JSON directly; change only what is needed.\n"
         f"Category: {category}\n"
-        f"Required topology: {cat_info.required_topology.value}\n"
+        f"Required topology: {cat_info.map.topology.value}\n"
         f"Required flags: {flags_line}\n"
         "\n"
         "CRITICAL REMINDERS:\n"
@@ -330,23 +341,35 @@ def _conflict_findings(spec: ScenarioSpec, cat_info: Any, relaxed: bool = False)
             "Include at least one ACTIVE constraint (perpendicular/opposite/lane/merge/same_lane_as) for multi-vehicle specs."
         )
 
-    if cat_info.required_topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}:
+    topology = cat_info.map.topology
+    if topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}:
         if not any(c.constraint_type in crossing_types for c in spec.vehicle_constraints):
             warnings.append("Intersection-like categories should include a crossing relation (perpendicular or opposite).")
+        if not cat_info.map.needs_on_ramp:
+            known_entries = [v.entry_road for v in spec.ego_vehicles if v.entry_road in {"main", "side"}]
+            distinct_entries = set(known_entries)
+            if num_vehicles >= 2 and len(distinct_entries) <= 1:
+                errors.append(
+                    "Intersection-like categories require vehicles from multiple approaches: mix entry_road values (main vs side)."
+                )
+            elif num_vehicles >= 2 and not known_entries:
+                warnings.append(
+                    "Set entry_road explicitly (main/side) so vehicles come from different approaches in intersection-like categories."
+                )
 
-    if cat_info.needs_oncoming:
+    if cat_info.map.needs_oncoming:
         if not any(c.constraint_type == ConstraintType.OPPOSITE_APPROACH_OF for c in spec.vehicle_constraints):
             errors.append("Category requires oncoming traffic: include opposite_approach_of.")
 
-    if cat_info.needs_multi_lane:
+    if cat_info.map.needs_multi_lane:
         if not any(c.constraint_type in lane_types for c in spec.vehicle_constraints):
             errors.append("Category requires multi-lane relation: include left/right lane, same_lane_as, or merges_into_lane_of.")
 
-    if cat_info.needs_merge or cat_info.needs_on_ramp:
+    if cat_info.map.needs_merge or cat_info.map.needs_on_ramp:
         if not any(c.constraint_type == ConstraintType.MERGES_INTO_LANE_OF for c in spec.vehicle_constraints):
             errors.append("Category requires merge conflict: include merges_into_lane_of.")
 
-    if cat_info.needs_on_ramp:
+    if cat_info.map.needs_on_ramp:
         entry_by_vehicle = {v.vehicle_id: v.entry_road for v in spec.ego_vehicles}
         side_vehicles = [v for v, entry in entry_by_vehicle.items() if entry == "side"]
         main_vehicles = [v for v, entry in entry_by_vehicle.items() if entry == "main"]
@@ -460,6 +483,17 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
                 side_vehicle.maneuver = EgoManeuver.LANE_CHANGE
         add_constraint(ConstraintType.MERGES_INTO_LANE_OF, side_vehicle.vehicle_id, main_vehicle.vehicle_id)
 
+    # For intersection/T junction categories without on-ramp, ensure at least two approaches are represented
+    if spec.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION} and not spec.needs_on_ramp:
+        first = spec.ego_vehicles[0]
+        second = spec.ego_vehicles[1]
+        if first.entry_road == "unknown":
+            first.entry_road = "main"
+        if second.entry_road == "unknown" or second.entry_road == first.entry_road:
+            second.entry_road = "side"
+        if second.exit_road == "unknown":
+            second.exit_road = "unknown" if spec.topology == TopologyType.INTERSECTION else "main"
+
     if spec.needs_merge and not spec.needs_on_ramp:
         add_constraint(ConstraintType.MERGES_INTO_LANE_OF, vehicle_a, vehicle_b)
 
@@ -470,7 +504,10 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
         add_constraint(ConstraintType.MERGES_INTO_LANE_OF, vehicle_a, vehicle_b)
 
     if spec.needs_multi_lane and not any(c.constraint_type in lane_types for c in spec.vehicle_constraints):
-        add_constraint(ConstraintType.LEFT_LANE_OF, vehicle_a, vehicle_b)
+        # Only inject lane adjacency when vehicles plausibly share a corridor/highway or the same approach
+        same_entry = spec.ego_vehicles[0].entry_road == spec.ego_vehicles[1].entry_road and spec.ego_vehicles[0].entry_road != "unknown"
+        if spec.topology in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY} or same_entry:
+            add_constraint(ConstraintType.LEFT_LANE_OF, vehicle_a, vehicle_b)
 
     if (
         spec.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}
@@ -479,7 +516,7 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
     ):
         add_constraint(ConstraintType.PERPENDICULAR_RIGHT_OF, vehicle_a, vehicle_b)
 
-    if actor_conflict or spec.topology in {TopologyType.CORRIDOR, TopologyType.HIGHWAY}:
+    if actor_conflict or spec.topology in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY}:
         direction_types = {
             ConstraintType.SAME_APPROACH_AS,
             ConstraintType.OPPOSITE_APPROACH_OF,
@@ -515,7 +552,6 @@ class SchemaGenerationConfig:
     repetition_penalty: float = 1.1
     do_sample: bool = True
     max_retries: int = 3
-    similarity_threshold: float = 0.7
     allow_template_fallback: bool = False
 
 
@@ -524,34 +560,38 @@ class TemplateSchemaGenerator:
 
     def generate_spec(self, category: str) -> ScenarioSpec:
         cat_info = CATEGORY_DEFINITIONS[category]
-        topology = cat_info.required_topology
+        topology = cat_info.map.topology
+        needs_oncoming = cat_info.map.needs_oncoming
+        needs_multi_lane = cat_info.map.needs_multi_lane
+        needs_on_ramp = cat_info.map.needs_on_ramp
+        needs_merge = cat_info.map.needs_merge
 
-        ego_count = 3 if (cat_info.needs_merge or cat_info.needs_on_ramp or cat_info.needs_multi_lane) else 2
+        ego_count = 3 if (needs_merge or needs_on_ramp or needs_multi_lane) else 2
 
         vehicles: List[EgoVehicleSpec] = []
         constraints: List[InterVehicleConstraint] = []
 
-        base_maneuver = EgoManeuver.LANE_CHANGE if (cat_info.needs_merge or cat_info.needs_on_ramp) else EgoManeuver.STRAIGHT
-        if cat_info.required_topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION} and not cat_info.needs_merge:
+        base_maneuver = EgoManeuver.LANE_CHANGE if (needs_merge or needs_on_ramp) else EgoManeuver.STRAIGHT
+        if topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION} and not needs_merge:
             base_maneuver = EgoManeuver.STRAIGHT
 
         vehicles.append(
             EgoVehicleSpec(
                 vehicle_id="Vehicle 1",
                 maneuver=base_maneuver,
-                lane_change_phase="after_intersection" if base_maneuver == EgoManeuver.LANE_CHANGE and topology not in {TopologyType.CORRIDOR, TopologyType.HIGHWAY} else "unknown",
-                entry_road="main" if cat_info.needs_on_ramp else "unknown",
-                exit_road="main" if cat_info.needs_on_ramp else "unknown",
+                lane_change_phase="after_intersection" if base_maneuver == EgoManeuver.LANE_CHANGE and topology not in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY} else "unknown",
+                entry_road="main" if needs_on_ramp else "unknown",
+                exit_road="main" if needs_on_ramp else "unknown",
             )
         )
 
         vehicles.append(
             EgoVehicleSpec(
                 vehicle_id="Vehicle 2",
-                maneuver=EgoManeuver.LANE_CHANGE if (cat_info.needs_merge or cat_info.needs_on_ramp or cat_info.needs_multi_lane) else EgoManeuver.STRAIGHT,
-                lane_change_phase="after_intersection" if topology not in {TopologyType.CORRIDOR, TopologyType.HIGHWAY} else "unknown",
-                entry_road="side" if cat_info.needs_on_ramp else "unknown",
-                exit_road="main" if cat_info.needs_on_ramp else "unknown",
+                maneuver=EgoManeuver.LANE_CHANGE if (needs_merge or needs_on_ramp or needs_multi_lane) else EgoManeuver.STRAIGHT,
+                lane_change_phase="after_intersection" if topology not in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY} else "unknown",
+                entry_road="side" if needs_on_ramp else "unknown",
+                exit_road="main" if needs_on_ramp else "unknown",
             )
         )
 
@@ -561,38 +601,20 @@ class TemplateSchemaGenerator:
                     vehicle_id="Vehicle 3",
                     maneuver=EgoManeuver.STRAIGHT,
                     lane_change_phase="unknown",
-                    entry_road="main" if cat_info.needs_on_ramp else "unknown",
-                    exit_road="main" if cat_info.needs_on_ramp else "unknown",
+                    entry_road="main" if needs_on_ramp else "unknown",
+                    exit_road="main" if needs_on_ramp else "unknown",
                 )
             )
 
-        # Minimal actor to keep template valid for actor-heavy categories
         actors: List[NonEgoActorSpec] = []
-        if cat_info.uses_non_ego_actors:
-            actors.append(
-                NonEgoActorSpec(
-                    actor_id="traffic cones" if not cat_info.needs_oncoming else "pedestrian",
-                    kind=ActorKind.STATIC_PROP if not cat_info.needs_oncoming else ActorKind.WALKER,
-                    quantity=1,
-                    affects_vehicle="Vehicle 1",
-                    timing_phase=TimingPhase.ON_APPROACH,
-                    lateral_position=LateralPosition.RIGHT_EDGE,
-                    group_pattern=GroupPattern.UNKNOWN,
-                    start_lateral=None,
-                    end_lateral=None,
-                    motion=MotionType.STATIC if not cat_info.needs_oncoming else MotionType.CROSS_PERPENDICULAR,
-                    speed=SpeedHint.UNKNOWN,
-                    crossing_direction="left" if cat_info.needs_oncoming else None,
-                )
-            )
 
         spec = ScenarioSpec(
             category=category,
             topology=topology,
-            needs_oncoming=cat_info.needs_oncoming,
-            needs_multi_lane=cat_info.needs_multi_lane,
-            needs_on_ramp=cat_info.needs_on_ramp,
-            needs_merge=cat_info.needs_merge,
+            needs_oncoming=needs_oncoming,
+            needs_multi_lane=needs_multi_lane,
+            needs_on_ramp=needs_on_ramp,
+            needs_merge=needs_merge,
             ego_vehicles=vehicles,
             vehicle_constraints=constraints,
             actors=actors,
@@ -702,11 +724,12 @@ class SchemaScenarioGenerator:
             out["_reasoning"] = reasoning
         
         out["category"] = category
-        out["topology"] = cat_info.required_topology.value
-        out["needs_oncoming"] = bool(out.get("needs_oncoming", cat_info.needs_oncoming)) or cat_info.needs_oncoming
-        out["needs_multi_lane"] = bool(out.get("needs_multi_lane", cat_info.needs_multi_lane)) or cat_info.needs_multi_lane
-        out["needs_on_ramp"] = bool(out.get("needs_on_ramp", cat_info.needs_on_ramp)) or cat_info.needs_on_ramp
-        out["needs_merge"] = bool(out.get("needs_merge", cat_info.needs_merge)) or cat_info.needs_merge
+        out["topology"] = cat_info.map.topology.value
+        # Clamp capability flags to the category definition; do not let the model opt into other geometry classes
+        out["needs_oncoming"] = bool(cat_info.map.needs_oncoming)
+        out["needs_multi_lane"] = bool(cat_info.map.needs_multi_lane)
+        out["needs_on_ramp"] = bool(cat_info.map.needs_on_ramp)
+        out["needs_merge"] = bool(cat_info.map.needs_merge or cat_info.map.needs_on_ramp)
 
         vehicles = out.get("ego_vehicles")
         if not isinstance(vehicles, list) or not vehicles:

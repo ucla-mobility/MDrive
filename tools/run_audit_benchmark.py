@@ -31,7 +31,6 @@ from scenario_generator.schema_generator import (  # noqa: E402
     SchemaGenerationConfig,
 )
 from scenario_generator.schema_utils import (  # noqa: E402
-    description_from_spec,
     geometry_spec_from_scenario_spec,
 )
 from scenario_generator.constraints import spec_to_dict  # noqa: E402
@@ -151,66 +150,6 @@ def _compute_scene_output_hash(scene_path: str) -> Optional[str]:
     except Exception as e:
         print(f"[HASH] Error computing hash: {e}")
         return None
-
-
-def _compute_spec_structural_diff(
-    prev_spec: Dict[str, Any],
-    curr_spec: Dict[str, Any],
-) -> str:
-    """
-    Compute a structural diff between two specs, showing what changed vs stayed the same.
-    Used to provide feedback when different specs produce identical outputs.
-    """
-    diff_parts = []
-    
-    # Compare ego_vehicles
-    prev_vehicles = prev_spec.get('ego_vehicles', [])
-    curr_vehicles = curr_spec.get('ego_vehicles', [])
-    
-    if len(prev_vehicles) != len(curr_vehicles):
-        diff_parts.append(f"Vehicle count: {len(prev_vehicles)} -> {len(curr_vehicles)}")
-    else:
-        for i, (pv, cv) in enumerate(zip(prev_vehicles, curr_vehicles)):
-            pv_dict = pv if isinstance(pv, dict) else vars(pv) if hasattr(pv, '__dict__') else {}
-            cv_dict = cv if isinstance(cv, dict) else vars(cv) if hasattr(cv, '__dict__') else {}
-            
-            pm = pv_dict.get('maneuver', pv_dict.get('maneuver', {}).value if hasattr(pv_dict.get('maneuver'), 'value') else str(pv_dict.get('maneuver', '')))
-            cm = cv_dict.get('maneuver', cv_dict.get('maneuver', {}).value if hasattr(cv_dict.get('maneuver'), 'value') else str(cv_dict.get('maneuver', '')))
-            
-            if str(pm) != str(cm):
-                vid = cv_dict.get('vehicle_id', f'Vehicle {i+1}')
-                diff_parts.append(f"{vid} maneuver: {pm} -> {cm}")
-    
-    # Compare constraints
-    prev_constraints = prev_spec.get('vehicle_constraints', [])
-    curr_constraints = curr_spec.get('vehicle_constraints', [])
-    
-    def constraint_key(c):
-        if isinstance(c, dict):
-            return (c.get('type', ''), c.get('a', ''), c.get('b', ''))
-        ct = getattr(c, 'constraint_type', None)
-        if hasattr(ct, 'value'):
-            ct = ct.value
-        return (str(ct), getattr(c, 'vehicle_a', ''), getattr(c, 'vehicle_b', ''))
-    
-    prev_set = set(constraint_key(c) for c in prev_constraints)
-    curr_set = set(constraint_key(c) for c in curr_constraints)
-    
-    added = curr_set - prev_set
-    removed = prev_set - curr_set
-    unchanged = prev_set & curr_set
-    
-    if added:
-        diff_parts.append(f"ADDED constraints: {[f'{c[0]}({c[1]}->{c[2]})' for c in added]}")
-    if removed:
-        diff_parts.append(f"REMOVED constraints: {[f'{c[0]}({c[1]}->{c[2]})' for c in removed]}")
-    if unchanged:
-        diff_parts.append(f"UNCHANGED constraints: {[f'{c[0]}({c[1]}->{c[2]})' for c in unchanged]}")
-    
-    if not diff_parts:
-        return "Specs are structurally identical"
-    
-    return "; ".join(diff_parts)
 
 
 def _now_iso() -> str:
@@ -375,11 +314,16 @@ def _build_category_description(category: str) -> str:
     info = CATEGORY_DEFINITIONS.get(category)
     if not info:
         return ""
-    parts = [info.notes.strip()] if info.notes else []
-    if info.conflict_via:
-        parts.append("conflict_via: " + "; ".join(info.conflict_via))
-    if info.variation_axes:
-        parts.append("variation_axes: " + "; ".join(info.variation_axes))
+    parts = [info.summary.strip()] if info.summary else []
+    if info.intent:
+        parts.append(info.intent.strip())
+    if info.must_include:
+        parts.append("must_include: " + "; ".join(info.must_include))
+    if info.avoid:
+        parts.append("avoid: " + "; ".join(info.avoid))
+    if info.vary:
+        axis_text = "; ".join(f"{ax.name}: {', '.join(ax.options)}" for ax in info.vary)
+        parts.append("variation_axes: " + axis_text)
     return " | ".join(p for p in parts if p)
 
 
@@ -388,13 +332,16 @@ def _resolve_town_for_category(
     default_town: str,
     highway_town: Optional[str],
     t_junction_town: Optional[str] = None,
+    two_lane_corridor_town: Optional[str] = None,
 ) -> str:
     info = CATEGORY_DEFINITIONS.get(category)
     if info:
-        if highway_town and info.required_topology == TopologyType.HIGHWAY:
+        if highway_town and info.map.topology == TopologyType.HIGHWAY:
             return highway_town
-        if t_junction_town and info.required_topology == TopologyType.T_JUNCTION:
+        if t_junction_town and info.map.topology == TopologyType.T_JUNCTION:
             return t_junction_town
+        if two_lane_corridor_town and info.map.topology == TopologyType.TWO_LANE_CORRIDOR:
+            return two_lane_corridor_town
     return default_town
 
 
@@ -799,12 +746,12 @@ def _run_single(
                     break
                 continue
 
-            description = description_from_spec(spec)
             geometry_spec = geometry_spec_from_scenario_spec(spec)
             spec_dict = spec_to_dict(spec)
+            schema_text = json.dumps(spec_dict, indent=2, sort_keys=True)
             _atomic_write_text(
                 scenario_dir / "scenario_description.txt",
-                description,
+                schema_text,
             )
             _atomic_write_json(scenario_dir / "scenario_spec.json", spec_dict)
 
@@ -817,9 +764,16 @@ def _run_single(
                 routes_ego_num=args.routes_ego_num,
             )
 
-            town = _resolve_town_for_category(category, args.town, args.highway_town, args.t_junction_town)
+            town = _resolve_town_for_category(
+                category,
+                args.town,
+                args.highway_town,
+                args.t_junction_town,
+                args.two_lane_corridor_town,
+            )
             success, scene_path, error_msg = pipeline_runner.run_full_pipeline(
-                scenario_text=description,
+                scenario_text=schema_text,
+                scenario_schema=spec_dict,
                 category=category,
                 scenario_id=scenario_id_safe,
                 town=town,
@@ -842,7 +796,7 @@ def _run_single(
 
             validation = scene_validator.validate_scene(
                 scene_path,
-                description,
+                schema_text,
                 category=category,
                 scenario_spec=spec_dict,
             )
@@ -852,7 +806,7 @@ def _run_single(
                 validation_report = scene_validator.generate_validation_report(
                     validation=validation,
                     scene_path=scene_path,
-                    scenario_text=description,
+                    scenario_text=schema_text,
                     category=category,
                     repair_history=[{
                         "attempt": attempt,
@@ -907,7 +861,7 @@ def _run_single(
             attempt_used = attempt
 
             status["scenario_id"] = scenario_id_safe
-            status["scenario_description"] = description
+            status["scenario_description"] = schema_text
             status["scenario_spec_path"] = str(scenario_dir / "scenario_spec.json")
             status["scene_objects_path"] = scene_path
             status["scene_png_path"] = str(Path(scene_path).parent / "scene_objects.png")
@@ -1228,6 +1182,11 @@ def parse_args() -> argparse.Namespace:
         "--t-junction-town",
         default="Town02",
         help="Town to use for T-junction categories (default: Town02)",
+    )
+    parser.add_argument(
+        "--two-lane-corridor-town",
+        default="Town02",
+        help="Town to use for two-lane corridor categories (default: Town02)",
     )
     parser.add_argument("--model", default="Qwen/Qwen2.5-32B-Instruct-AWQ")
     parser.add_argument("--schema-max-new-tokens", type=int, default=1024)

@@ -7,6 +7,8 @@ Automated generation of diverse, valid driving scenarios for multi-agent coordin
 from .capabilities import (
     CATEGORY_DEFINITIONS,
     CategoryDefinition,
+    MapRequirements,
+    VariationAxis,
     TopologyType,
     ActorKind,
     MotionType,
@@ -47,6 +49,8 @@ __all__ = [
     # Capabilities
     "CATEGORY_DEFINITIONS",
     "CategoryDefinition",
+    "MapRequirements",
+    "VariationAxis",
     "TopologyType",
     "ActorKind",
     "MotionType", 

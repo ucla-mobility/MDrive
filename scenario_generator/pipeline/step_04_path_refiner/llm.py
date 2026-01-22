@@ -111,6 +111,7 @@ def extract_refinement_constraints(
     model=None,
     tokenizer=None,
     max_new_tokens: int = 512,
+    schema_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Returns:
@@ -185,6 +186,10 @@ Mapping guidance:
 Scene description:
 {description}
 """.strip()
+
+    if schema_payload is not None:
+        # Structured schema provided: trust it and skip LLM extraction.
+        return {"vehicle_speeds": [], "spawn_relations": [], "lane_changes": [], "options": {"synchronize_conflicts": True}}
 
     if model is None or tokenizer is None:
         # No model provided: default to no extra constraints

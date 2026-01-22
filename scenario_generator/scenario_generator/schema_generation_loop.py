@@ -15,7 +15,7 @@ from .constraints import spec_to_dict
 from .pipeline_runner import GenerationLogger, PipelineRunner
 from .scene_validator import SceneValidator, SceneValidationResult
 from .schema_generator import SchemaGenerationConfig, SchemaScenarioGenerator
-from .schema_utils import description_from_spec, geometry_spec_from_scenario_spec
+from .schema_utils import geometry_spec_from_scenario_spec
 
 
 DEFAULT_SCHEMA_CATEGORIES = [
@@ -46,6 +46,7 @@ class SchemaGenerationLoopConfig:
     town: str = "Town05"
     highway_town: Optional[str] = "Town06"
     t_junction_town: Optional[str] = "Town02"
+    two_lane_corridor_town: Optional[str] = "Town02"
     model_id: str = "Qwen/Qwen2.5-32B-Instruct-AWQ"
     viz_objects: bool = True
     routes_out_dir: str = "routes"
@@ -125,10 +126,12 @@ class SchemaGenerationLoop:
     def _resolve_town(self, category: str) -> str:
         info = CATEGORY_DEFINITIONS.get(category)
         if info:
-            if self.config.highway_town and info.required_topology == TopologyType.HIGHWAY:
+            if self.config.highway_town and info.map.topology == TopologyType.HIGHWAY:
                 return self.config.highway_town
-            if self.config.t_junction_town and info.required_topology == TopologyType.T_JUNCTION:
+            if self.config.t_junction_town and info.map.topology == TopologyType.T_JUNCTION:
                 return self.config.t_junction_town
+            if self.config.two_lane_corridor_town and info.map.topology == TopologyType.TWO_LANE_CORRIDOR:
+                return self.config.two_lane_corridor_town
         return self.config.town
 
     def _write_spec_files(self, out_dir: Path, spec: dict, description: str) -> None:
@@ -179,20 +182,21 @@ class SchemaGenerationLoop:
                 last_error = "; ".join(errors) if errors else "spec_generation_failed"
                 continue
 
-            description = description_from_spec(spec_obj)
             geometry_spec = geometry_spec_from_scenario_spec(spec_obj)
             spec_dict = spec_to_dict(spec_obj)
+            schema_text = json.dumps(spec_dict, indent=2, sort_keys=True)
             town = self._resolve_town(category)
 
             out_dir = Path(self.config.output_dir) / self._safe_name(scenario_id)
-            self._write_spec_files(out_dir, spec_dict, description)
+            self._write_spec_files(out_dir, spec_dict, schema_text)
             self.logger.info(f"Spec outputs in: {out_dir.resolve()}")
             self.logger.info("Pipeline steps: crop -> legal_paths -> path_picker -> path_refiner -> object_placer")
             self.logger.info(f"Town: {town}")
 
             self.total_pipeline_runs += 1
             success, scene_path, error_msg = self.pipeline_runner.run_full_pipeline(
-                scenario_text=description,
+                scenario_text=schema_text,
+                scenario_schema=spec_dict,
                 category=category,
                 scenario_id=scenario_id,
                 town=town,
@@ -210,7 +214,7 @@ class SchemaGenerationLoop:
 
             validation = self.scene_validator.validate_scene(
                 scene_path,
-                description,
+                schema_text,
                 category=category,
                 scenario_spec=spec_dict,
             )
@@ -239,7 +243,7 @@ class SchemaGenerationLoop:
             return SchemaGenerationResult(
                 scenario_id=scenario_id,
                 category=category,
-                description=description,
+                description=schema_text,
                 success=True,
                 scene_path=scene_path,
                 validation_result=validation,
