@@ -39,18 +39,19 @@ MDriveBench provides:
 - [Acknowledgements](#acknowledgements)
 
 ---
-## Challenge Submission Instructions
-To ensure your model is evaluated accurately, you must submit a single .zip file containing your model and code.
+## MDriveBench Submission Instructions
+To ensure your model is evaluated accurately, participants must submit a single .zip file containing the model, source code, and environment specifications.
 
 ### Required ZIP File Structure
 Your ZIP file must be organized as follows:
 ```
 team_name.zip
-├── agents.py           # Main agent class (must inherit from BaseAgent)
-├── config/             # Folder containing all .yaml or .py configs
+├── agents.py           # Main agent class (must inherit from TrackableAgent)
+├── Dockerfile          # Highly recommended
+├── model_env.yaml      # Conda/Pip environment specification (Fallback)
+├── config/             # Folder containing submission_config.yaml and other configs
 ├── src/                # Folder containing model architecture & utilities
-├── weights/            # Folder containing all trained checkpoints (.pth/.ckpt)
-└── model_env.yaml      # Conda environment specification
+└── weights/            # Folder containing all trained checkpoints (.pth/.ckpt)
 ```
 
 ### Environment Specification
@@ -59,16 +60,17 @@ MDriveBench supports two methods of environment provisioning. To ensure 100% rep
 1. ***Docker (Primary):*** Your Dockerfile should be based on a stable CUDA image (e.g., nvidia/cuda:11.3.1-devel-ubuntu20.04). It must install all necessary libraries so that the agent can run immediately upon container launch.
 
 2. ***Conda (Fallback):*** If no Dockerfile is provided, we will build a dedicated environment using your model_env.yaml.
-Note: Your code must be compatible with Python 3.7 to interface with the CARLA 0.9.10.1 API.
-Do not include CARLA in your environment files; the evaluation server will automatically link the standardized CARLA 0.9.10.1 build.
+Note: Your code must be compatible with Python 3.7 to interface with the CARLA 0.9.12 API.
+Do not include CARLA in your environment files; the evaluation server will automatically link the standardized CARLA 0.9.12 build.
 
 ### Evaluation Protocol 
 Our team will manually verify your submission using the following pipeline:
 
 1. Env Build: The evaluator prioritizes the Dockerfile. If missing, it builds the Conda environment from model_env.yaml.
-2. Path Injection: Standardized CARLA 0.9.15 PythonAPI will be appended to your PYTHONPATH.
+2. Path Injection: Standardized CARLA 0.9.12 PythonAPI will be appended to your PYTHONPATH.
 3. Execution: Your agent will be run through a batch of closed-loop scenarios (OpenCDA, InterDrive, and Safety-critical).
 4. Scoring: We will record the Driving Score (DS) and Success Rate (SR) as the official leaderboard metrics.
+
 
 ---
 ## Global Setup
