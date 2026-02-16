@@ -1,6 +1,5 @@
 import argparse
 import ast
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -40,6 +39,15 @@ def _matches_suffix(name: str, suffixes: List[str]) -> bool:
     return False
 
 
+def _is_frame_file(path: Path) -> bool:
+    """Return True for actual image frames; exclude hidden/metadata sidecars."""
+    if not path.is_file():
+        return False
+    if path.name.startswith("."):
+        return False
+    return path.suffix.lower() in FRAME_EXTENSIONS
+
+
 @dataclass
 class VehicleStream:
     index: int
@@ -72,10 +80,9 @@ def list_vehicle_streams(root: Path, stream_suffixes: Optional[List[str]] = None
         index = int(m.group(1))   # the (\d+) capture
 
         image_paths = sorted(
-            (entry / fname for fname in os.listdir(entry)),
+            (path for path in entry.iterdir() if _is_frame_file(path)),
             key=lambda p: p.stem,
         )
-        image_paths = [p for p in image_paths if p.suffix.lower() in FRAME_EXTENSIONS]
         if not image_paths:
             continue
 
@@ -102,7 +109,7 @@ def _scenario_has_vehicle_images(scenario_dir: Path) -> bool:
         if not (child.is_dir() and VEHICLE_DIR_PATTERN.match(child.name)):
             continue
         for item in child.iterdir():
-            if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
+            if _is_frame_file(item):
                 return True
     return False
 
@@ -113,7 +120,7 @@ def _scenario_has_flat_images(scenario_dir: Path) -> bool:
         return False
     try:
         for item in scenario_dir.iterdir():
-            if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
+            if _is_frame_file(item):
                 return True
     except Exception:
         return False
@@ -577,6 +584,25 @@ def build_video(
     side_stream: Optional[VehicleStream] = None,
     stack_mode: str = "vertical",
 ) -> None:
+    def resize_with_aspect(image: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+        """Resize into a fixed canvas while preserving aspect ratio (letterbox)."""
+        target_w, target_h = size
+        src_h, src_w = image.shape[:2]
+        if src_h <= 0 or src_w <= 0:
+            return np.zeros((target_h, target_w, 3), dtype=np.uint8)
+
+        scale = min(float(target_w) / float(src_w), float(target_h) / float(src_h))
+        new_w = max(1, int(round(src_w * scale)))
+        new_h = max(1, int(round(src_h * scale)))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(image, (new_w, new_h), interpolation=interp)
+
+        canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        off_x = (target_w - new_w) // 2
+        off_y = (target_h - new_h) // 2
+        canvas[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+        return canvas
+
     first_frame = cv2.imread(str(streams[0].image_paths[0]))
     if first_frame is None:
         raise RuntimeError(f"Unable to read {streams[0].image_paths[0]}")
@@ -633,7 +659,7 @@ def build_video(
             image = cv2.imread(str(stream.image_paths[image_index]))
             if image is None:
                 raise RuntimeError(f"Unable to read {stream.image_paths[image_index]}")
-            image = cv2.resize(image, target_size)
+            image = resize_with_aspect(image, target_size)
             image, _ = add_label(image, stream.label)
             frames.append(image)
 
@@ -647,7 +673,7 @@ def build_video(
             side_image = cv2.imread(str(side_stream.image_paths[side_index]))
             if side_image is None:
                 raise RuntimeError(f"Unable to read {side_stream.image_paths[side_index]}")
-            side_image = cv2.resize(side_image, (target_size[0], combined_height))
+            side_image = resize_with_aspect(side_image, (target_size[0], combined_height))
             side_image, _ = add_label(side_image, side_stream.label)
             combined = cv2.hconcat([combined, side_image])
         if not simple_mode:
@@ -831,7 +857,7 @@ def main() -> None:
                 f"No flat images found in side-by-side directory {side_root}."
             )
         side_images = sorted(
-            [p for p in side_root.iterdir() if p.is_file() and p.suffix.lower() in FRAME_EXTENSIONS],
+            [p for p in side_root.iterdir() if _is_frame_file(p)],
             key=lambda p: p.stem,
         )
         if not side_images:
@@ -853,7 +879,7 @@ def main() -> None:
         # In flat mode, build a single stream from images directly in the folder.
         if _scenario_has_flat_images(scenario_dir):
             all_images = sorted(
-                [p for p in scenario_dir.iterdir() if p.is_file() and p.suffix.lower() in FRAME_EXTENSIONS],
+                [p for p in scenario_dir.iterdir() if _is_frame_file(p)],
                 key=lambda p: p.stem,
             )
             if not all_images:

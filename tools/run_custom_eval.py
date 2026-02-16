@@ -275,10 +275,55 @@ def parse_args() -> argparse.Namespace:
         help="Adjust custom actor Z to nearest ground height without changing x/y or rotation.",
     )
     parser.add_argument(
+        "--spawn-retry-xy-offsets",
+        default="0.0,0.25,-0.25,0.5,-0.5,1.0,-1.0",
+        help=(
+            "Comma-separated XY offsets (meters) used for custom-actor spawn retries. "
+            "All pairwise (dx,dy) combinations are attempted in increasing offset cost."
+        ),
+    )
+    parser.add_argument(
+        "--spawn-retry-z-offsets",
+        default="0.0,0.2,-0.2,0.5,-0.5,1.0",
+        help=(
+            "Comma-separated Z offsets (meters) used with XY retry combinations for "
+            "custom-actor spawn retries."
+        ),
+    )
+    parser.add_argument(
+        "--spawn-retry-max-attempts",
+        type=int,
+        default=180,
+        help="Maximum number of custom-actor spawn retry offset candidates per actor.",
+    )
+    parser.add_argument(
         "--image-save-interval",
         type=int,
         default=None,
         help="Frames between saved images for TCP/log-replay (env: TCP_SAVE_INTERVAL).",
+    )
+    parser.add_argument(
+        "--capture-every-sensor-frame",
+        action="store_true",
+        help=(
+            "Save RGB/BEV images directly from camera callbacks for every sensor frame "
+            "(decoupled from agent-step save cadence)."
+        ),
+    )
+    parser.add_argument(
+        "--capture-logreplay-images",
+        dest="capture_logreplay_images",
+        action="store_true",
+        help=(
+            "Save extra log-replay camera images into logreplayimages/ at the same cadence "
+            "as normal agent image saves (controlled by --image-save-interval)."
+        ),
+    )
+    parser.add_argument(
+        "--capture-calibration-at-save-interval",
+        dest="capture_logreplay_images",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--rgb-width",
@@ -297,6 +342,96 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override TCP front RGB FOV (env: TCP_RGB_FOV).",
+    )
+    parser.add_argument(
+        "--rgb-x",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera X (env: TCP_RGB_X).",
+    )
+    parser.add_argument(
+        "--rgb-y",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera Y (env: TCP_RGB_Y).",
+    )
+    parser.add_argument(
+        "--rgb-z",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera Z (env: TCP_RGB_Z).",
+    )
+    parser.add_argument(
+        "--rgb-roll",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera roll (env: TCP_RGB_ROLL).",
+    )
+    parser.add_argument(
+        "--rgb-pitch",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera pitch (env: TCP_RGB_PITCH).",
+    )
+    parser.add_argument(
+        "--rgb-yaw",
+        type=float,
+        default=None,
+        help="Override TCP front RGB camera yaw (env: TCP_RGB_YAW).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-width",
+        type=int,
+        default=None,
+        help="Override logreplayimages RGB width (env: TCP_LOGREPLAY_RGB_WIDTH).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-height",
+        type=int,
+        default=None,
+        help="Override logreplayimages RGB height (env: TCP_LOGREPLAY_RGB_HEIGHT).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-fov",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB FOV (env: TCP_LOGREPLAY_RGB_FOV).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-x",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera X (env: TCP_LOGREPLAY_RGB_X).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-y",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera Y (env: TCP_LOGREPLAY_RGB_Y).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-z",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera Z (env: TCP_LOGREPLAY_RGB_Z).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-roll",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera roll (env: TCP_LOGREPLAY_RGB_ROLL).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-pitch",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera pitch (env: TCP_LOGREPLAY_RGB_PITCH).",
+    )
+    parser.add_argument(
+        "--logreplay-rgb-yaw",
+        type=float,
+        default=None,
+        help="Override logreplayimages RGB camera yaw (env: TCP_LOGREPLAY_RGB_YAW).",
     )
     parser.add_argument(
         "--bev-width",
@@ -322,7 +457,185 @@ def parse_args() -> argparse.Namespace:
         help="Replay custom actors using per-waypoint timing if present in XML.",
     )
     parser.add_argument(
+        "--smooth-log-replay-vehicles",
+        dest="smooth_log_replay_vehicles",
+        action="store_true",
+        default=None,
+        help="Enable adaptive smoothing for logged NPC vehicle transforms.",
+    )
+    parser.add_argument(
+        "--no-smooth-log-replay-vehicles",
+        dest="smooth_log_replay_vehicles",
+        action="store_false",
+        help="Disable adaptive smoothing for logged NPC vehicle transforms.",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-min-cutoff",
+        type=float,
+        default=None,
+        help="One-Euro min cutoff for vehicle x/y smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_MIN_CUTOFF).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-beta",
+        type=float,
+        default=None,
+        help="One-Euro beta for vehicle x/y smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_BETA).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-yaw-min-cutoff",
+        type=float,
+        default=None,
+        help="One-Euro min cutoff for vehicle yaw smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_YAW_MIN_CUTOFF).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-yaw-beta",
+        type=float,
+        default=None,
+        help="One-Euro beta for vehicle yaw smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_YAW_BETA).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-z-min-cutoff",
+        type=float,
+        default=None,
+        help="One-Euro min cutoff for vehicle z smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_Z_MIN_CUTOFF).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-z-beta",
+        type=float,
+        default=None,
+        help="One-Euro beta for vehicle z smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_Z_BETA).",
+    )
+    parser.add_argument(
+        "--log-replay-smooth-d-cutoff",
+        type=float,
+        default=None,
+        help="One-Euro derivative cutoff for vehicle smoothing (env: CUSTOM_LOG_REPLAY_SMOOTH_D_CUTOFF).",
+    )
+    parser.add_argument(
+        "--log-replay-lateral-damping",
+        type=float,
+        default=None,
+        help="Lateral jitter damping strength in [0,1] (env: CUSTOM_LOG_REPLAY_LATERAL_DAMPING).",
+    )
+    parser.add_argument(
+        "--log-replay-lateral-passes",
+        type=int,
+        default=None,
+        help="Number of lateral jitter suppression passes (env: CUSTOM_LOG_REPLAY_LATERAL_PASSES).",
+    )
+    parser.add_argument(
+        "--log-replay-lateral-max-correction",
+        type=float,
+        default=None,
+        help="Max per-pass lateral correction in meters (env: CUSTOM_LOG_REPLAY_LATERAL_MAX_CORRECTION).",
+    )
+    parser.add_argument(
+        "--log-replay-lateral-turn-keep",
+        type=float,
+        default=None,
+        help="Keep factor in turns in [0,1] (env: CUSTOM_LOG_REPLAY_LATERAL_TURN_KEEP).",
+    )
+    parser.add_argument(
+        "--log-replay-lateral-turn-angle-deg",
+        type=float,
+        default=None,
+        help="Turn-angle threshold in degrees (env: CUSTOM_LOG_REPLAY_LATERAL_TURN_ANGLE_DEG).",
+    )
+    parser.add_argument(
+        "--log-replay-time-lead",
+        type=float,
+        default=None,
+        help=(
+            "Replay time lead in seconds to compensate one-tick sensor/update lag "
+            "(env: CUSTOM_LOG_REPLAY_TIME_LEAD)."
+        ),
+    )
+    parser.add_argument(
+        "--stabilize-static-log-replay-vehicles",
+        dest="stabilize_static_log_replay_vehicles",
+        action="store_true",
+        default=None,
+        help="Freeze near-static replay vehicle segments to remove parked-car jitter.",
+    )
+    parser.add_argument(
+        "--no-stabilize-static-log-replay-vehicles",
+        dest="stabilize_static_log_replay_vehicles",
+        action="store_false",
+        help="Disable near-static replay vehicle segment stabilization.",
+    )
+    parser.add_argument(
+        "--static-log-replay-total-disp",
+        type=float,
+        default=None,
+        help="Global static hold threshold for start-end XY displacement in meters.",
+    )
+    parser.add_argument(
+        "--static-log-replay-total-path",
+        type=float,
+        default=None,
+        help="Global static hold threshold for cumulative XY path length in meters.",
+    )
+    parser.add_argument(
+        "--static-log-replay-window-min-duration",
+        type=float,
+        default=None,
+        help="Minimum near-static segment duration in seconds before freezing.",
+    )
+    parser.add_argument(
+        "--static-log-replay-window-max-disp",
+        type=float,
+        default=None,
+        help="Maximum net XY displacement (meters) for a near-static segment window.",
+    )
+    parser.add_argument(
+        "--static-log-replay-window-max-speed",
+        type=float,
+        default=None,
+        help="Maximum XY speed (m/s) for near-static segment detection.",
+    )
+    parser.add_argument(
+        "--static-log-replay-window-max-yaw-delta",
+        type=float,
+        default=None,
+        help="Maximum per-step yaw delta (deg) for near-static segment detection.",
+    )
+    parser.add_argument(
+        "--animate-walkers",
+        dest="animate_walkers",
+        action="store_true",
+        default=None,
+        help="Animate walker replay via WalkerControl instead of teleport-only transforms.",
+    )
+    parser.add_argument(
+        "--no-animate-walkers",
+        dest="animate_walkers",
+        action="store_false",
+        help="Disable walker replay animation and use transform replay only.",
+    )
+    parser.add_argument(
+        "--walker-max-speed",
+        type=float,
+        default=None,
+        help="Max walker replay speed in m/s (env: CUSTOM_LOG_REPLAY_WALKER_MAX_SPEED).",
+    )
+    parser.add_argument(
+        "--walker-teleport-distance",
+        type=float,
+        default=None,
+        help=(
+            "Distance threshold in meters where walker replay snaps to target instead of control "
+            "(env: CUSTOM_LOG_REPLAY_WALKER_TELEPORT_DIST)."
+        ),
+    )
+    parser.add_argument(
+        "--walker-ground-lift",
+        type=float,
+        default=None,
+        help="Extra z offset applied after ground snap for walkers (env: CUSTOM_WALKER_GROUND_LIFT).",
+    )
+    parser.add_argument(
         "--normalize-ego-z",
+        default=True,
         action="store_true",
         help="Snap ego vehicle Z to nearest driving road height before spawning.",
     )
@@ -1303,14 +1616,55 @@ def main() -> None:
                     env["CUSTOM_ACTOR_NORMALIZE_Z"] = "1"
                 else:
                     env.pop("CUSTOM_ACTOR_NORMALIZE_Z", None)
+                env["CUSTOM_ACTOR_SPAWN_XY_OFFSETS"] = str(args.spawn_retry_xy_offsets)
+                env["CUSTOM_ACTOR_SPAWN_Z_OFFSETS"] = str(args.spawn_retry_z_offsets)
+                env["CUSTOM_ACTOR_SPAWN_MAX_ATTEMPTS"] = str(max(0, int(args.spawn_retry_max_attempts)))
                 if args.image_save_interval is not None:
                     env["TCP_SAVE_INTERVAL"] = str(args.image_save_interval)
+                if args.capture_every_sensor_frame:
+                    env["TCP_CAPTURE_SENSOR_FRAMES"] = "1"
+                else:
+                    env.pop("TCP_CAPTURE_SENSOR_FRAMES", None)
+                if args.capture_logreplay_images:
+                    env["TCP_CAPTURE_LOGREPLAY_IMAGES"] = "1"
+                else:
+                    env.pop("TCP_CAPTURE_LOGREPLAY_IMAGES", None)
                 if args.rgb_width is not None:
                     env["TCP_RGB_WIDTH"] = str(args.rgb_width)
                 if args.rgb_height is not None:
                     env["TCP_RGB_HEIGHT"] = str(args.rgb_height)
                 if args.rgb_fov is not None:
                     env["TCP_RGB_FOV"] = str(args.rgb_fov)
+                if args.rgb_x is not None:
+                    env["TCP_RGB_X"] = str(args.rgb_x)
+                if args.rgb_y is not None:
+                    env["TCP_RGB_Y"] = str(args.rgb_y)
+                if args.rgb_z is not None:
+                    env["TCP_RGB_Z"] = str(args.rgb_z)
+                if args.rgb_roll is not None:
+                    env["TCP_RGB_ROLL"] = str(args.rgb_roll)
+                if args.rgb_pitch is not None:
+                    env["TCP_RGB_PITCH"] = str(args.rgb_pitch)
+                if args.rgb_yaw is not None:
+                    env["TCP_RGB_YAW"] = str(args.rgb_yaw)
+                if args.logreplay_rgb_width is not None:
+                    env["TCP_LOGREPLAY_RGB_WIDTH"] = str(args.logreplay_rgb_width)
+                if args.logreplay_rgb_height is not None:
+                    env["TCP_LOGREPLAY_RGB_HEIGHT"] = str(args.logreplay_rgb_height)
+                if args.logreplay_rgb_fov is not None:
+                    env["TCP_LOGREPLAY_RGB_FOV"] = str(args.logreplay_rgb_fov)
+                if args.logreplay_rgb_x is not None:
+                    env["TCP_LOGREPLAY_RGB_X"] = str(args.logreplay_rgb_x)
+                if args.logreplay_rgb_y is not None:
+                    env["TCP_LOGREPLAY_RGB_Y"] = str(args.logreplay_rgb_y)
+                if args.logreplay_rgb_z is not None:
+                    env["TCP_LOGREPLAY_RGB_Z"] = str(args.logreplay_rgb_z)
+                if args.logreplay_rgb_roll is not None:
+                    env["TCP_LOGREPLAY_RGB_ROLL"] = str(args.logreplay_rgb_roll)
+                if args.logreplay_rgb_pitch is not None:
+                    env["TCP_LOGREPLAY_RGB_PITCH"] = str(args.logreplay_rgb_pitch)
+                if args.logreplay_rgb_yaw is not None:
+                    env["TCP_LOGREPLAY_RGB_YAW"] = str(args.logreplay_rgb_yaw)
                 if args.bev_width is not None:
                     env["TCP_BEV_WIDTH"] = str(args.bev_width)
                 if args.bev_height is not None:
@@ -1326,6 +1680,92 @@ def main() -> None:
                     env["CUSTOM_ACTOR_LOG_REPLAY"] = "1"
                 else:
                     env.pop("CUSTOM_EGO_LOG_REPLAY", None)
+                if args.smooth_log_replay_vehicles is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_VEHICLES"] = (
+                        "1" if args.smooth_log_replay_vehicles else "0"
+                    )
+                if args.log_replay_smooth_min_cutoff is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_MIN_CUTOFF"] = str(
+                        float(args.log_replay_smooth_min_cutoff)
+                    )
+                if args.log_replay_smooth_beta is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_BETA"] = str(float(args.log_replay_smooth_beta))
+                if args.log_replay_smooth_yaw_min_cutoff is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_YAW_MIN_CUTOFF"] = str(
+                        float(args.log_replay_smooth_yaw_min_cutoff)
+                    )
+                if args.log_replay_smooth_yaw_beta is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_YAW_BETA"] = str(float(args.log_replay_smooth_yaw_beta))
+                if args.log_replay_smooth_z_min_cutoff is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_Z_MIN_CUTOFF"] = str(
+                        float(args.log_replay_smooth_z_min_cutoff)
+                    )
+                if args.log_replay_smooth_z_beta is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_Z_BETA"] = str(float(args.log_replay_smooth_z_beta))
+                if args.log_replay_smooth_d_cutoff is not None:
+                    env["CUSTOM_LOG_REPLAY_SMOOTH_D_CUTOFF"] = str(float(args.log_replay_smooth_d_cutoff))
+                if args.log_replay_lateral_damping is not None:
+                    env["CUSTOM_LOG_REPLAY_LATERAL_DAMPING"] = str(
+                        min(1.0, max(0.0, float(args.log_replay_lateral_damping)))
+                    )
+                if args.log_replay_lateral_passes is not None:
+                    env["CUSTOM_LOG_REPLAY_LATERAL_PASSES"] = str(
+                        max(1, int(args.log_replay_lateral_passes))
+                    )
+                if args.log_replay_lateral_max_correction is not None:
+                    env["CUSTOM_LOG_REPLAY_LATERAL_MAX_CORRECTION"] = str(
+                        max(0.0, float(args.log_replay_lateral_max_correction))
+                    )
+                if args.log_replay_lateral_turn_keep is not None:
+                    env["CUSTOM_LOG_REPLAY_LATERAL_TURN_KEEP"] = str(
+                        min(1.0, max(0.0, float(args.log_replay_lateral_turn_keep)))
+                    )
+                if args.log_replay_lateral_turn_angle_deg is not None:
+                    env["CUSTOM_LOG_REPLAY_LATERAL_TURN_ANGLE_DEG"] = str(
+                        max(0.0, float(args.log_replay_lateral_turn_angle_deg))
+                    )
+                if args.log_replay_time_lead is not None:
+                    env["CUSTOM_LOG_REPLAY_TIME_LEAD"] = str(
+                        min(0.25, max(0.0, float(args.log_replay_time_lead)))
+                    )
+                if args.stabilize_static_log_replay_vehicles is not None:
+                    env["CUSTOM_LOG_REPLAY_STABILIZE_STATIC_VEHICLES"] = (
+                        "1" if args.stabilize_static_log_replay_vehicles else "0"
+                    )
+                if args.static_log_replay_total_disp is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_TOTAL_DISP"] = str(
+                        max(0.0, float(args.static_log_replay_total_disp))
+                    )
+                if args.static_log_replay_total_path is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_TOTAL_PATH"] = str(
+                        max(0.0, float(args.static_log_replay_total_path))
+                    )
+                if args.static_log_replay_window_min_duration is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_WINDOW_MIN_DURATION"] = str(
+                        max(0.0, float(args.static_log_replay_window_min_duration))
+                    )
+                if args.static_log_replay_window_max_disp is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_DISP"] = str(
+                        max(0.0, float(args.static_log_replay_window_max_disp))
+                    )
+                if args.static_log_replay_window_max_speed is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_SPEED"] = str(
+                        max(0.0, float(args.static_log_replay_window_max_speed))
+                    )
+                if args.static_log_replay_window_max_yaw_delta is not None:
+                    env["CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_YAW_DELTA"] = str(
+                        max(0.0, float(args.static_log_replay_window_max_yaw_delta))
+                    )
+                if args.animate_walkers is not None:
+                    env["CUSTOM_LOG_REPLAY_ANIMATE_WALKERS"] = "1" if args.animate_walkers else "0"
+                if args.walker_max_speed is not None:
+                    env["CUSTOM_LOG_REPLAY_WALKER_MAX_SPEED"] = str(max(0.1, float(args.walker_max_speed)))
+                if args.walker_teleport_distance is not None:
+                    env["CUSTOM_LOG_REPLAY_WALKER_TELEPORT_DIST"] = str(
+                        max(0.1, float(args.walker_teleport_distance))
+                    )
+                if args.walker_ground_lift is not None:
+                    env["CUSTOM_WALKER_GROUND_LIFT"] = str(float(args.walker_ground_lift))
                 if args.normalize_ego_z:
                     env["CUSTOM_EGO_NORMALIZE_Z"] = "1"
                 else:

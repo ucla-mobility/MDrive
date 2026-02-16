@@ -62,6 +62,15 @@ def get_camera_intrinsic(sensor):
 
     return matrix_k.tolist()
 
+
+def _safe_set_bp_attribute(bp, key, value):
+    """Set blueprint attribute only when available on this CARLA build."""
+    try:
+        if bp.has_attribute(key):
+            bp.set_attribute(key, str(value))
+    except Exception:  # pylint: disable=broad-except
+        pass
+
 class AgentError(Exception):
     """
     Exceptions thrown when the agent returns an error during the simulation
@@ -119,6 +128,7 @@ class AgentWrapper(object):
         """
         sensor_param={}
         bp_library = CarlaDataProvider.get_world().get_blueprint_library()
+        dense_capture = os.environ.get("TCP_CAPTURE_SENSOR_FRAMES", "").lower() in ("1", "true", "yes")
         for sensor_spec in self._agent.sensors():
             # These are the pseudosensors (not spawned)
             if sensor_spec['type'].startswith('sensor.opendrive_map'):
@@ -155,15 +165,26 @@ class AgentWrapper(object):
                     bp.set_attribute('image_size_x', str(sensor_spec['width']))
                     bp.set_attribute('image_size_y', str(sensor_spec['height']))
                     bp.set_attribute('fov', str(sensor_spec['fov']))
-                    bp.set_attribute('chromatic_aberration_intensity', str(0.5))
-                    bp.set_attribute('chromatic_aberration_offset', str(0))
-
-                    if self._agent.agent_name in ['TCP','transfuser','LAV','interfuser','WOR']:
-                        bp.set_attribute('lens_circle_multiplier', str(3.0))
-                        bp.set_attribute('lens_circle_falloff', str(3.0))    
+                    is_logreplay_rgb = sensor_spec.get('id') == 'logreplay_rgb'
+                    if is_logreplay_rgb:
+                        # Keep log-replay image captures visually clean while preserving
+                        # existing post-processing for planner-facing cameras.
+                        _safe_set_bp_attribute(bp, 'chromatic_aberration_intensity', 0.0)
+                        _safe_set_bp_attribute(bp, 'chromatic_aberration_offset', 0.0)
+                        _safe_set_bp_attribute(bp, 'lens_circle_multiplier', 0.0)
+                        _safe_set_bp_attribute(bp, 'lens_circle_falloff', 0.0)
+                        _safe_set_bp_attribute(bp, 'lens_k', 0.0)
+                        _safe_set_bp_attribute(bp, 'lens_kcube', 0.0)
                     else:
-                        bp.set_attribute('lens_circle_multiplier', str(1.0))
-                        bp.set_attribute('lens_circle_falloff', str(1.0))                                        
+                        bp.set_attribute('chromatic_aberration_intensity', str(0.5))
+                        bp.set_attribute('chromatic_aberration_offset', str(0))
+
+                        if self._agent.agent_name in ['TCP','transfuser','LAV','interfuser','WOR']:
+                            bp.set_attribute('lens_circle_multiplier', str(3.0))
+                            bp.set_attribute('lens_circle_falloff', str(3.0))    
+                        else:
+                            bp.set_attribute('lens_circle_multiplier', str(1.0))
+                            bp.set_attribute('lens_circle_falloff', str(1.0))                                        
 
                     sensor_location = carla.Location(x=sensor_spec['x'], y=sensor_spec['y'],
                                                      z=sensor_spec['z'])
@@ -261,7 +282,22 @@ class AgentWrapper(object):
                 sensor_transform = carla.Transform(sensor_location, sensor_rotation)
                 sensor = CarlaDataProvider.get_world().spawn_actor(bp, sensor_transform, vehicle)
             # setup callback
-            sensor.listen(CallBack(sensor_spec['id']+"_{}".format(vehicle_num), sensor_spec['type'], sensor, self._agent.sensor_interface))
+            sensor_tag = sensor_spec['id']+"_{}".format(vehicle_num)
+            sensor.listen(CallBack(sensor_tag, sensor_spec['type'], sensor, self._agent.sensor_interface))
+            if (
+                dense_capture
+                and sensor_spec['type'].startswith('sensor.camera')
+                and hasattr(self._agent.sensor_interface, "configure_image_capture")
+                and hasattr(self._agent, "save_path")
+                and self._agent.save_path is not None
+            ):
+                capture_root = getattr(self._agent, "logreplayimages_path", None)
+                if capture_root is None:
+                    capture_root = getattr(self._agent, "calibration_path", None)
+                if capture_root is None:
+                    capture_root = self._agent.save_path
+                out_dir = os.path.join(str(capture_root), f"{sensor_spec['id']}_{vehicle_num}")
+                self._agent.sensor_interface.configure_image_capture(sensor_tag, out_dir)
             self._sensors_list[vehicle_num].append(sensor)
 
         # Tick once to spawn the sensors
@@ -329,7 +365,10 @@ class AgentWrapper(object):
         Remove sensor tags of one ego vehicle
         """
         for sensor_spec in self._agent.sensors():
-            del self._agent.sensor_interface._sensors_objects[sensor_spec['id']+"_{}".format(vehicle_num)]
+            sensor_tag = sensor_spec['id']+"_{}".format(vehicle_num)
+            if hasattr(self._agent.sensor_interface, "unregister_image_capture"):
+                self._agent.sensor_interface.unregister_image_capture(sensor_tag)
+            del self._agent.sensor_interface._sensors_objects[sensor_tag]
 
     def cleanup(self):
         """
@@ -342,6 +381,8 @@ class AgentWrapper(object):
                     _sensors_ego[i].destroy()
                     _sensors_ego[i] = None
             _sensors_ego = []
+        if hasattr(self._agent.sensor_interface, "finalize_image_capture"):
+            self._agent.sensor_interface.finalize_image_capture()
 
     def cleanup_single(self, vehicle_num = 0):
         """

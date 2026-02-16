@@ -21,7 +21,7 @@ import torch
 import py_trees
 import matplotlib.pyplot as plt
 import numpy as np
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 import carla
 
 from agents.navigation.local_planner import RoadOption
@@ -106,6 +106,8 @@ def _glue_plan_to_ground(
     world_map: Optional[carla.Map],
     lane_type: carla.LaneType,
     world: Optional[carla.World],
+    prefer_ray_ground: bool = False,
+    z_extra: float = 0.0,
 ) -> None:
     if not plan:
         return
@@ -127,9 +129,13 @@ def _glue_plan_to_ground(
             )
             if snapped_wp is not None:
                 candidates.append(float(snapped_wp.transform.location.z))
-        if candidates:
+        if not candidates:
+            continue
+        if prefer_ray_ground and ground_z is not None:
+            target_z = float(ground_z)
+        else:
             target_z = min(candidates, key=lambda z: abs(z - float(tf.location.z)))
-            tf.location.z = float(target_z) + base_offset
+        tf.location.z = float(target_z) + base_offset + float(z_extra)
 
 
 def _interp_angle(a: float, b: float, alpha: float) -> float:
@@ -149,6 +155,540 @@ def _interp_transform(a: carla.Transform, b: carla.Transform, alpha: float) -> c
         roll=_interp_angle(a.rotation.roll, b.rotation.roll, alpha),
     )
     return carla.Transform(loc, rot)
+
+
+def _copy_transform(tf: carla.Transform) -> carla.Transform:
+    return carla.Transform(
+        carla.Location(
+            x=float(tf.location.x),
+            y=float(tf.location.y),
+            z=float(tf.location.z),
+        ),
+        carla.Rotation(
+            pitch=float(tf.rotation.pitch),
+            yaw=float(tf.rotation.yaw),
+            roll=float(tf.rotation.roll),
+        ),
+    )
+
+
+def _is_walker_actor(actor: Optional[carla.Actor]) -> bool:
+    if actor is None:
+        return False
+    try:
+        if isinstance(actor, carla.Walker):
+            return True
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        return str(actor.type_id).startswith("walker.")
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+class _OneEuroScalar:
+    """
+    Lightweight One Euro filter for adaptive smoothing.
+    """
+
+    def __init__(self, min_cutoff: float, beta: float, d_cutoff: float) -> None:
+        self._min_cutoff = max(1e-4, float(min_cutoff))
+        self._beta = max(0.0, float(beta))
+        self._d_cutoff = max(1e-4, float(d_cutoff))
+        self._x_hat: Optional[float] = None
+        self._dx_hat: float = 0.0
+
+    @staticmethod
+    def _alpha(cutoff: float, dt: float) -> float:
+        tau = 1.0 / (2.0 * math.pi * max(1e-4, cutoff))
+        return 1.0 / (1.0 + tau / max(1e-4, dt))
+
+    def filter(self, value: float, dt: float) -> float:
+        value = float(value)
+        dt = max(1e-4, float(dt))
+        if self._x_hat is None:
+            self._x_hat = value
+            self._dx_hat = 0.0
+            return value
+
+        dx = (value - self._x_hat) / dt
+        a_d = self._alpha(self._d_cutoff, dt)
+        self._dx_hat = a_d * dx + (1.0 - a_d) * self._dx_hat
+
+        cutoff = self._min_cutoff + self._beta * abs(self._dx_hat)
+        a = self._alpha(cutoff, dt)
+        self._x_hat = a * value + (1.0 - a) * self._x_hat
+        return self._x_hat
+
+
+def _unwrap_angle_rad(current: float, previous: float, previous_unwrapped: float) -> float:
+    delta = (float(current) - float(previous) + math.pi) % (2.0 * math.pi) - math.pi
+    return float(previous_unwrapped) + delta
+
+
+def _wrap_angle_deg(angle_rad: float) -> float:
+    return math.degrees((float(angle_rad) + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def _delta_angle_deg(current: float, previous: float) -> float:
+    return (float(current) - float(previous) + 180.0) % 360.0 - 180.0
+
+
+def _distance_xy(a: carla.Transform, b: carla.Transform) -> float:
+    dx = float(b.location.x) - float(a.location.x)
+    dy = float(b.location.y) - float(a.location.y)
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def _percentile(values: List[float], q: float) -> float:
+    if not values:
+        return 0.0
+    arr = sorted(float(v) for v in values)
+    if len(arr) == 1:
+        return arr[0]
+    q = max(0.0, min(100.0, float(q)))
+    rank = (q / 100.0) * (len(arr) - 1)
+    lo = int(math.floor(rank))
+    hi = int(math.ceil(rank))
+    if lo == hi:
+        return arr[lo]
+    w = rank - lo
+    return arr[lo] * (1.0 - w) + arr[hi] * w
+
+
+def _closest_point_on_segment_xy(
+    point_x: float,
+    point_y: float,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+) -> Tuple[float, float]:
+    seg_x = float(end_x) - float(start_x)
+    seg_y = float(end_y) - float(start_y)
+    denom = seg_x * seg_x + seg_y * seg_y
+    if denom <= 1e-9:
+        return float(start_x), float(start_y)
+    proj = ((float(point_x) - float(start_x)) * seg_x + (float(point_y) - float(start_y)) * seg_y) / denom
+    proj = max(0.0, min(1.0, float(proj)))
+    return float(start_x) + seg_x * proj, float(start_y) + seg_y * proj
+
+
+def _turn_angle_deg(prev_tf: carla.Transform, cur_tf: carla.Transform, next_tf: carla.Transform) -> float:
+    h0 = math.degrees(
+        math.atan2(
+            float(cur_tf.location.y) - float(prev_tf.location.y),
+            float(cur_tf.location.x) - float(prev_tf.location.x),
+        )
+    )
+    h1 = math.degrees(
+        math.atan2(
+            float(next_tf.location.y) - float(cur_tf.location.y),
+            float(next_tf.location.x) - float(cur_tf.location.x),
+        )
+    )
+    return abs(_delta_angle_deg(h1, h0))
+
+
+def _suppress_vehicle_lateral_jitter(
+    transforms: List[carla.Transform],
+    *,
+    damping: float,
+    passes: int,
+    max_correction: float,
+    turn_keep: float,
+    turn_angle_deg: float,
+) -> List[carla.Transform]:
+    """
+    Reduce side-to-side wobble by pulling each point toward the local centerline
+    defined by its neighbors. This keeps large trajectory changes while damping
+    high-frequency lateral jitter.
+    """
+    if len(transforms) < 3:
+        return [_copy_transform(tf) for tf in transforms]
+
+    out = [_copy_transform(tf) for tf in transforms]
+    damping = max(0.0, min(1.0, float(damping)))
+    passes = max(1, int(passes))
+    max_correction = max(0.0, float(max_correction))
+    turn_keep = max(0.0, min(1.0, float(turn_keep)))
+    turn_angle_deg = max(0.0, float(turn_angle_deg))
+
+    for _ in range(passes):
+        src = [_copy_transform(tf) for tf in out]
+        for idx in range(1, len(src) - 1):
+            prev_tf = src[idx - 1]
+            cur_tf = src[idx]
+            next_tf = src[idx + 1]
+
+            cx, cy = _closest_point_on_segment_xy(
+                float(cur_tf.location.x),
+                float(cur_tf.location.y),
+                float(prev_tf.location.x),
+                float(prev_tf.location.y),
+                float(next_tf.location.x),
+                float(next_tf.location.y),
+            )
+            err_x = float(cur_tf.location.x) - cx
+            err_y = float(cur_tf.location.y) - cy
+            err_norm = math.sqrt(err_x * err_x + err_y * err_y)
+            if err_norm <= 1e-5:
+                continue
+
+            keep = 1.0 - damping
+            if _turn_angle_deg(prev_tf, cur_tf, next_tf) >= turn_angle_deg:
+                keep = max(keep, turn_keep)
+            corr_scale = 1.0 - keep
+            corr_mag = min(err_norm * corr_scale, max_correction)
+            corr_ratio = corr_mag / err_norm if err_norm > 1e-8 else 0.0
+
+            out[idx].location.x = float(cur_tf.location.x) - err_x * corr_ratio
+            out[idx].location.y = float(cur_tf.location.y) - err_y * corr_ratio
+
+    out[0] = _copy_transform(transforms[0])
+    out[-1] = _copy_transform(transforms[-1])
+    return out
+
+
+def _stabilize_near_static_vehicle_segments(
+    transforms: List[carla.Transform],
+    times: Optional[List[float]],
+    *,
+    total_displacement_threshold: float,
+    total_path_length_threshold: float,
+    window_min_duration: float,
+    window_max_displacement: float,
+    window_max_speed: float,
+    window_max_yaw_delta: float,
+) -> List[carla.Transform]:
+    """
+    Freeze near-static sub-segments in a replay plan to suppress parked-car jitter.
+    Detection is interval-based: a vehicle can be frozen while stopped/parked and
+    then smoothly resume movement later in the same trajectory.
+    """
+    if len(transforms) < 2:
+        return [_copy_transform(tf) for tf in transforms]
+
+    out = [_copy_transform(tf) for tf in transforms]
+    has_times = bool(times) and len(times) == len(out)
+    default_dt = 0.05
+
+    seg_dt: List[float] = []
+    seg_dist: List[float] = []
+    seg_speed: List[float] = []
+    seg_yaw_delta: List[float] = []
+    for idx in range(len(out) - 1):
+        if has_times:
+            dt_raw = float(times[idx + 1]) - float(times[idx])
+            # Use unclamped dt for motion statistics so sparse logs do not inflate speed.
+            dt = max(1e-3, dt_raw)
+        else:
+            dt = default_dt
+        dist_xy = _distance_xy(out[idx], out[idx + 1])
+        seg_dt.append(dt)
+        seg_dist.append(dist_xy)
+        seg_speed.append(dist_xy / dt)
+        seg_yaw_delta.append(
+            abs(_delta_angle_deg(out[idx + 1].rotation.yaw, out[idx].rotation.yaw))
+        )
+
+    disp_thr = max(0.0, float(total_displacement_threshold))
+    path_thr = max(0.0, float(total_path_length_threshold))
+    win_disp_thr = max(0.0, float(window_max_displacement))
+    win_speed_thr = max(0.0, float(window_max_speed))
+    win_yaw_thr = max(0.0, float(window_max_yaw_delta))
+
+    def _segment_static_stats(
+        segment_tfs: List[carla.Transform],
+        segment_dist: List[float],
+        segment_speed: List[float],
+        segment_yaw: List[float],
+    ) -> Dict[str, object]:
+        if len(segment_tfs) < 2:
+            return {
+                "is_static": False,
+                "center_x": float(segment_tfs[0].location.x) if segment_tfs else 0.0,
+                "center_y": float(segment_tfs[0].location.y) if segment_tfs else 0.0,
+                "mean_z": float(segment_tfs[0].location.z) if segment_tfs else 0.0,
+                "mean_yaw": float(segment_tfs[0].rotation.yaw) if segment_tfs else 0.0,
+            }
+
+        net_displacement = _distance_xy(segment_tfs[0], segment_tfs[-1])
+        total_segment_path = sum(float(v) for v in segment_dist)
+        max_radius_from_start = max(_distance_xy(segment_tfs[0], tf) for tf in segment_tfs)
+        xs = [float(tf.location.x) for tf in segment_tfs]
+        ys = [float(tf.location.y) for tf in segment_tfs]
+        zs = [float(tf.location.z) for tf in segment_tfs]
+        center_x = _percentile(xs, 50.0)
+        center_y = _percentile(ys, 50.0)
+        radial = [math.hypot(x - center_x, y - center_y) for x, y in zip(xs, ys)]
+        p95_radius = _percentile(radial, 95.0)
+        bbox_diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys))
+        p90_speed = _percentile(segment_speed, 90.0) if segment_speed else 0.0
+        max_speed = max(segment_speed) if segment_speed else 0.0
+        p90_step_dist = _percentile(segment_dist, 90.0) if segment_dist else 0.0
+        p95_step_dist = _percentile(segment_dist, 95.0) if segment_dist else 0.0
+        max_step_dist = max(segment_dist) if segment_dist else 0.0
+        p95_step_yaw = _percentile(segment_yaw, 95.0) if segment_yaw else 0.0
+        path_to_net_ratio = total_segment_path / max(0.05, net_displacement)
+        path_to_bbox_ratio = total_segment_path / max(0.05, bbox_diag)
+
+        unwrapped_yaw: List[float] = [float(segment_tfs[0].rotation.yaw)]
+        for k in range(1, len(segment_tfs)):
+            unwrapped_yaw.append(
+                unwrapped_yaw[-1]
+                + _delta_angle_deg(
+                    float(segment_tfs[k].rotation.yaw),
+                    float(segment_tfs[k - 1].rotation.yaw),
+                )
+            )
+        yaw_span = max(unwrapped_yaw) - min(unwrapped_yaw)
+
+        globally_static = (
+            net_displacement <= disp_thr
+            and max_radius_from_start <= max(0.0, 1.6 * win_disp_thr, 0.40)
+            and p95_radius <= max(1.8 * win_disp_thr, 0.32)
+            and yaw_span <= max(4.0 * win_yaw_thr, 10.0)
+        )
+        compact_jitter_static = (
+            net_displacement <= max(1.60 * disp_thr, 0.65)
+            and p95_radius <= max(3.2 * win_disp_thr, 0.72)
+            and bbox_diag <= max(6.0 * win_disp_thr, 1.35)
+            and p90_speed <= max(5.0 * win_speed_thr, 0.42)
+            and max_speed <= max(7.0 * win_speed_thr, 0.95)
+            and p95_step_dist <= max(2.6 * win_disp_thr, 0.36)
+            and max_step_dist <= max(5.8 * win_disp_thr, 0.98)
+            and yaw_span <= max(6.5 * win_yaw_thr, 16.0)
+            and p95_step_yaw <= max(4.0 * win_yaw_thr, 6.5)
+        )
+        path_noisy_compact_static = (
+            net_displacement <= max(1.45 * disp_thr, 0.55)
+            and bbox_diag <= max(6.4 * win_disp_thr, 1.45)
+            and p95_radius <= max(3.4 * win_disp_thr, 0.78)
+            and p90_step_dist <= max(2.9 * win_disp_thr, 0.40)
+            and p95_step_yaw <= max(4.6 * win_yaw_thr, 7.5)
+            and path_to_net_ratio >= max(4.0, 2.0 * max(1e-3, path_thr / max(0.05, disp_thr)))
+            and path_to_bbox_ratio <= max(8.0, 1.5 * max(1e-3, path_thr / max(0.05, win_disp_thr)))
+        )
+        noisy_low_drift_static = (
+            net_displacement <= max(1.30 * disp_thr, 0.52)
+            and bbox_diag <= max(7.0 * win_disp_thr, 1.55)
+            and p95_radius <= max(3.7 * win_disp_thr, 0.84)
+            and p95_step_dist <= max(3.3 * win_disp_thr, 0.46)
+            and p95_step_yaw <= max(5.0 * win_yaw_thr, 8.5)
+            and p90_speed <= max(8.0 * win_speed_thr, 0.68)
+            and max_speed <= max(18.0 * win_speed_thr, 2.35)
+            and path_to_net_ratio >= max(4.0, 1.8 * max(1e-3, path_thr / max(0.05, disp_thr)))
+            and path_to_bbox_ratio <= max(9.0, 1.7 * max(1e-3, path_thr / max(0.05, win_disp_thr)))
+        )
+        static_hit = (
+            globally_static
+            or compact_jitter_static
+            or path_noisy_compact_static
+            or noisy_low_drift_static
+        )
+
+        sin_sum = sum(math.sin(math.radians(float(tf.rotation.yaw))) for tf in segment_tfs)
+        cos_sum = sum(math.cos(math.radians(float(tf.rotation.yaw))) for tf in segment_tfs)
+        if abs(sin_sum) + abs(cos_sum) > 1e-6:
+            mean_yaw = math.degrees(math.atan2(sin_sum, cos_sum))
+        else:
+            mean_yaw = float(segment_tfs[0].rotation.yaw)
+
+        return {
+            "is_static": bool(static_hit),
+            "center_x": float(center_x),
+            "center_y": float(center_y),
+            "mean_z": float(sum(zs) / max(1.0, float(len(zs)))),
+            "mean_yaw": float(mean_yaw),
+        }
+
+    whole_stats = _segment_static_stats(out, seg_dist, seg_speed, seg_yaw_delta)
+    if bool(whole_stats.get("is_static")):
+        anchor = _copy_transform(out[0])
+        anchor.location.x = float(whole_stats["center_x"])
+        anchor.location.y = float(whole_stats["center_y"])
+        anchor.location.z = float(whole_stats["mean_z"])
+        anchor.rotation.yaw = float(whole_stats["mean_yaw"])
+        return [_copy_transform(anchor) for _ in out]
+
+    low_motion = [
+        (seg_speed[i] <= max(5.0 * win_speed_thr, 0.35))
+        and (seg_yaw_delta[i] <= max(4.0 * win_yaw_thr, 6.0))
+        for i in range(len(seg_speed))
+    ]
+    for idx in range(1, len(low_motion) - 1):
+        if low_motion[idx]:
+            continue
+        if (
+            low_motion[idx - 1]
+            and low_motion[idx + 1]
+            and seg_speed[idx] <= max(8.0 * win_speed_thr, 0.90)
+            and seg_yaw_delta[idx] <= max(5.5 * win_yaw_thr, 11.0)
+        ):
+            low_motion[idx] = True
+
+    idx = 0
+    while idx < len(low_motion):
+        if not low_motion[idx]:
+            idx += 1
+            continue
+        start_seg = idx
+        while idx + 1 < len(low_motion) and low_motion[idx + 1]:
+            idx += 1
+        end_seg = idx
+
+        start_idx = start_seg
+        end_idx = end_seg + 1
+        duration = sum(seg_dt[start_seg : end_seg + 1])
+        duration_ok = duration >= max(0.0, 0.50 * float(window_min_duration), 0.35)
+        seg_stats = _segment_static_stats(
+            out[start_idx : end_idx + 1],
+            seg_dist[start_seg : end_seg + 1],
+            seg_speed[start_seg : end_seg + 1],
+            seg_yaw_delta[start_seg : end_seg + 1],
+        )
+        if duration_ok and bool(seg_stats.get("is_static")):
+            anchor_x = float(seg_stats["center_x"])
+            anchor_y = float(seg_stats["center_y"])
+            anchor_z = float(seg_stats["mean_z"])
+            anchor_yaw = float(seg_stats["mean_yaw"])
+
+            seg_count = end_idx - start_idx + 1
+            mean_dt = duration / max(1.0, float(seg_count - 1))
+            ramp_frames = max(1, min(6, int(round(0.35 / max(1e-3, mean_dt)))))
+            ramp_frames = max(1, min(ramp_frames, max(1, (seg_count - 1) // 2)))
+            has_left_neighbor = start_idx > 0
+            has_right_neighbor = end_idx < len(out) - 1
+
+            for j in range(start_idx, end_idx + 1):
+                src_tf = out[j]
+                w_left = 1.0
+                w_right = 1.0
+                if has_left_neighbor:
+                    w_left = min(1.0, float(j - start_idx) / float(ramp_frames))
+                if has_right_neighbor:
+                    w_right = min(1.0, float(end_idx - j) / float(ramp_frames))
+                freeze_weight = max(0.0, min(1.0, min(w_left, w_right)))
+
+                out[j].location.x = float(src_tf.location.x) * (1.0 - freeze_weight) + anchor_x * freeze_weight
+                out[j].location.y = float(src_tf.location.y) * (1.0 - freeze_weight) + anchor_y * freeze_weight
+                out[j].location.z = float(src_tf.location.z) * (1.0 - freeze_weight) + anchor_z * freeze_weight
+                yaw_delta = _delta_angle_deg(float(anchor_yaw), float(src_tf.rotation.yaw))
+                out[j].rotation.yaw = _wrap_angle_deg(
+                    math.radians(float(src_tf.rotation.yaw) + freeze_weight * yaw_delta)
+                )
+
+        idx += 1
+
+    return out
+
+
+def _smooth_vehicle_replay_plan(
+    transforms: List[carla.Transform],
+    times: Optional[List[float]],
+    *,
+    min_cutoff_xy: float,
+    beta_xy: float,
+    min_cutoff_z: float,
+    beta_z: float,
+    min_cutoff_yaw: float,
+    beta_yaw: float,
+    d_cutoff: float,
+    static_hold_enabled: bool = True,
+    static_total_displacement: float = 0.35,
+    static_total_path_length: float = 1.6,
+    static_window_min_duration: float = 0.8,
+    static_window_max_displacement: float = 0.22,
+    static_window_max_speed: float = 0.08,
+    static_window_max_yaw_delta: float = 2.5,
+    lateral_damping: float = 0.72,
+    lateral_passes: int = 2,
+    lateral_max_correction: float = 0.40,
+    lateral_turn_keep: float = 0.62,
+    lateral_turn_angle_deg: float = 10.0,
+) -> List[carla.Transform]:
+    """
+    Smooth replay transforms with adaptive filtering while preserving endpoints.
+    This removes high-frequency lateral jitter from logged actor trajectories.
+    """
+    if len(transforms) < 3:
+        return [_copy_transform(tf) for tf in transforms]
+
+    src = [_copy_transform(tf) for tf in transforms]
+    out: List[carla.Transform] = []
+
+    fx = _OneEuroScalar(min_cutoff=min_cutoff_xy, beta=beta_xy, d_cutoff=d_cutoff)
+    fy = _OneEuroScalar(min_cutoff=min_cutoff_xy, beta=beta_xy, d_cutoff=d_cutoff)
+    fz = _OneEuroScalar(min_cutoff=min_cutoff_z, beta=beta_z, d_cutoff=d_cutoff)
+    fyaw = _OneEuroScalar(min_cutoff=min_cutoff_yaw, beta=beta_yaw, d_cutoff=d_cutoff)
+
+    has_times = bool(times) and len(times) == len(src)
+    default_dt = 0.05
+
+    prev_raw_yaw = math.radians(float(src[0].rotation.yaw))
+    prev_unwrapped_yaw = prev_raw_yaw
+    prev_time = float(times[0]) if has_times else 0.0
+
+    for idx, tf in enumerate(src):
+        if idx == 0:
+            dt = default_dt
+        else:
+            if has_times:
+                cur_t = float(times[idx])
+                dt = cur_t - prev_time
+                prev_time = cur_t
+            else:
+                dt = default_dt
+            dt = max(1e-3, min(0.25, float(dt)))
+
+        x = fx.filter(float(tf.location.x), dt)
+        y = fy.filter(float(tf.location.y), dt)
+        z = fz.filter(float(tf.location.z), dt)
+
+        raw_yaw = math.radians(float(tf.rotation.yaw))
+        if idx == 0:
+            unwrapped_yaw = raw_yaw
+        else:
+            unwrapped_yaw = _unwrap_angle_rad(raw_yaw, prev_raw_yaw, prev_unwrapped_yaw)
+        prev_raw_yaw = raw_yaw
+        prev_unwrapped_yaw = unwrapped_yaw
+        yaw = _wrap_angle_deg(fyaw.filter(unwrapped_yaw, dt))
+
+        out.append(
+            carla.Transform(
+                carla.Location(x=x, y=y, z=z),
+                carla.Rotation(
+                    pitch=float(tf.rotation.pitch),
+                    yaw=yaw,
+                    roll=float(tf.rotation.roll),
+                ),
+            )
+        )
+
+    # Preserve original endpoints exactly to keep replay alignment and completion timing stable.
+    out[0] = _copy_transform(src[0])
+    out[-1] = _copy_transform(src[-1])
+    out = _suppress_vehicle_lateral_jitter(
+        out,
+        damping=lateral_damping,
+        passes=lateral_passes,
+        max_correction=lateral_max_correction,
+        turn_keep=lateral_turn_keep,
+        turn_angle_deg=lateral_turn_angle_deg,
+    )
+    if static_hold_enabled:
+        out = _stabilize_near_static_vehicle_segments(
+            out,
+            times,
+            total_displacement_threshold=static_total_displacement,
+            total_path_length_threshold=static_total_path_length,
+            window_min_duration=static_window_min_duration,
+            window_max_displacement=static_window_max_displacement,
+            window_max_speed=static_window_max_speed,
+            window_max_yaw_delta=static_window_max_yaw_delta,
+        )
+    return out
 
 
 def _make_stage_transform(index: int, base_transform: Optional[carla.Transform] = None) -> carla.Transform:
@@ -498,6 +1038,126 @@ def _parse_lift_steps(raw: str) -> List[float]:
     return lifts
 
 
+def _parse_offset_values(raw: str, default_values: Optional[List[float]] = None) -> List[float]:
+    values: List[float] = []
+    for token in re.split(r"[,\s]+", str(raw or "").strip()):
+        if not token:
+            continue
+        try:
+            values.append(float(token))
+        except Exception:  # pylint: disable=broad-except
+            continue
+    if not values and default_values is not None:
+        values = [float(v) for v in default_values]
+    if not values:
+        values = [0.0]
+    # unique with stable order (rounded to reduce floating point duplicate noise)
+    dedup: List[float] = []
+    seen = set()
+    for value in values:
+        key = round(float(value), 6)
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(float(value))
+    if 0.0 not in seen:
+        dedup.insert(0, 0.0)
+    return dedup
+
+
+def _build_spawn_retry_offsets(
+    xy_offsets: List[float],
+    z_offsets: List[float],
+    max_attempts: int,
+) -> List[Tuple[float, float, float]]:
+    combos: List[Tuple[float, float, float]] = []
+    for dx in xy_offsets:
+        for dy in xy_offsets:
+            for dz in z_offsets:
+                if abs(dx) < 1e-8 and abs(dy) < 1e-8 and abs(dz) < 1e-8:
+                    continue
+                combos.append((float(dx), float(dy), float(dz)))
+    combos.sort(
+        key=lambda item: (
+            abs(item[0]) + abs(item[1]) + 0.75 * abs(item[2]),
+            abs(item[2]),
+            abs(item[0]) + abs(item[1]),
+        )
+    )
+    dedup: List[Tuple[float, float, float]] = []
+    seen = set()
+    for dx, dy, dz in combos:
+        key = (round(dx, 4), round(dy, 4), round(dz, 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append((dx, dy, dz))
+        if max_attempts > 0 and len(dedup) >= max_attempts:
+            break
+    return dedup
+
+
+def _spawn_with_offsets(
+    model: str,
+    rolename: str,
+    spawn_tf: carla.Transform,
+    offsets: List[Tuple[float, float, float]],
+    world: Optional[carla.World],
+    world_map: Optional[carla.Map],
+    lane_type: carla.LaneType,
+    normalize_actor_z: bool = False,
+    autopilot: bool = False,
+) -> tuple:
+    last_exc = None
+    attempts = 0
+    for dx, dy, dz in offsets:
+        attempts += 1
+        candidate = carla.Transform(
+            carla.Location(
+                x=float(spawn_tf.location.x) + float(dx),
+                y=float(spawn_tf.location.y) + float(dy),
+                z=float(spawn_tf.location.z) + float(dz),
+            ),
+            carla.Rotation(
+                pitch=spawn_tf.rotation.pitch,
+                yaw=spawn_tf.rotation.yaw,
+                roll=spawn_tf.rotation.roll,
+            ),
+        )
+        if normalize_actor_z:
+            candidates: List[float] = []
+            ground_z = _resolve_ground_z(world, candidate.location)
+            if ground_z is not None:
+                candidates.append(float(ground_z))
+            if world_map is not None:
+                try:
+                    snapped_wp = world_map.get_waypoint(
+                        candidate.location,
+                        project_to_road=True,
+                        lane_type=lane_type,
+                    )
+                    if snapped_wp is not None:
+                        candidates.append(float(snapped_wp.transform.location.z))
+                except Exception:  # pylint: disable=broad-except
+                    pass
+            if candidates:
+                target_z = min(candidates, key=lambda z: abs(z - float(candidate.location.z)))
+                candidate.location.z = float(target_z)
+        try:
+            actor = CarlaDataProvider.request_new_actor(
+                model,
+                candidate,
+                rolename=rolename,
+                autopilot=autopilot,
+            )
+            if actor is not None:
+                return actor, candidate, (float(dx), float(dy), float(dz)), None, attempts
+        except Exception as exc:  # pylint: disable=broad-except
+            last_exc = exc
+            continue
+    return None, None, None, last_exc, attempts
+
+
 def _spawn_with_lifts(
     model: str,
     rolename: str,
@@ -582,6 +1242,15 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         spawn_time: Optional[float] = None,
         despawn_cb=None,
         spawn_grace: Optional[float] = None,
+        ground_each_tick: bool = False,
+        ground_lane_type: Optional[carla.LaneType] = None,
+        ground_world_map: Optional[carla.Map] = None,
+        ground_world: Optional[carla.World] = None,
+        ground_prefer_ray: bool = False,
+        ground_z_extra: float = 0.0,
+        animate_walkers: Optional[bool] = None,
+        walker_max_speed: Optional[float] = None,
+        walker_teleport_distance: Optional[float] = None,
     ):
         super().__init__(name)
         self._actor = actor
@@ -598,6 +1267,40 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
                 self._spawn_time = None
         self._despawn_cb = despawn_cb
         self._spawn_grace = float(spawn_grace) if spawn_grace is not None else None
+        self._ground_each_tick = bool(ground_each_tick)
+        self._ground_lane_type = (
+            ground_lane_type if ground_lane_type is not None else carla.LaneType.Any
+        )
+        self._ground_world_map = ground_world_map
+        self._ground_world = ground_world
+        self._ground_prefer_ray = bool(ground_prefer_ray)
+        self._ground_z_extra = float(ground_z_extra)
+        if animate_walkers is None:
+            animate_walkers = os.environ.get("CUSTOM_LOG_REPLAY_ANIMATE_WALKERS", "1").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        self._animate_walkers = bool(animate_walkers)
+        try:
+            self._walker_max_speed = float(
+                walker_max_speed
+                if walker_max_speed is not None
+                else os.environ.get("CUSTOM_LOG_REPLAY_WALKER_MAX_SPEED", "3.0")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._walker_max_speed = 3.0
+        self._walker_max_speed = max(0.2, self._walker_max_speed)
+        try:
+            self._walker_teleport_distance = float(
+                walker_teleport_distance
+                if walker_teleport_distance is not None
+                else os.environ.get("CUSTOM_LOG_REPLAY_WALKER_TELEPORT_DIST", "1.2")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._walker_teleport_distance = 1.2
+        self._walker_teleport_distance = max(0.1, self._walker_teleport_distance)
+        self._last_walker_time: Optional[float] = None
         self._spawned_once = bool(self._actor)
         self._valid = len(self._plan) == len(self._times) and len(self._plan) >= 1 and (
             self._actor is not None or self._spawn_cb is not None
@@ -645,9 +1348,101 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._debug_interval = float(os.environ.get("CUSTOM_LOG_REPLAY_DEBUG_INTERVAL", "2.0"))
         except Exception:  # pylint: disable=broad-except
             self._debug_interval = 2.0
+        lead_raw = str(os.environ.get("CUSTOM_LOG_REPLAY_TIME_LEAD", "auto")).strip().lower()
+        if lead_raw in ("", "auto"):
+            lead_seconds = 0.0
+            try:
+                world = CarlaDataProvider.get_world()
+                if world is not None:
+                    settings = world.get_settings()
+                    fixed_delta = getattr(settings, "fixed_delta_seconds", None)
+                    if fixed_delta is not None:
+                        lead_seconds = float(fixed_delta)
+            except Exception:  # pylint: disable=broad-except
+                lead_seconds = 0.0
+        else:
+            try:
+                lead_seconds = float(lead_raw)
+            except Exception:  # pylint: disable=broad-except
+                lead_seconds = 0.0
+        self._replay_time_lead = max(0.0, min(0.25, float(lead_seconds)))
         self._last_debug_time = None
         self._last_sim_time = None
         self._last_index_dbg = None
+
+    def _should_animate_walker(self) -> bool:
+        return self._animate_walkers and _is_walker_actor(self._actor)
+
+    def _estimate_segment_speed(self) -> float:
+        if self._last_index >= len(self._plan) - 1 or self._last_index >= len(self._times) - 1:
+            return 0.0
+        t0 = float(self._times[self._last_index])
+        t1 = float(self._times[self._last_index + 1])
+        dt = max(1e-3, t1 - t0)
+        a = self._plan[self._last_index].location
+        b = self._plan[self._last_index + 1].location
+        dist = math.sqrt(
+            (float(b.x) - float(a.x)) ** 2
+            + (float(b.y) - float(a.y)) ** 2
+            + (float(b.z) - float(a.z)) ** 2
+        )
+        return dist / dt
+
+    def _apply_walker_replay_control(self, target: carla.Transform, sim_time: float) -> bool:
+        if self._actor is None:
+            return False
+        try:
+            loc = self._actor.get_location()
+        except Exception:  # pylint: disable=broad-except
+            return False
+
+        dx = float(target.location.x) - float(loc.x)
+        dy = float(target.location.y) - float(loc.y)
+        dz = float(target.location.z) - float(loc.z)
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        if dist > self._walker_teleport_distance:
+            try:
+                self._actor.set_transform(target)
+            except Exception:  # pylint: disable=broad-except
+                return False
+            self._last_walker_time = sim_time
+            return True
+
+        dt = 0.05
+        if self._last_walker_time is not None:
+            dt = max(1e-3, min(0.25, float(sim_time - self._last_walker_time)))
+        self._last_walker_time = sim_time
+
+        desired_speed = self._estimate_segment_speed()
+        if desired_speed <= 1e-3:
+            desired_speed = dist / dt
+        desired_speed = min(self._walker_max_speed, max(0.0, float(desired_speed)))
+        if dist < 0.02:
+            desired_speed = 0.0
+
+        if dist > 1e-4:
+            direction = carla.Vector3D(dx / dist, dy / dist, dz / dist)
+        else:
+            try:
+                direction = self._actor.get_transform().get_forward_vector()
+            except Exception:  # pylint: disable=broad-except
+                direction = carla.Vector3D(1.0, 0.0, 0.0)
+
+        try:
+            control = self._actor.get_control()
+            if not isinstance(control, carla.WalkerControl):
+                control = carla.WalkerControl()
+        except Exception:  # pylint: disable=broad-except
+            control = carla.WalkerControl()
+        control.speed = float(desired_speed)
+        control.direction = direction
+
+        try:
+            self._actor.apply_control(control)
+            return True
+        except Exception:  # pylint: disable=broad-except
+            return False
 
     def _maybe_capture(self, stage: str):
         if self._capture_cb is None:
@@ -709,10 +1504,11 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             except Exception:  # pylint: disable=broad-except
                 pass
         if self._valid and self._actor is not None:
-            try:
-                self._actor.set_simulate_physics(False)
-            except Exception:  # pylint: disable=broad-except
-                pass
+            if not self._should_animate_walker():
+                try:
+                    self._actor.set_simulate_physics(False)
+                except Exception:  # pylint: disable=broad-except
+                    pass
             try:
                 if self._stage_before and self._times[0] > 0.0:
                     self._actor.set_transform(self._stage_tf)
@@ -727,6 +1523,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         self._last_debug_time = None
         self._last_sim_time = None
         self._last_index_dbg = None
+        self._last_walker_time = None
 
     def _compute_target(self, sim_time: float) -> carla.Transform:
         if sim_time <= self._times[0]:
@@ -754,6 +1551,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._start_time = GameTime.get_time()
 
         sim_time = GameTime.get_time() - self._start_time
+        replay_time = sim_time + self._replay_time_lead
 
         if self._debug and self._last_sim_time is not None and sim_time + 1e-3 < self._last_sim_time:
             print(f"[LOG_REPLAY_DEBUG] {self.name}: sim_time went backwards ({self._last_sim_time:.3f} -> {sim_time:.3f})")
@@ -762,22 +1560,23 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
 
         if self._actor is None and self._spawn_cb is not None:
             spawn_time = self._spawn_time if self._spawn_time is not None else 0.0
-            if sim_time < spawn_time:
+            if replay_time < spawn_time:
                 self._debug_log(sim_time, note=f"waiting_spawn t0={spawn_time:.2f}")
                 return py_trees.common.Status.RUNNING
             try:
                 self._actor = self._spawn_cb()
                 if self._actor is not None:
                     self._spawned_once = True
-                    try:
-                        self._actor.set_simulate_physics(False)
-                    except Exception:  # pylint: disable=broad-except
-                        pass
+                    if not self._should_animate_walker():
+                        try:
+                            self._actor.set_simulate_physics(False)
+                        except Exception:  # pylint: disable=broad-except
+                            pass
                     if not self._captured_spawn:
                         self._maybe_capture("spawn")
                         self._captured_spawn = True
                 else:
-                    if self._spawn_grace is not None and sim_time > (spawn_time + self._spawn_grace):
+                    if self._spawn_grace is not None and replay_time > (spawn_time + self._spawn_grace):
                         self._completed = True
                         self._disabled = True
                         self._maybe_finalize()
@@ -800,7 +1599,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._debug_log(sim_time, note="actor_missing")
             return py_trees.common.Status.RUNNING
 
-        if self._stage_before and sim_time < self._times[0]:
+        if self._stage_before and replay_time < self._times[0]:
             if not self._staged_before:
                 try:
                     self._actor.set_transform(self._stage_tf)
@@ -816,7 +1615,29 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._debug_log(sim_time, note="staged_before")
             return py_trees.common.Status.RUNNING
 
-        target = self._compute_target(sim_time)
+        target = self._compute_target(replay_time)
+        if self._ground_each_tick and self._actor is not None:
+            if self._ground_world is None:
+                try:
+                    self._ground_world = CarlaDataProvider.get_world()
+                except Exception:  # pylint: disable=broad-except
+                    self._ground_world = None
+            if self._ground_world_map is None:
+                try:
+                    self._ground_world_map = CarlaDataProvider.get_map()
+                except Exception:  # pylint: disable=broad-except
+                    self._ground_world_map = None
+            grounded_target = _copy_transform(target)
+            _glue_plan_to_ground(
+                [grounded_target],
+                self._actor,
+                self._ground_world_map,
+                self._ground_lane_type,
+                self._ground_world,
+                prefer_ray_ground=self._ground_prefer_ray,
+                z_extra=self._ground_z_extra,
+            )
+            target = grounded_target
         if self._debug and self._last_index_dbg is not None and self._last_index < self._last_index_dbg:
             print(
                 f"[LOG_REPLAY_DEBUG] {self.name}: index regressed ({self._last_index_dbg} -> {self._last_index})"
@@ -825,33 +1646,56 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._last_index_dbg = self._last_index
         self._debug_log(sim_time, note="replay", target=target)
 
-        try:
-            self._actor.set_transform(target)
-        except Exception as exc:  # pylint: disable=broad-except
-            if self._fail_on_exception:
-                return py_trees.common.Status.FAILURE
-            print(f"[LogReplayFollower] {self.name}: set_transform failed ({exc}); disabling replay.")
-            self._completed = True
-            self._disabled = True
-            self._maybe_finalize()
-            return py_trees.common.Status.SUCCESS
+        if self._should_animate_walker():
+            applied = self._apply_walker_replay_control(target, sim_time)
+            if not applied:
+                try:
+                    self._actor.set_transform(target)
+                except Exception as exc:  # pylint: disable=broad-except
+                    if self._fail_on_exception:
+                        return py_trees.common.Status.FAILURE
+                    print(f"[LogReplayFollower] {self.name}: set_transform failed ({exc}); disabling replay.")
+                    self._completed = True
+                    self._disabled = True
+                    self._maybe_finalize()
+                    return py_trees.common.Status.SUCCESS
+        else:
+            try:
+                self._actor.set_transform(target)
+            except Exception as exc:  # pylint: disable=broad-except
+                if self._fail_on_exception:
+                    return py_trees.common.Status.FAILURE
+                print(f"[LogReplayFollower] {self.name}: set_transform failed ({exc}); disabling replay.")
+                self._completed = True
+                self._disabled = True
+                self._maybe_finalize()
+                return py_trees.common.Status.SUCCESS
 
         if self._record_list is not None:
             try:
-                self._record_list.append((float(sim_time), target))
+                self._record_list.append((float(replay_time), target))
             except Exception:  # pylint: disable=broad-except
                 pass
 
         if (
             not self._captured_mid
             and self._capture_mid_time is not None
-            and sim_time >= self._capture_mid_time
-            and sim_time <= self._times[-1]
+            and replay_time >= self._capture_mid_time
+            and replay_time <= self._times[-1]
         ):
             self._maybe_capture("mid")
             self._captured_mid = True
 
-        if sim_time >= self._times[-1]:
+        if replay_time >= self._times[-1]:
+            if self._should_animate_walker():
+                try:
+                    stop_control = self._actor.get_control()
+                    if not isinstance(stop_control, carla.WalkerControl):
+                        stop_control = carla.WalkerControl()
+                    stop_control.speed = 0.0
+                    self._actor.apply_control(stop_control)
+                except Exception:  # pylint: disable=broad-except
+                    pass
             if self._stage_after and not self._staged_after:
                 try:
                     self._actor.set_transform(self._stage_tf)
@@ -1117,6 +1961,8 @@ class RouteScenario(BasicScenario):
         self.route_scenario_dic = {}
         self._custom_actor_configs = list(getattr(config, "custom_actors", []) or [])
         self._custom_actor_plans: List[dict] = []
+        self._custom_actor_spawn_states: Dict[str, dict] = {}
+        self._custom_actor_spawn_summary_printed = False
         self._custom_actor_behaviors = list(getattr(config, "custom_actor_behaviors", []) or [])
         self._custom_actor_behavior_by_name = {}
         self._ego_replay_transforms: List[List[carla.Transform]] = []
@@ -2158,6 +3004,121 @@ class RouteScenario(BasicScenario):
             "true",
             "yes",
         )
+        try:
+            walker_ground_lift = float(os.environ.get("CUSTOM_WALKER_GROUND_LIFT", "0.06"))
+        except Exception:  # pylint: disable=broad-except
+            walker_ground_lift = 0.06
+        animate_walkers = os.environ.get("CUSTOM_LOG_REPLAY_ANIMATE_WALKERS", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        smooth_vehicle_replay = os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_VEHICLES", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        try:
+            smooth_min_cutoff_xy = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_MIN_CUTOFF", "0.65"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_min_cutoff_xy = 0.65
+        try:
+            smooth_beta_xy = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_BETA", "0.18"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_beta_xy = 0.18
+        try:
+            smooth_min_cutoff_yaw = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_YAW_MIN_CUTOFF", "0.5"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_min_cutoff_yaw = 0.5
+        try:
+            smooth_beta_yaw = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_YAW_BETA", "0.12"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_beta_yaw = 0.12
+        try:
+            smooth_min_cutoff_z = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_Z_MIN_CUTOFF", "0.8"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_min_cutoff_z = 0.8
+        try:
+            smooth_beta_z = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_Z_BETA", "0.12"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_beta_z = 0.12
+        try:
+            smooth_d_cutoff = float(os.environ.get("CUSTOM_LOG_REPLAY_SMOOTH_D_CUTOFF", "1.0"))
+        except Exception:  # pylint: disable=broad-except
+            smooth_d_cutoff = 1.0
+        try:
+            smooth_lateral_damping = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_LATERAL_DAMPING", "0.72")
+            )
+        except Exception:  # pylint: disable=broad-except
+            smooth_lateral_damping = 0.72
+        try:
+            smooth_lateral_passes = int(
+                os.environ.get("CUSTOM_LOG_REPLAY_LATERAL_PASSES", "2")
+            )
+        except Exception:  # pylint: disable=broad-except
+            smooth_lateral_passes = 2
+        try:
+            smooth_lateral_max_correction = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_LATERAL_MAX_CORRECTION", "0.40")
+            )
+        except Exception:  # pylint: disable=broad-except
+            smooth_lateral_max_correction = 0.40
+        try:
+            smooth_lateral_turn_keep = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_LATERAL_TURN_KEEP", "0.62")
+            )
+        except Exception:  # pylint: disable=broad-except
+            smooth_lateral_turn_keep = 0.62
+        try:
+            smooth_lateral_turn_angle = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_LATERAL_TURN_ANGLE_DEG", "10.0")
+            )
+        except Exception:  # pylint: disable=broad-except
+            smooth_lateral_turn_angle = 10.0
+        stabilize_static_segments = os.environ.get(
+            "CUSTOM_LOG_REPLAY_STABILIZE_STATIC_VEHICLES", "1"
+        ).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        try:
+            static_total_disp = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_TOTAL_DISP", "0.35")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_total_disp = 0.35
+        try:
+            static_total_path = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_TOTAL_PATH", "1.6")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_total_path = 1.6
+        try:
+            static_window_min_duration = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_WINDOW_MIN_DURATION", "0.8")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_window_min_duration = 0.8
+        try:
+            static_window_max_disp = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_DISP", "0.22")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_window_max_disp = 0.22
+        try:
+            static_window_max_speed = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_SPEED", "0.08")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_window_max_speed = 0.08
+        try:
+            static_window_max_yaw_delta = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_STATIC_WINDOW_MAX_YAW_DELTA", "2.5")
+            )
+        except Exception:  # pylint: disable=broad-except
+            static_window_max_yaw_delta = 2.5
         lift_steps = _parse_lift_steps(
             os.environ.get("CUSTOM_ACTOR_SPAWN_LIFT_STEPS", "0.2,0.5,1.0")
         )
@@ -2196,14 +3157,45 @@ class RouteScenario(BasicScenario):
             except Exception:  # pylint: disable=broad-except
                 planner = None
 
+        xy_retry_offsets = _parse_offset_values(
+            os.environ.get("CUSTOM_ACTOR_SPAWN_XY_OFFSETS", "0.0,0.25,-0.25,0.5,-0.5,1.0,-1.0"),
+            default_values=[0.0, 0.25, -0.25, 0.5, -0.5, 1.0, -1.0],
+        )
+        z_retry_offsets = _parse_offset_values(
+            os.environ.get("CUSTOM_ACTOR_SPAWN_Z_OFFSETS", "0.0,0.2,-0.2,0.5,-0.5,1.0"),
+            default_values=[0.0, 0.2, -0.2, 0.5, -0.5, 1.0],
+        )
+        try:
+            max_spawn_attempts = max(0, int(os.environ.get("CUSTOM_ACTOR_SPAWN_MAX_ATTEMPTS", "180")))
+        except Exception:  # pylint: disable=broad-except
+            max_spawn_attempts = 180
+        spawn_retry_offsets = _build_spawn_retry_offsets(
+            xy_retry_offsets,
+            z_retry_offsets,
+            max_spawn_attempts,
+        )
+
         total = len(self._custom_actor_configs)
         spawned = 0
         failed = 0
         deferred = 0
+        self._custom_actor_spawn_summary_printed = False
+        self._custom_actor_spawn_states = {}
         for actor_idx, actor_cfg in enumerate(self._custom_actor_configs):
             role = actor_cfg.get("role", "npc")
             name = actor_cfg.get("rolename") or actor_cfg.get("name") or "unknown"
             model = actor_cfg.get("model", "unknown")
+            self._custom_actor_spawn_states[name] = {
+                "name": name,
+                "role": role,
+                "model": model,
+                "deferred": False,
+                "spawned": False,
+                "attempts": 0,
+                "last_failure": None,
+                "spawn_time": None,
+                "spawn_offset": (0.0, 0.0, 0.0),
+            }
             plan_transforms = actor_cfg.get("plan_transforms") or []
             plan_times = actor_cfg.get("plan_times")
             spawn_tf_src: carla.Transform = actor_cfg["spawn_transform"]
@@ -2242,6 +3234,38 @@ class RouteScenario(BasicScenario):
                 )
                 for tf in plan_transforms
             ]
+            is_non_vehicle_role = role in ("pedestrian", "walker", "bicycle", "cyclist")
+            is_vehicle_model = str(model).lower().startswith("vehicle.")
+            if (
+                log_replay
+                and smooth_vehicle_replay
+                and adjusted_plan_transforms
+                and not is_non_vehicle_role
+                and is_vehicle_model
+            ):
+                adjusted_plan_transforms = _smooth_vehicle_replay_plan(
+                    adjusted_plan_transforms,
+                    plan_times,
+                    min_cutoff_xy=smooth_min_cutoff_xy,
+                    beta_xy=smooth_beta_xy,
+                    min_cutoff_z=smooth_min_cutoff_z,
+                    beta_z=smooth_beta_z,
+                    min_cutoff_yaw=smooth_min_cutoff_yaw,
+                    beta_yaw=smooth_beta_yaw,
+                    d_cutoff=smooth_d_cutoff,
+                    static_hold_enabled=stabilize_static_segments,
+                    static_total_displacement=static_total_disp,
+                    static_total_path_length=static_total_path,
+                    static_window_min_duration=static_window_min_duration,
+                    static_window_max_displacement=static_window_max_disp,
+                    static_window_max_speed=static_window_max_speed,
+                    static_window_max_yaw_delta=static_window_max_yaw_delta,
+                    lateral_damping=smooth_lateral_damping,
+                    lateral_passes=smooth_lateral_passes,
+                    lateral_max_correction=smooth_lateral_max_correction,
+                    lateral_turn_keep=smooth_lateral_turn_keep,
+                    lateral_turn_angle_deg=smooth_lateral_turn_angle,
+                )
             stage_replay = bool(
                 log_replay
                 and use_staging
@@ -2328,8 +3352,13 @@ class RouteScenario(BasicScenario):
                     defer_spawn = True
 
             rolename = name
+            is_walker_like = role in ("pedestrian", "walker", "bicycle", "cyclist")
             if defer_spawn:
                 deferred += 1
+                state = self._custom_actor_spawn_states.get(rolename)
+                if state is not None:
+                    state["deferred"] = True
+                    state["spawn_time"] = float(spawn_time) if spawn_time is not None else None
                 if spawn_time is not None:
                     print(
                         f"[RouteScenario] Log replay actor {rolename} deferred spawn until t={spawn_time:.3f}s"
@@ -2366,8 +3395,12 @@ class RouteScenario(BasicScenario):
                         "spawn_time": spawn_time,
                         "defer_spawn": True,
                         "normalize_actor_z": normalize_actor_z,
+                        "ground_prefer_ray": is_walker_like,
+                        "ground_z_extra": float(walker_ground_lift) if is_walker_like else 0.0,
+                        "animate_walkers": animate_walkers,
                         "snap_to_road": should_snap_to_road,
                         "follow_exact": follow_exact,
+                        "spawn_retry_offsets": spawn_retry_offsets,
                         "spawn_debug": {
                             "snapped_to_road": snapped_to_road,
                             "ground_z": ground_z_for_actor,
@@ -2380,7 +3413,13 @@ class RouteScenario(BasicScenario):
             new_actor = None
             last_exc = None
             lift_used = None
+            offset_used = None
+            attempts_for_actor = 0
+            lane_type_for_spawn = carla.LaneType.Driving
+            if role in ("pedestrian", "walker", "bicycle", "cyclist"):
+                lane_type_for_spawn = carla.LaneType.Any
             for candidate in spawn_candidates:
+                attempts_for_actor += 1
                 try:
                     new_actor = CarlaDataProvider.request_new_actor(
                         actor_cfg["model"],
@@ -2394,6 +3433,31 @@ class RouteScenario(BasicScenario):
                 except Exception as exc:  # pylint: disable=broad-except
                     last_exc = exc
                     new_actor = None
+            if new_actor is None and spawn_retry_offsets:
+                (
+                    retry_actor,
+                    retry_tf,
+                    retry_offset,
+                    retry_exc,
+                    retry_attempts,
+                ) = _spawn_with_offsets(
+                    actor_cfg["model"],
+                    rolename,
+                    spawn_tf,
+                    spawn_retry_offsets,
+                    world,
+                    world_map,
+                    lane_type_for_spawn,
+                    normalize_actor_z=normalize_actor_z,
+                    autopilot=False,
+                )
+                attempts_for_actor += retry_attempts
+                if retry_actor is not None and retry_tf is not None:
+                    new_actor = retry_actor
+                    spawn_tf = retry_tf
+                    offset_used = retry_offset
+                elif retry_exc is not None:
+                    last_exc = retry_exc
             if new_actor is None and dynamic_spawn_lift and lift_steps:
                 retry_actor, retry_lift, retry_exc = _spawn_with_lifts(
                     actor_cfg["model"],
@@ -2402,18 +3466,28 @@ class RouteScenario(BasicScenario):
                     lift_steps,
                     autopilot=False,
                 )
+                attempts_for_actor += len(lift_steps)
                 if retry_actor is not None:
                     new_actor = retry_actor
                     lift_used = retry_lift
                 elif retry_exc is not None:
                     last_exc = retry_exc
+            state = self._custom_actor_spawn_states.get(rolename)
+            if state is not None:
+                state["attempts"] = int(state.get("attempts", 0)) + int(attempts_for_actor)
+                if offset_used is not None:
+                    state["spawn_offset"] = offset_used
             if new_actor is None:
                 failed += 1
+                if state is not None:
+                    state["last_failure"] = str(last_exc) if last_exc is not None else "request_new_actor returned None"
                 msg = (
                     f"[RouteScenario] Failed to spawn custom actor name={rolename} role={role} model={model}"
                 )
                 if last_exc is not None:
                     msg = f"{msg}: {last_exc}"
+                if attempts_for_actor > 0:
+                    msg = f"{msg} (attempts={attempts_for_actor})"
                 print(msg)
                 _emit_spawn_debug(
                     "request_new_actor_failed",
@@ -2431,27 +3505,9 @@ class RouteScenario(BasicScenario):
                 )
                 continue
 
-            if new_actor is None:
-                failed += 1
-                print(
-                    f"[RouteScenario] Unable to spawn custom actor name={rolename} role={role} "
-                    f"model={model} at {spawn_tf}"
-                )
-                _emit_spawn_debug(
-                    "request_new_actor_returned_none",
-                    actor_cfg,
-                    spawn_tf,
-                    snapped_to_road,
-                    ground_z_for_actor,
-                    stage_replay,
-                    world,
-                    world_map,
-                    normalize_actor_z,
-                    follow_exact,
-                    log_replay,
-                    debug_spawn,
-                )
-                continue
+            if state is not None:
+                state["spawned"] = True
+                state["last_failure"] = None
 
             if lift_used is not None:
                 if normalize_actor_z:
@@ -2476,6 +3532,15 @@ class RouteScenario(BasicScenario):
                         new_actor.set_transform(spawn_tf)
                     except Exception:  # pylint: disable=broad-except
                         pass
+            elif offset_used is not None:
+                print(
+                    "[RouteScenario] Spawn retry succeeded name={} offset=({:+.2f},{:+.2f},{:+.2f})".format(
+                        rolename,
+                        float(offset_used[0]),
+                        float(offset_used[1]),
+                        float(offset_used[2]),
+                    )
+                )
 
             if normalize_actor_z and ground_z_for_actor is not None and role in ("static", "static_prop"):
                 try:
@@ -2491,7 +3556,15 @@ class RouteScenario(BasicScenario):
                 lane_type = carla.LaneType.Driving
                 if role in ("pedestrian", "walker", "bicycle", "cyclist"):
                     lane_type = carla.LaneType.Any
-                _glue_plan_to_ground(adjusted_plan_transforms, new_actor, world_map, lane_type, world)
+                _glue_plan_to_ground(
+                    adjusted_plan_transforms,
+                    new_actor,
+                    world_map,
+                    lane_type,
+                    world,
+                    prefer_ray_ground=is_walker_like,
+                    z_extra=float(walker_ground_lift) if is_walker_like else 0.0,
+                )
                 if not (stage_replay and plan_times and plan_times[0] > 0.0):
                     try:
                         new_actor.set_transform(adjusted_plan_transforms[0])
@@ -2508,10 +3581,11 @@ class RouteScenario(BasicScenario):
                 except Exception:  # pylint: disable=broad-except
                     t0 = None
                 if t0 is not None and t0 > 0.0:
-                    try:
-                        new_actor.set_simulate_physics(False)
-                    except Exception:  # pylint: disable=broad-except
-                        pass
+                    if not (is_walker_like and animate_walkers):
+                        try:
+                            new_actor.set_simulate_physics(False)
+                        except Exception:  # pylint: disable=broad-except
+                            pass
                     try:
                         new_actor.set_transform(stage_tf)
                     except Exception:  # pylint: disable=broad-except
@@ -2595,21 +3669,124 @@ class RouteScenario(BasicScenario):
                     "stage_transform": stage_tf,
                     "stage_before": stage_replay,
                     "stage_after": stage_replay,
+                    "ground_prefer_ray": is_walker_like,
+                    "ground_z_extra": float(walker_ground_lift) if is_walker_like else 0.0,
+                    "animate_walkers": animate_walkers,
                     "realized_path": [],
                 }
             )
 
         if deferred:
             print(
-                f"[RouteScenario] Custom actor spawn summary: total={total} spawned={spawned} "
+                f"[RouteScenario] Custom actor initial spawn summary: total={total} spawned={spawned} "
                 f"deferred={deferred} failed={failed}"
             )
         else:
             print(
-                f"[RouteScenario] Custom actor spawn summary: total={total} spawned={spawned} failed={failed}"
+                f"[RouteScenario] Custom actor initial spawn summary: total={total} spawned={spawned} failed={failed}"
             )
         if actor_image_dir:
             self._capture_overhead_scene_image(actor_image_dir)
+
+    def _build_custom_actor_spawn_summary(self) -> dict:
+        states = self._custom_actor_spawn_states or {}
+        total = len(states)
+        immediate_states = [s for s in states.values() if not bool(s.get("deferred"))]
+        deferred_states = [s for s in states.values() if bool(s.get("deferred"))]
+
+        immediate_spawned = sum(1 for s in immediate_states if bool(s.get("spawned")))
+        immediate_failed = sum(1 for s in immediate_states if not bool(s.get("spawned")))
+        deferred_spawned = sum(1 for s in deferred_states if bool(s.get("spawned")))
+        deferred_attempted = sum(1 for s in deferred_states if int(s.get("attempts", 0)) > 0)
+        deferred_failed = sum(
+            1
+            for s in deferred_states
+            if int(s.get("attempts", 0)) > 0 and not bool(s.get("spawned"))
+        )
+        deferred_pending = sum(
+            1
+            for s in deferred_states
+            if int(s.get("attempts", 0)) == 0 and not bool(s.get("spawned"))
+        )
+
+        failed_details = []
+        pending_details = []
+        for state in states.values():
+            if bool(state.get("spawned")):
+                continue
+            record = {
+                "name": state.get("name"),
+                "role": state.get("role"),
+                "model": state.get("model"),
+                "deferred": bool(state.get("deferred")),
+                "attempts": int(state.get("attempts", 0)),
+                "spawn_time": state.get("spawn_time"),
+                "last_failure": state.get("last_failure"),
+            }
+            if bool(state.get("deferred")) and int(state.get("attempts", 0)) == 0:
+                pending_details.append(record)
+            else:
+                failed_details.append(record)
+
+        return {
+            "total": total,
+            "attempts_total": sum(int(s.get("attempts", 0)) for s in states.values()),
+            "immediate_total": len(immediate_states),
+            "immediate_spawned": immediate_spawned,
+            "immediate_failed": immediate_failed,
+            "deferred_total": len(deferred_states),
+            "deferred_spawned": deferred_spawned,
+            "deferred_attempted": deferred_attempted,
+            "deferred_failed": deferred_failed,
+            "deferred_pending": deferred_pending,
+            "failed_total": immediate_failed + deferred_failed,
+            "failed_details": failed_details,
+            "pending_details": pending_details,
+        }
+
+    def _print_custom_actor_spawn_summary(self) -> None:
+        if self._custom_actor_spawn_summary_printed:
+            return
+        if not self._custom_actor_spawn_states:
+            return
+
+        summary = self._build_custom_actor_spawn_summary()
+        print(
+            "[RouteScenario] Custom actor final spawn summary: "
+            f"total={summary['total']} attempts={summary['attempts_total']} "
+            f"immediate_ok={summary['immediate_spawned']}/{summary['immediate_total']} "
+            f"immediate_fail={summary['immediate_failed']} "
+            f"deferred_ok={summary['deferred_spawned']}/{summary['deferred_total']} "
+            f"deferred_fail={summary['deferred_failed']} "
+            f"deferred_pending={summary['deferred_pending']} "
+            f"failed_total={summary['failed_total']}"
+        )
+        if summary["failed_details"]:
+            preview = []
+            for item in summary["failed_details"][:15]:
+                preview.append(
+                    "{}(role={}, model={}, attempts={}, reason={})".format(
+                        item.get("name"),
+                        item.get("role"),
+                        item.get("model"),
+                        item.get("attempts"),
+                        item.get("last_failure"),
+                    )
+                )
+            print("[RouteScenario] Failed spawn actors: " + "; ".join(preview))
+        if summary["pending_details"]:
+            preview = []
+            for item in summary["pending_details"][:15]:
+                preview.append(
+                    "{}(role={}, model={}, spawn_time={})".format(
+                        item.get("name"),
+                        item.get("role"),
+                        item.get("model"),
+                        item.get("spawn_time"),
+                    )
+                )
+            print("[RouteScenario] Deferred actors not yet attempted: " + "; ".join(preview))
+        self._custom_actor_spawn_summary_printed = True
 
     def _capture_custom_actor_image(self, actor, name: str, role: str, output_dir: str) -> None:
         """
@@ -2660,7 +3837,14 @@ class RouteScenario(BasicScenario):
                 world.wait_for_tick()
             image = image_queue.get(timeout=2.0)
             safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name))
-            filename = f"{role}_{safe_name}_{actor.id}.png"
+            try:
+                capture_t = float(GameTime.get_time())
+            except Exception:  # pylint: disable=broad-except
+                capture_t = None
+            if capture_t is None:
+                filename = f"{role}_{safe_name}_{actor.id}.png"
+            else:
+                filename = f"{role}_{safe_name}_{actor.id}_t{capture_t:.2f}.png"
             image.save_to_disk(os.path.join(output_dir, filename))
             print(f"[RouteScenario] Saved actor image: {filename}")
         except Exception as exc:  # pylint: disable=broad-except
@@ -2839,6 +4023,11 @@ class RouteScenario(BasicScenario):
                 camera.destroy()
             except Exception:  # pylint: disable=broad-except
                 pass
+
+    def remove_all_actors(self):
+        # Emit a final spawn summary before actor cleanup so end-of-run logs include totals.
+        self._print_custom_actor_spawn_summary()
+        super().remove_all_actors()
 
     def _resolve_ego_vehicle(self, vehicle_name: str):
         if not vehicle_name:
@@ -3216,6 +4405,8 @@ class RouteScenario(BasicScenario):
             "yes",
         )
         actor_image_dir = os.environ.get("CUSTOM_ACTOR_IMAGE_DIR")
+        world = CarlaDataProvider.get_world()
+        world_map = CarlaDataProvider.get_map()
 
         for ego_vehicle_id in range(len(self.list_scenarios)):
             behavior_tmp = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE)
@@ -3308,9 +4499,14 @@ class RouteScenario(BasicScenario):
                                     model = plan.get("spawn_model")
                                     rolename = plan.get("name") or "unknown"
                                     spawn_tf = plan.get("spawn_transform")
+                                    state = self._custom_actor_spawn_states.get(rolename)
+                                    attempts = 0
                                     try:
                                         actor = None
                                         lift_used = None
+                                        offset_used = None
+                                        last_exc = None
+                                        attempts += 1
                                         try:
                                             actor = CarlaDataProvider.request_new_actor(
                                                 model,
@@ -3319,26 +4515,69 @@ class RouteScenario(BasicScenario):
                                                 autopilot=False,
                                             )
                                         except Exception as exc:  # pylint: disable=broad-except
-                                            if os.environ.get("CUSTOM_ACTOR_DYNAMIC_Z", "1").lower() in (
-                                                "1",
-                                                "true",
-                                                "yes",
-                                            ):
-                                                lift_steps = _parse_lift_steps(
-                                                    os.environ.get(
-                                                        "CUSTOM_ACTOR_SPAWN_LIFT_STEPS", "0.2,0.5,1.0"
-                                                    )
-                                                )
-                                                actor, lift_used, _ = _spawn_with_lifts(
+                                            actor = None
+                                            last_exc = exc
+
+                                        if actor is None:
+                                            retry_offsets = plan.get("spawn_retry_offsets") or []
+                                            if retry_offsets:
+                                                lane_type = carla.LaneType.Driving
+                                                if plan.get("role") in ("pedestrian", "walker", "bicycle", "cyclist"):
+                                                    lane_type = carla.LaneType.Any
+                                                (
+                                                    actor,
+                                                    retry_tf,
+                                                    retry_offset,
+                                                    retry_exc,
+                                                    retry_attempts,
+                                                ) = _spawn_with_offsets(
                                                     model,
                                                     rolename,
                                                     spawn_tf,
-                                                    lift_steps,
+                                                    retry_offsets,
+                                                    world,
+                                                    world_map,
+                                                    lane_type,
+                                                    normalize_actor_z=bool(plan.get("normalize_actor_z")),
                                                     autopilot=False,
                                                 )
-                                            if actor is None:
-                                                raise exc
+                                                attempts += retry_attempts
+                                                if actor is not None and retry_tf is not None:
+                                                    spawn_tf = retry_tf
+                                                    plan["spawn_transform"] = retry_tf
+                                                    offset_used = retry_offset
+                                                elif retry_exc is not None:
+                                                    last_exc = retry_exc
+
+                                        if actor is None and os.environ.get("CUSTOM_ACTOR_DYNAMIC_Z", "1").lower() in (
+                                            "1",
+                                            "true",
+                                            "yes",
+                                        ):
+                                            lift_steps = _parse_lift_steps(
+                                                os.environ.get(
+                                                    "CUSTOM_ACTOR_SPAWN_LIFT_STEPS", "0.2,0.5,1.0"
+                                                )
+                                            )
+                                            actor, lift_used, lift_exc = _spawn_with_lifts(
+                                                model,
+                                                rolename,
+                                                spawn_tf,
+                                                lift_steps,
+                                                autopilot=False,
+                                            )
+                                            attempts += len(lift_steps)
+                                            if actor is None and lift_exc is not None:
+                                                last_exc = lift_exc
+
+                                        if actor is None:
+                                            if last_exc is None:
+                                                raise RuntimeError("request_new_actor returned None")
+                                            raise last_exc
                                     except Exception as exc:  # pylint: disable=broad-except
+                                        if state is not None:
+                                            state["attempts"] = int(state.get("attempts", 0)) + int(attempts)
+                                            state["last_failure"] = str(exc)
                                         print(
                                             f"[RouteScenario] Log replay spawn failed name={rolename} model={model}: {exc}"
                                         )
@@ -3357,6 +4596,8 @@ class RouteScenario(BasicScenario):
                                             os.environ.get("CUSTOM_ACTOR_SPAWN_DEBUG", "").lower() in ("1", "true", "yes"),
                                         )
                                         return None
+                                    if state is not None:
+                                        state["attempts"] = int(state.get("attempts", 0)) + int(attempts)
                                     if actor is not None and lift_used is not None:
                                         if plan.get("normalize_actor_z"):
                                             lane_type = carla.LaneType.Driving
@@ -3379,7 +4620,18 @@ class RouteScenario(BasicScenario):
                                                 actor.set_transform(spawn_tf)
                                             except Exception:  # pylint: disable=broad-except
                                                 pass
+                                    elif actor is not None and offset_used is not None:
+                                        print(
+                                            "[RouteScenario] Log replay spawn retry succeeded name={} offset=({:+.2f},{:+.2f},{:+.2f})".format(
+                                                rolename,
+                                                float(offset_used[0]),
+                                                float(offset_used[1]),
+                                                float(offset_used[2]),
+                                            )
+                                        )
                                     if actor is None:
+                                        if state is not None:
+                                            state["last_failure"] = "request_new_actor returned None"
                                         print(
                                             f"[RouteScenario] Log replay spawn returned None name={rolename} model={model}"
                                         )
@@ -3398,6 +4650,11 @@ class RouteScenario(BasicScenario):
                                             os.environ.get("CUSTOM_ACTOR_SPAWN_DEBUG", "").lower() in ("1", "true", "yes"),
                                         )
                                         return None
+                                    if state is not None:
+                                        state["spawned"] = True
+                                        state["last_failure"] = None
+                                        if offset_used is not None:
+                                            state["spawn_offset"] = offset_used
                                     plan["actor"] = actor
                                     self.other_actors.append(actor)
                                     if plan.get("normalize_actor_z") and plan.get("plan_transforms"):
@@ -3410,6 +4667,8 @@ class RouteScenario(BasicScenario):
                                             world_map,
                                             lane_type,
                                             world,
+                                            prefer_ray_ground=bool(plan.get("ground_prefer_ray")),
+                                            z_extra=float(plan.get("ground_z_extra", 0.0)),
                                         )
                                         try:
                                             actor.set_transform(plan["plan_transforms"][0])
@@ -3436,6 +4695,17 @@ class RouteScenario(BasicScenario):
                             spawn_cb=spawn_cb,
                             spawn_time=spawn_time,
                             despawn_cb=despawn_cb,
+                            ground_each_tick=bool(actor_plan.get("normalize_actor_z")),
+                            ground_lane_type=(
+                                carla.LaneType.Any
+                                if actor_plan.get("role") in ("pedestrian", "walker", "bicycle", "cyclist")
+                                else carla.LaneType.Driving
+                            ),
+                            ground_world_map=world_map,
+                            ground_world=world,
+                            ground_prefer_ray=bool(actor_plan.get("ground_prefer_ray")),
+                            ground_z_extra=float(actor_plan.get("ground_z_extra", 0.0)),
+                            animate_walkers=bool(actor_plan.get("animate_walkers", True)),
                         )
                         if os.environ.get('DEBUG_FINISH', '').lower() in ('1', 'true', 'yes'):
                             print("[DEBUG FINISH]   -> Using LogReplayFollower")

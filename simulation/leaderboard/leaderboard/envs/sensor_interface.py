@@ -3,12 +3,15 @@ import logging
 import numpy as np
 import os
 import time
-from threading import Thread
+from pathlib import Path
+from threading import Lock, Thread
 
 from queue import Queue
 from queue import Empty
+from queue import Full
 
 import carla
+import cv2
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 
@@ -182,6 +185,7 @@ class CallBack(object):
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = copy.deepcopy(array)
         array = np.reshape(array, (image.height, image.width, 4))
+        self._data_provider.maybe_save_image_frame(tag, array, image.frame)
         self._data_provider.update_sensor(tag, array, image.frame)
 
     def _parse_lidar_cb(self, lidar_data, tag):
@@ -231,9 +235,121 @@ class SensorInterface(object):
         self._data_buffers = {}
         self._new_data_buffers = Queue()
         self._queue_timeout = 100 # default: 10
+        self._last_returned_timestamps = {}
 
         # Only sensor that doesn't get the data on tick, needs special treatment
         self._opendrive_tag = None
+        self._dense_capture_enabled = os.environ.get("TCP_CAPTURE_SENSOR_FRAMES", "").lower() in ("1", "true", "yes")
+        self._dense_capture_targets = {}
+        self._dense_capture_lock = Lock()
+        self._dense_capture_queue = None
+        self._dense_capture_writer_thread = None
+        self._dense_capture_queue_max = 0
+        self._dense_capture_png_compression = 1
+        self._dense_capture_dropped = 0
+        if self._dense_capture_enabled:
+            try:
+                self._dense_capture_queue_max = max(16, int(os.environ.get("TCP_CAPTURE_QUEUE_MAX", "256")))
+            except (TypeError, ValueError):
+                self._dense_capture_queue_max = 256
+            try:
+                self._dense_capture_png_compression = min(
+                    9, max(0, int(os.environ.get("TCP_CAPTURE_PNG_COMPRESSION", "1")))
+                )
+            except (TypeError, ValueError):
+                self._dense_capture_png_compression = 1
+            self._dense_capture_queue = Queue(maxsize=self._dense_capture_queue_max)
+            self._dense_capture_writer_thread = Thread(
+                target=self._dense_capture_writer_loop,
+                name="dense_image_writer",
+                daemon=True,
+            )
+            self._dense_capture_writer_thread.start()
+
+    def configure_image_capture(self, tag, output_dir):
+        """
+        Register a per-sensor image sink. When dense capture is enabled, every incoming
+        frame for this sensor will be written to disk from the sensor callback thread.
+        """
+        if not self._dense_capture_enabled:
+            return
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        with self._dense_capture_lock:
+            self._dense_capture_targets[tag] = {
+                "dir": output_path,
+                "counter": 0,
+                "last_frame": None,
+            }
+
+    def unregister_image_capture(self, tag):
+        if not self._dense_capture_enabled:
+            return
+        with self._dense_capture_lock:
+            self._dense_capture_targets.pop(tag, None)
+
+    def _dense_capture_writer_loop(self):
+        while True:
+            item = self._dense_capture_queue.get()
+            if item is None:
+                self._dense_capture_queue.task_done()
+                break
+            out_path, bgr = item
+            try:
+                cv2.imwrite(
+                    str(out_path),
+                    bgr,
+                    [int(cv2.IMWRITE_PNG_COMPRESSION), self._dense_capture_png_compression],
+                )
+            except Exception:
+                pass
+            finally:
+                self._dense_capture_queue.task_done()
+
+    def finalize_image_capture(self):
+        if not self._dense_capture_enabled or self._dense_capture_queue is None:
+            return
+        # Flush pending writes before cleanup.
+        try:
+            self._dense_capture_queue.join()
+        except Exception:
+            pass
+        try:
+            self._dense_capture_queue.put_nowait(None)
+        except Exception:
+            pass
+        if self._dense_capture_writer_thread is not None:
+            self._dense_capture_writer_thread.join(timeout=5.0)
+        if self._dense_capture_dropped > 0:
+            print(
+                "[SensorInterface] Dense capture dropped {} frames (queue max={}).".format(
+                    self._dense_capture_dropped, self._dense_capture_queue_max
+                )
+            )
+
+    def maybe_save_image_frame(self, tag, image_bgra, frame):
+        if not self._dense_capture_enabled:
+            return
+        if self._dense_capture_queue is None:
+            return
+        target = None
+        with self._dense_capture_lock:
+            target = self._dense_capture_targets.get(tag)
+            if target is None:
+                return
+            if target["last_frame"] == frame:
+                return
+            out_path = target["dir"] / f"{target['counter']:06d}.png"
+            target["counter"] += 1
+            target["last_frame"] = frame
+        try:
+            # Callback payload is BGRA. Keep BGR and offload PNG encoding to writer thread.
+            bgr = np.ascontiguousarray(image_bgra[:, :, :3])
+            self._dense_capture_queue.put_nowait((out_path, bgr))
+        except Full:
+            self._dense_capture_dropped += 1
+        except Exception:
+            pass
 
 
     def register_sensor(self, tag, sensor_type, sensor):
@@ -241,6 +357,7 @@ class SensorInterface(object):
             raise SensorConfigurationInvalid("Duplicated sensor tag [{}]".format(tag))
 
         self._sensors_objects[tag] = sensor
+        self._last_returned_timestamps[tag] = None
 
         if sensor_type == 'sensor.opendrive_map': 
             self._opendrive_tag = tag
@@ -252,6 +369,26 @@ class SensorInterface(object):
             return
 
         self._new_data_buffers.put((tag, timestamp, data))
+
+    def _store_latest_sample(self, data_dict, tag, timestamp, payload):
+        """
+        Keep the newest available packet for each tag.
+        Reject packets older than the last packet we already returned for this tag
+        to avoid one-frame rollbacks from out-of-order callback delivery.
+        """
+        if tag not in self._sensors_objects:
+            return False
+
+        last_returned = self._last_returned_timestamps.get(tag)
+        if last_returned is not None and timestamp < last_returned:
+            return False
+
+        current = data_dict.get(tag)
+        if current is not None and timestamp < current[0]:
+            return False
+
+        data_dict[tag] = (timestamp, payload)
+        return True
 
     def get_data(self):
         try: 
@@ -268,12 +405,24 @@ class SensorInterface(object):
 
                 # Drop stale data that belongs to sensors already removed (e.g., after an ego vehicle is destroyed)
                 tag = sensor_data[0]
-                if tag not in self._sensors_objects:
-                    continue
+                self._store_latest_sample(data_dict, tag, sensor_data[1], sensor_data[2])
 
-                data_dict[tag] = ((sensor_data[1], sensor_data[2]))
+            # Drain any already-queued packets and keep the newest sample per tag.
+            # Without this, we can return stale camera frames when newer packets are
+            # already in the queue for tags we have seen earlier in this call.
+            while True:
+                try:
+                    sensor_data = self._new_data_buffers.get_nowait()
+                except Empty:
+                    break
+
+                tag = sensor_data[0]
+                self._store_latest_sample(data_dict, tag, sensor_data[1], sensor_data[2])
 
         except Empty:
             raise SensorReceivedNoData("A sensor took too long to send their data")
+
+        for tag, (timestamp, _) in data_dict.items():
+            self._last_returned_timestamps[tag] = timestamp
 
         return data_dict
