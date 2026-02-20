@@ -8844,6 +8844,25 @@ def _sanitize_trajectory(
     return clean_wps, clean_times
 
 
+def _trajectory_instability_score(
+    waypoints: Sequence[Waypoint],
+    jump_threshold_m: float = 2.8,
+    yaw_flip_threshold_deg: float = 120.0,
+) -> float:
+    """Heuristic instability score for export-track source selection."""
+    if len(waypoints) < 2:
+        return 0.0
+    score = 0.0
+    for i in range(1, len(waypoints)):
+        dx = float(waypoints[i].x) - float(waypoints[i - 1].x)
+        dy = float(waypoints[i].y) - float(waypoints[i - 1].y)
+        if math.hypot(dx, dy) > float(jump_threshold_m):
+            score += 1.0
+        if _grp_yaw_diff_deg(float(waypoints[i].yaw), float(waypoints[i - 1].yaw)) > float(yaw_flip_threshold_deg):
+            score += 2.0
+    return float(score)
+
+
 def _compute_per_waypoint_speeds(
     waypoints: List[Waypoint],
     times: Optional[List[float]],
@@ -8932,16 +8951,21 @@ def _compute_per_waypoint_speeds(
 
 def _stabilize_initial_route_yaw_for_export(
     waypoints: List[Waypoint],
-    max_lookahead: int = 20,
+    max_lookahead: int = 50,
     min_displacement_m: float = 1.0,
-    max_prefix_frames: int = 6,
-    stationary_prefix_tol_m: float = 0.6,
+    max_prefix_frames: int = 50,
+    stationary_prefix_tol_m: float = 0.8,
     apply_if_diff_deg: float = 35.0,
 ) -> List[Waypoint]:
-    """Adjust only initial yaw(s) to avoid wrong-way spawn orientation in XML.
+    """Adjust yaws during stationary/slow-start period to avoid U-turns.
 
-    This fixes cases where initial route waypoints are spatially correct but the
-    first yaw points opposite traffic and causes an immediate U-turn.
+    This fixes cases where:
+    1. Initial route waypoints have yaw pointing opposite to movement direction
+    2. Tracking jitter causes yaw to flip 180° during stationary periods
+    
+    The function computes the actual movement direction from the first significant
+    displacement, then corrects all yaws in the stationary prefix that differ
+    by more than apply_if_diff_deg from that direction.
     """
     if len(waypoints) < 2:
         return waypoints
@@ -8949,6 +8973,7 @@ def _stabilize_initial_route_yaw_for_export(
     out = [Waypoint(x=float(w.x), y=float(w.y), z=float(w.z), yaw=float(w.yaw)) for w in waypoints]
     w0 = out[0]
 
+    # Find the first waypoint with significant displacement to determine movement direction
     end_idx = min(max_lookahead, len(out) - 1)
     ref_idx = -1
     ref_dx = 0.0
@@ -8967,12 +8992,16 @@ def _stabilize_initial_route_yaw_for_export(
 
     spawn_heading = _normalize_yaw_deg(math.degrees(math.atan2(ref_dy, ref_dx)))
 
-    prefix_end = min(max_prefix_frames, ref_idx)
+    # Fix all waypoints in the stationary prefix (not just first few)
+    # A waypoint is "stationary" if it hasn't moved far from the spawn point
+    prefix_end = min(max_prefix_frames, len(out))
     for i in range(prefix_end):
         di = math.hypot(float(out[i].x) - float(w0.x), float(out[i].y) - float(w0.y))
         if di > stationary_prefix_tol_m:
+            # Once we've moved significantly, stop fixing yaws
             break
-        if _grp_yaw_diff_deg(float(out[i].yaw), spawn_heading) >= apply_if_diff_deg:
+        yaw_diff = _grp_yaw_diff_deg(float(out[i].yaw), spawn_heading)
+        if yaw_diff >= apply_if_diff_deg:
             out[i] = Waypoint(
                 x=float(out[i].x),
                 y=float(out[i].y),
@@ -8981,7 +9010,6 @@ def _stabilize_initial_route_yaw_for_export(
             )
 
     return out
-
 
 def _spread_parked_vehicles(
     actor_tracks: List[Dict[str, object]],
@@ -9272,44 +9300,102 @@ def export_carla_routes(
             kind = "npc"
             control = actor_control_mode
         
-        # Transform to CARLA coordinates using RAW (rx/ry) positions before lane snapping
-        # This corresponds to visualization with "Use map-snapped poses" UNCHECKED
-        carla_wps: List[Waypoint] = []
-        carla_times: List[float] = []
+        # Build candidate source tracks in V2X coordinates.
+        # RAW keeps highest geometric fidelity, while correspondence-projected
+        # poses can suppress A<->B lane jitter for policy NPCs.
+        raw_wps: List[Waypoint] = []
+        raw_times: List[float] = []
+        corr_wps: List[Waypoint] = []
+        corr_times: List[float] = []
+        corr_valid = True
+
         for f in frames:
-            # Use raw rx/ry coordinates (before lane snapping)
+            rz = float(f.get("rz", f.get("z", 0)))
+            t = float(f.get("t", 0))
+
+            # RAW source (always available)
             rx = float(f.get("rx", f.get("x", 0)))
             ry = float(f.get("ry", f.get("y", 0)))
-            rz = float(f.get("rz", f.get("z", 0)))
             ryaw = float(f.get("ryaw", f.get("yaw", 0)))
-            t = float(f.get("t", 0))
-            
-            cx, cy = v2x_to_carla(rx, ry)
-            cyaw = yaw_v2x_to_carla(ryaw)
-            carla_wps.append(Waypoint(x=cx, y=cy, z=rz, yaw=cyaw))
-            carla_times.append(t)
-        
-        if not carla_wps:
+            raw_cx, raw_cy = v2x_to_carla(rx, ry)
+            raw_cyaw = yaw_v2x_to_carla(ryaw)
+            raw_wps.append(Waypoint(x=raw_cx, y=raw_cy, z=rz, yaw=raw_cyaw))
+            raw_times.append(t)
+
+            # Correspondence source (optional)
+            if corr_valid:
+                if ("cx" not in f) or ("cy" not in f) or ("cyaw" not in f):
+                    corr_valid = False
+                else:
+                    sx = _safe_float(f.get("cx"), float("nan"))
+                    sy = _safe_float(f.get("cy"), float("nan"))
+                    syaw = _safe_float(f.get("cyaw"), float("nan"))
+                    if not (math.isfinite(sx) and math.isfinite(sy) and math.isfinite(syaw)):
+                        corr_valid = False
+                    else:
+                        corr_cx, corr_cy = v2x_to_carla(float(sx), float(sy))
+                        corr_cyaw = yaw_v2x_to_carla(float(syaw))
+                        corr_wps.append(Waypoint(x=corr_cx, y=corr_cy, z=rz, yaw=corr_cyaw))
+                        corr_times.append(t)
+
+        if not raw_wps:
             continue
 
-        # Export-only yaw stabilization for initial stationary prefix.
-        # Keeps route geometry intact; only corrects spawn facing direction.
-        if kind in ("npc", "walker"):
-            carla_wps = _stabilize_initial_route_yaw_for_export(carla_wps)
-        
+        # Choose source trajectory:
+        # - default RAW
+        # - for policy NPCs, compare RAW vs correspondence and switch only when
+        #   correspondence is materially more stable (less jumpy / fewer 180 flips).
+        selected_source = "raw"
+        selected_wps: List[Waypoint] = raw_wps
+        selected_times: List[float] = raw_times
+        selected_orig_len = len(raw_wps)
+
+        def _postprocess_export_track(src_wps: List[Waypoint], src_times: List[float]) -> Tuple[List[Waypoint], List[float], float]:
+            wps_local = [Waypoint(x=float(w.x), y=float(w.y), z=float(w.z), yaw=float(w.yaw)) for w in src_wps]
+            times_local = [float(ti) for ti in src_times]
+            if kind in ("npc", "walker") and len(wps_local) >= 3:
+                # Use a lower speed threshold for walkers (no walker goes >10 m/s)
+                san_speed = 40.0 if kind == "npc" else 10.0
+                wps_local, times_local = _sanitize_trajectory(
+                    wps_local,
+                    times_local,
+                    default_dt,
+                    max_plausible_speed_mps=san_speed,
+                )
+            # Run stabilization AFTER sanitization so one noisy frame does not
+            # bias spawn heading and force a wrong-way initialization.
+            if kind in ("npc", "walker"):
+                wps_local = _stabilize_initial_route_yaw_for_export(wps_local)
+            score_local = _trajectory_instability_score(wps_local)
+            return wps_local, times_local, float(score_local)
+
+        raw_proc_wps, raw_proc_times, raw_score = _postprocess_export_track(raw_wps, raw_times)
+        selected_wps, selected_times = raw_proc_wps, raw_proc_times
+
+        if kind == "npc" and str(control).lower() == "policy" and corr_valid and len(corr_wps) == len(raw_wps):
+            corr_proc_wps, corr_proc_times, corr_score = _postprocess_export_track(corr_wps, corr_times)
+            if corr_score + 2.0 < raw_score:
+                selected_source = "corr"
+                selected_wps, selected_times = corr_proc_wps, corr_proc_times
+                selected_orig_len = len(corr_wps)
+                print(
+                    f"[EXPORT] {actor_id}: using correspondence poses "
+                    f"(instability {raw_score:.1f} -> {corr_score:.1f})"
+                )
+
+        carla_wps = selected_wps
+        carla_times = selected_times
+
+        if kind in ("npc", "walker") and len(carla_wps) != selected_orig_len:
+            print(
+                f"[SANITIZE] {actor_id} ({selected_source}): "
+                f"{selected_orig_len} -> {len(carla_wps)} waypoints after cleaning"
+            )
+
         # For static actors with spawn_only mode, keep only the first waypoint
-        if kind == "static" and static_spawn_only:
+        if kind == "static" and static_spawn_only and carla_wps:
             carla_wps = [carla_wps[0]]
             carla_times = [carla_times[0]] if carla_times else []
-        
-        # Sanitize NPC/walker trajectories: remove tracking ID-swaps, zigzag, teleportation
-        if kind in ("npc", "walker") and len(carla_wps) >= 3:
-            # Use a lower speed threshold for walkers (no walker goes >10 m/s)
-            _san_speed = 40.0 if kind == "npc" else 10.0
-            orig_len = len(carla_wps)
-            carla_wps, carla_times = _sanitize_trajectory(carla_wps, carla_times, default_dt, max_plausible_speed_mps=_san_speed)
-            if len(carla_wps) != orig_len:
-                print(f"[SANITIZE] {actor_id}: {orig_len} -> {len(carla_wps)} waypoints after cleaning")
         
         # Compute per-waypoint speeds and global fallback target speed
         per_wp_speeds: Optional[List[float]] = None
