@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="001" town="Town05" role="static" model="static.prop.constructioncone" speed="0.0">
+    <waypoint x="-124.968" y="60.900" z="0.000" yaw="-90.506100"/>
+  </route>
+</routes>

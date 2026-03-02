@@ -1,7 +1,6 @@
 import json
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,7 +8,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scenario_generator.pipeline.step_04_path_refiner.geometry import (
-    CropBox,
     _build_segment_payload_from_polyline,
 )
 from scenario_generator.pipeline.step_04_path_refiner.main import refine_picked_paths_with_model

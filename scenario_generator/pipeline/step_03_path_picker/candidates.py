@@ -266,8 +266,8 @@ def _candidate_lane_inconsistency(cand: Dict[str, Any]) -> int:
         return 0
 
     try:
-        entry_lane = int(lanes[0])
-        exit_lane = int(lanes[-1])
+        int(lanes[0])
+        int(lanes[-1])
     except Exception:
         return 0
 

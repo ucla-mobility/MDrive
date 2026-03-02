@@ -37,7 +37,6 @@ from .constraints import (
     validate_spec,
     spec_from_dict,
 )
-from .schema_utils import description_from_spec
 
 
 _CONSTRAINT_VALUES = [c.value for c in ConstraintType]
@@ -373,9 +372,14 @@ def _conflict_findings(spec: ScenarioSpec, cat_info: Any, relaxed: bool = False)
         if not cat_info.map.needs_on_ramp:
             known_entries = [v.entry_road for v in spec.ego_vehicles if v.entry_road in {"main", "side"}]
             distinct_entries = set(known_entries)
-            if num_vehicles >= 2 and len(distinct_entries) <= 1:
-                errors.append(
-                    "Intersection-like categories require vehicles from multiple approaches: mix entry_road values (main vs side)."
+            has_opposite_relation = any(
+                c.constraint_type == ConstraintType.OPPOSITE_APPROACH_OF
+                for c in spec.vehicle_constraints
+            )
+            # Allow same entry_road if opposite_approach_of already establishes opposing directions.
+            if num_vehicles >= 2 and len(distinct_entries) <= 1 and not has_opposite_relation:
+                warnings.append(
+                    "Set entry_road explicitly (main/side) so intersection-like categories represent multiple approaches."
                 )
             elif num_vehicles >= 2 and not known_entries:
                 warnings.append(
@@ -404,6 +408,7 @@ def _conflict_findings(spec: ScenarioSpec, cat_info: Any, relaxed: bool = False)
             errors.append("On-ramp scenarios require at least one vehicle with entry_road='main'.")
         if any(c.constraint_type == ConstraintType.MERGES_INTO_LANE_OF for c in spec.vehicle_constraints):
             valid_merge = False
+            invalid_reverse_merge = False
             for c in spec.vehicle_constraints:
                 if c.constraint_type != ConstraintType.MERGES_INTO_LANE_OF:
                     continue
@@ -411,9 +416,12 @@ def _conflict_findings(spec: ScenarioSpec, cat_info: Any, relaxed: bool = False)
                 b_entry = entry_by_vehicle.get(c.vehicle_b, "unknown")
                 if a_entry == "side" and b_entry == "main":
                     valid_merge = True
-                    break
+                if a_entry == "main" and b_entry == "side":
+                    invalid_reverse_merge = True
             if not valid_merge:
-                warnings.append("Use merges_into_lane_of from side -> main for on-ramp scenarios.")
+                errors.append("On-ramp scenarios require merges_into_lane_of from side -> main.")
+            if invalid_reverse_merge:
+                errors.append("On-ramp scenarios should not include merges_into_lane_of from main -> side.")
 
     if num_vehicles > 1:
         covered: Set[str] = set()
@@ -434,6 +442,87 @@ def _conflict_findings(spec: ScenarioSpec, cat_info: Any, relaxed: bool = False)
     # Warn if only passive constraints exist
     if spec.vehicle_constraints and all(c.constraint_type in passive_constraint_types for c in spec.vehicle_constraints):
         warnings.append("All constraints are passive; add at least one active relation for interaction.")
+
+    # Category-level hard checks that directly mirror must-include semantics.
+    category_name = spec.category
+    if category_name == "Unprotected Left Turn":
+        has_left = any(v.maneuver == EgoManeuver.LEFT for v in spec.ego_vehicles)
+        has_straight = any(v.maneuver == EgoManeuver.STRAIGHT for v in spec.ego_vehicles)
+        has_oncoming_rel = any(
+            c.constraint_type == ConstraintType.OPPOSITE_APPROACH_OF
+            for c in spec.vehicle_constraints
+        )
+        if not has_left or not has_straight or not has_oncoming_rel:
+            errors.append(
+                "Unprotected Left Turn requires a left-turn vehicle, a straight oncoming vehicle, and opposite_approach_of."
+            )
+
+    if category_name == "Interactive Lane Change":
+        non_lane_change = [v.vehicle_id for v in spec.ego_vehicles if v.maneuver != EgoManeuver.LANE_CHANGE]
+        if non_lane_change:
+            errors.append(
+                f"Interactive Lane Change requires all vehicles to use maneuver='lane_change' (non-compliant: {', '.join(non_lane_change)})."
+            )
+
+    if category_name == "Pedestrian Crosswalk":
+        has_crossing_walker = any(
+            a.kind == ActorKind.WALKER and a.motion == MotionType.CROSS_PERPENDICULAR
+            for a in spec.actors
+        )
+        if not has_crossing_walker:
+            errors.append("Pedestrian Crosswalk requires at least one walker with motion='cross_perpendicular'.")
+
+    if category_name == "Overtaking on Two-Lane Road":
+        has_blocking_obstacle = any(
+            a.kind in {ActorKind.STATIC_PROP, ActorKind.PARKED_VEHICLE}
+            for a in spec.actors
+        )
+        if not has_blocking_obstacle:
+            errors.append("Overtaking on Two-Lane Road requires a blocking static obstacle actor.")
+        if any(v.maneuver == EgoManeuver.LANE_CHANGE for v in spec.ego_vehicles):
+            errors.append("Overtaking on Two-Lane Road should not include lane_change maneuvers.")
+        opposite_pairs = {
+            (c.vehicle_a, c.vehicle_b)
+            for c in spec.vehicle_constraints
+            if c.constraint_type == ConstraintType.OPPOSITE_APPROACH_OF
+        }
+        if ("Vehicle 1", "Vehicle 2") not in opposite_pairs and ("Vehicle 2", "Vehicle 1") not in opposite_pairs:
+            errors.append("Overtaking on Two-Lane Road requires opposite_approach_of between Vehicle 1 and Vehicle 2.")
+        illegal_opposites = [
+            p for p in opposite_pairs if set(p) != {"Vehicle 1", "Vehicle 2"}
+        ]
+        if illegal_opposites:
+            errors.append(
+                f"Overtaking on Two-Lane Road should not include extra opposite_approach_of pairs: {illegal_opposites}."
+            )
+        invalid_lane_constraints = [
+            c for c in spec.vehicle_constraints
+            if c.constraint_type in {
+                ConstraintType.LEFT_LANE_OF,
+                ConstraintType.RIGHT_LANE_OF,
+                ConstraintType.SAME_LANE_AS,
+                ConstraintType.MERGES_INTO_LANE_OF,
+            }
+        ]
+        if invalid_lane_constraints:
+            errors.append("Overtaking on Two-Lane Road should not include lane adjacency/merge constraints.")
+
+    if category_name == "Roundabout Navigation":
+        if any(v.maneuver == EgoManeuver.LANE_CHANGE for v in spec.ego_vehicles):
+            errors.append("Roundabout Navigation should not include lane_change maneuvers.")
+        forbidden_actor_kinds = {ActorKind.STATIC_PROP, ActorKind.PARKED_VEHICLE, ActorKind.WALKER, ActorKind.CYCLIST}
+        if any(a.kind in forbidden_actor_kinds for a in spec.actors):
+            errors.append("Roundabout Navigation should not include props, pedestrians, or cyclists.")
+
+    if category_name == "Blocked Lane (Obstacle)":
+        has_blocking_obstacle = any(
+            a.kind in {ActorKind.STATIC_PROP, ActorKind.PARKED_VEHICLE}
+            for a in spec.actors
+        )
+        if not has_blocking_obstacle:
+            errors.append("Blocked Lane (Obstacle) requires a static obstacle actor.")
+        if any(v.maneuver == EgoManeuver.LANE_CHANGE for v in spec.ego_vehicles):
+            errors.append("Blocked Lane (Obstacle) should avoid lane_change maneuvers.")
 
     return errors, warnings
 
@@ -470,11 +559,22 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
         ConstraintType.PERPENDICULAR_LEFT_OF,
         ConstraintType.PERPENDICULAR_RIGHT_OF,
     }
-    lane_types = {
+    lane_adjacency_types = {
         ConstraintType.LEFT_LANE_OF,
         ConstraintType.RIGHT_LANE_OF,
-        ConstraintType.MERGES_INTO_LANE_OF,
+        ConstraintType.SAME_LANE_AS,
     }
+    same_corridor_hint_types = {
+        ConstraintType.MERGES_INTO_LANE_OF,
+        ConstraintType.LEFT_LANE_OF,
+        ConstraintType.RIGHT_LANE_OF,
+        ConstraintType.SAME_LANE_AS,
+        ConstraintType.SAME_APPROACH_AS,
+        ConstraintType.FOLLOW_ROUTE_OF,
+    }
+    has_same_corridor_hint = any(
+        c.constraint_type in same_corridor_hint_types for c in spec.vehicle_constraints
+    )
 
     def add_constraint(constraint_type: ConstraintType, a: str, b: str) -> None:
         key = (constraint_type, a, b)
@@ -508,13 +608,23 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
                 side_vehicle.maneuver = EgoManeuver.LANE_CHANGE
         add_constraint(ConstraintType.MERGES_INTO_LANE_OF, side_vehicle.vehicle_id, main_vehicle.vehicle_id)
 
-    # For intersection/T junction categories without on-ramp, ensure at least two approaches are represented
+    # For intersection/T junction categories without on-ramp, set missing approach metadata.
     if spec.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION} and not spec.needs_on_ramp:
         first = spec.ego_vehicles[0]
         second = spec.ego_vehicles[1]
         if first.entry_road == "unknown":
             first.entry_road = "main"
-        if second.entry_road == "unknown" or second.entry_road == first.entry_road:
+        if second.entry_road == "unknown":
+            # For oncoming or same-corridor interactions, keep vehicles on the same approach unless explicitly set.
+            if spec.needs_oncoming or has_same_corridor_hint:
+                second.entry_road = "main"
+            else:
+                second.entry_road = "side"
+        elif (
+            second.entry_road == first.entry_road
+            and not spec.needs_oncoming
+            and not has_same_corridor_hint
+        ):
             second.entry_road = "side"
         if second.exit_road == "unknown":
             second.exit_road = "unknown" if spec.topology == TopologyType.INTERSECTION else "main"
@@ -525,10 +635,9 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
     if spec.needs_oncoming:
         add_constraint(ConstraintType.OPPOSITE_APPROACH_OF, vehicle_a, vehicle_b)
 
-    if spec.needs_merge or spec.needs_on_ramp:
-        add_constraint(ConstraintType.MERGES_INTO_LANE_OF, vehicle_a, vehicle_b)
-
-    if spec.needs_multi_lane and not any(c.constraint_type in lane_types for c in spec.vehicle_constraints):
+    # For multi-lane requirements, a merge relation alone is not enough:
+    # ensure an explicit lane-adjacency relation is present.
+    if spec.needs_multi_lane and not any(c.constraint_type in lane_adjacency_types for c in spec.vehicle_constraints):
         # Only inject lane adjacency when vehicles plausibly share a corridor/highway or the same approach
         same_entry = spec.ego_vehicles[0].entry_road == spec.ego_vehicles[1].entry_road and spec.ego_vehicles[0].entry_road != "unknown"
         if spec.topology in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY} or same_entry:
@@ -538,6 +647,7 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
         spec.topology in {TopologyType.INTERSECTION, TopologyType.T_JUNCTION}
         and not any(c.constraint_type in crossing_types for c in spec.vehicle_constraints)
         and not spec.needs_oncoming
+        and not has_same_corridor_hint
     ):
         add_constraint(ConstraintType.PERPENDICULAR_RIGHT_OF, vehicle_a, vehicle_b)
 
@@ -549,6 +659,7 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
             ConstraintType.PERPENDICULAR_RIGHT_OF,
             ConstraintType.LEFT_LANE_OF,
             ConstraintType.RIGHT_LANE_OF,
+            ConstraintType.SAME_LANE_AS,
             ConstraintType.MERGES_INTO_LANE_OF,
             ConstraintType.FOLLOW_ROUTE_OF,
         }
@@ -566,6 +677,184 @@ def _ensure_direction_and_lane_constraints(spec: ScenarioSpec) -> ScenarioSpec:
                 # (or both are unknown). Different entry_roads imply different approach paths.
                 if vehicle.entry_road == ref_entry_road or vehicle.entry_road == "unknown" or ref_entry_road == "unknown":
                     add_constraint(ConstraintType.FOLLOW_ROUTE_OF, vehicle.vehicle_id, vehicle_b)
+
+    return spec
+
+
+def _canonicalize_constraints(spec: ScenarioSpec) -> ScenarioSpec:
+    """
+    Remove duplicate/contradictory constraints and canonicalize merge direction per pair.
+    """
+    if not spec.vehicle_constraints:
+        return spec
+
+    entries = {v.vehicle_id: v.entry_road for v in spec.ego_vehicles}
+    maneuvers = {v.vehicle_id: v.maneuver for v in spec.ego_vehicles}
+
+    merge_groups: Dict[frozenset, List[Tuple[int, InterVehicleConstraint]]] = {}
+    for idx, c in enumerate(spec.vehicle_constraints):
+        if c.constraint_type != ConstraintType.MERGES_INTO_LANE_OF:
+            continue
+        key = frozenset((c.vehicle_a, c.vehicle_b))
+        merge_groups.setdefault(key, []).append((idx, c))
+
+    canonical_merge_idx: Dict[frozenset, int] = {}
+    for pair_key, group in merge_groups.items():
+        # De-dup identical directed edges by first occurrence.
+        first_idx_by_dir: Dict[Tuple[str, str], int] = {}
+        for idx, c in group:
+            first_idx_by_dir.setdefault((c.vehicle_a, c.vehicle_b), idx)
+        directions = list(first_idx_by_dir.keys())
+        if not directions:
+            continue
+
+        def _score_direction(a: str, b: str) -> int:
+            score = 0
+            a_entry = entries.get(a, "unknown")
+            b_entry = entries.get(b, "unknown")
+            if a_entry == "side" and b_entry == "main":
+                score += 100
+            if a_entry == "main" and b_entry == "side":
+                score -= 25
+            if maneuvers.get(a) == EgoManeuver.LANE_CHANGE and maneuvers.get(b) != EgoManeuver.LANE_CHANGE:
+                score += 12
+            if spec.category == "Major/Minor Unsignalized Entry" and a_entry == "side" and b_entry == "main":
+                score += 60
+            if spec.category == "Highway On-Ramp Merge" and a_entry == "side" and b_entry == "main":
+                score += 80
+            return score
+
+        best_dir = min(
+            directions,
+            key=lambda d: (-_score_direction(d[0], d[1]), first_idx_by_dir[d]),
+        )
+        canonical_merge_idx[pair_key] = first_idx_by_dir[best_dir]
+
+    deduped: List[InterVehicleConstraint] = []
+    seen_non_merge: Set[Tuple[ConstraintType, str, str]] = set()
+    seen_symmetric: Set[Tuple[ConstraintType, frozenset]] = set()
+    symmetric_types = {
+        ConstraintType.OPPOSITE_APPROACH_OF,
+        ConstraintType.SAME_APPROACH_AS,
+        ConstraintType.SAME_EXIT_AS,
+        ConstraintType.SAME_ROAD_AS,
+        ConstraintType.SAME_LANE_AS,
+    }
+    seen_canonical_merge_pairs: Set[frozenset] = set()
+    for idx, c in enumerate(spec.vehicle_constraints):
+        if c.constraint_type == ConstraintType.MERGES_INTO_LANE_OF:
+            pair_key = frozenset((c.vehicle_a, c.vehicle_b))
+            keep_idx = canonical_merge_idx.get(pair_key, idx)
+            if idx != keep_idx:
+                continue
+            if pair_key in seen_canonical_merge_pairs:
+                continue
+            seen_canonical_merge_pairs.add(pair_key)
+            deduped.append(c)
+            continue
+
+        if c.constraint_type in symmetric_types:
+            pair_key = (c.constraint_type, frozenset((c.vehicle_a, c.vehicle_b)))
+            if pair_key in seen_symmetric:
+                continue
+            seen_symmetric.add(pair_key)
+            deduped.append(c)
+            continue
+
+        key = (c.constraint_type, c.vehicle_a, c.vehicle_b)
+        if key in seen_non_merge:
+            continue
+        seen_non_merge.add(key)
+        deduped.append(c)
+
+    spec.vehicle_constraints = deduped
+    return spec
+
+
+def _canonicalize_actors(spec: ScenarioSpec) -> ScenarioSpec:
+    """
+    Normalize actor timing semantics to match topology.
+    """
+    non_intersection_topologies = {
+        TopologyType.CORRIDOR,
+        TopologyType.TWO_LANE_CORRIDOR,
+        TopologyType.HIGHWAY,
+    }
+    if spec.topology not in non_intersection_topologies:
+        return spec
+
+    for actor in spec.actors:
+        if actor.timing_phase == TimingPhase.IN_INTERSECTION:
+            actor.timing_phase = TimingPhase.ON_APPROACH
+    return spec
+
+
+def _ensure_interaction_coverage(spec: ScenarioSpec) -> ScenarioSpec:
+    """
+    Ensure each ego is referenced by at least one relation/actor target.
+    Adds the lightest additional relation needed for uncovered vehicles.
+    """
+    if len(spec.ego_vehicles) < 2:
+        return spec
+
+    covered: Set[str] = set()
+    for c in spec.vehicle_constraints:
+        covered.add(c.vehicle_a)
+        covered.add(c.vehicle_b)
+    for actor in spec.actors:
+        if actor.affects_vehicle:
+            covered.add(actor.affects_vehicle)
+
+    vehicle_ids = [v.vehicle_id for v in spec.ego_vehicles]
+    uncovered = [vid for vid in vehicle_ids if vid not in covered]
+    if not uncovered:
+        return spec
+
+    entries = {v.vehicle_id: v.entry_road for v in spec.ego_vehicles}
+    existing_keys = {(c.constraint_type, c.vehicle_a, c.vehicle_b) for c in spec.vehicle_constraints}
+
+    def add_constraint(constraint_type: ConstraintType, a: str, b: str) -> None:
+        key = (constraint_type, a, b)
+        if key in existing_keys:
+            return
+        spec.vehicle_constraints.append(
+            InterVehicleConstraint(
+                constraint_type=constraint_type,
+                vehicle_a=a,
+                vehicle_b=b,
+            )
+        )
+        existing_keys.add(key)
+
+    anchor = vehicle_ids[0]
+    for vid in uncovered:
+        if vid == anchor:
+            target = next((v for v in vehicle_ids if v != anchor), None)
+            if target is None:
+                continue
+            source = anchor
+        else:
+            source = vid
+            target = anchor
+
+        # Category-safe defaults for supplemental interaction coverage.
+        if spec.category == "Overtaking on Two-Lane Road":
+            add_constraint(ConstraintType.FOLLOW_ROUTE_OF, source, target)
+            continue
+
+        if spec.topology in {TopologyType.CORRIDOR, TopologyType.TWO_LANE_CORRIDOR, TopologyType.HIGHWAY, TopologyType.ROUNDABOUT}:
+            same_entry = entries.get(source, "unknown") == entries.get(target, "unknown")
+            if same_entry or entries.get(source, "unknown") == "unknown" or entries.get(target, "unknown") == "unknown":
+                add_constraint(ConstraintType.FOLLOW_ROUTE_OF, source, target)
+            elif spec.needs_multi_lane:
+                add_constraint(ConstraintType.SAME_LANE_AS, source, target)
+            else:
+                add_constraint(ConstraintType.SAME_APPROACH_AS, source, target)
+        else:
+            if spec.needs_oncoming:
+                add_constraint(ConstraintType.OPPOSITE_APPROACH_OF, source, target)
+            else:
+                add_constraint(ConstraintType.PERPENDICULAR_RIGHT_OF, source, target)
 
     return spec
 
@@ -649,6 +938,10 @@ class TemplateSchemaGenerator:
             actors=actors,
         )
         spec = _ensure_direction_and_lane_constraints(spec)
+        spec = _canonicalize_constraints(spec)
+        spec = _canonicalize_actors(spec)
+        spec = _ensure_interaction_coverage(spec)
+        spec = _canonicalize_constraints(spec)
         # Leave description empty; downstream prompts rely on structured schema, not prose.
         spec.description = ""
         return spec
@@ -822,12 +1115,6 @@ class SchemaScenarioGenerator:
         
         out["category"] = category
         out["topology"] = cat_info.map.topology.value
-        # Preserve LLM's capability flags if true, OR use category definition
-        # This allows LLM to correctly infer needs_oncoming from must_include constraints
-        out["needs_oncoming"] = bool(cat_info.map.needs_oncoming) or bool(obj.get("needs_oncoming", False))
-        out["needs_multi_lane"] = bool(cat_info.map.needs_multi_lane) or bool(obj.get("needs_multi_lane", False))
-        out["needs_on_ramp"] = bool(cat_info.map.needs_on_ramp) or bool(obj.get("needs_on_ramp", False))
-        out["needs_merge"] = bool(cat_info.map.needs_merge or cat_info.map.needs_on_ramp) or bool(obj.get("needs_merge", False))
 
         vehicles = out.get("ego_vehicles")
         if not isinstance(vehicles, list) or not vehicles:
@@ -868,6 +1155,60 @@ class SchemaScenarioGenerator:
         if not isinstance(actors, list):
             actors = []
         out["actors"] = actors
+
+        # Infer capability flags from normalized content instead of trusting raw booleans.
+        # This avoids over-constraining crop selection with accidental LLM flag flips.
+        maneuvers = {
+            str(v.get("maneuver", "unknown")).strip().lower()
+            for v in vehicles
+            if isinstance(v, dict)
+        }
+        entry_by_vehicle = {
+            str(v.get("vehicle_id", "")).strip(): str(v.get("entry_road", "unknown")).strip().lower()
+            for v in vehicles
+            if isinstance(v, dict)
+        }
+
+        constraint_types: Set[str] = set()
+        has_side_to_main_merge = False
+        has_main_to_side_merge = False
+        for c in constraints:
+            if not isinstance(c, dict):
+                continue
+            ctype = str(c.get("type", "")).strip().lower()
+            if not ctype:
+                continue
+            constraint_types.add(ctype)
+            if ctype == ConstraintType.MERGES_INTO_LANE_OF.value:
+                a = str(c.get("a", "")).strip()
+                b = str(c.get("b", "")).strip()
+                a_entry = entry_by_vehicle.get(a, "unknown")
+                b_entry = entry_by_vehicle.get(b, "unknown")
+                if a_entry == "side" and b_entry == "main":
+                    has_side_to_main_merge = True
+                if a_entry == "main" and b_entry == "side":
+                    has_main_to_side_merge = True
+
+        inferred_oncoming = ConstraintType.OPPOSITE_APPROACH_OF.value in constraint_types
+        inferred_multi_lane = (
+            bool(
+                {
+                    ConstraintType.LEFT_LANE_OF.value,
+                    ConstraintType.RIGHT_LANE_OF.value,
+                    ConstraintType.SAME_LANE_AS.value,
+                }.intersection(constraint_types)
+            )
+            or EgoManeuver.LANE_CHANGE.value in maneuvers
+        )
+        inferred_on_ramp = (
+            cat_info.map.topology == TopologyType.HIGHWAY and has_side_to_main_merge and not has_main_to_side_merge
+        )
+        inferred_merge = ConstraintType.MERGES_INTO_LANE_OF.value in constraint_types or inferred_on_ramp
+
+        out["needs_oncoming"] = bool(cat_info.map.needs_oncoming or inferred_oncoming)
+        out["needs_multi_lane"] = bool(cat_info.map.needs_multi_lane or inferred_multi_lane)
+        out["needs_on_ramp"] = bool(cat_info.map.needs_on_ramp or inferred_on_ramp)
+        out["needs_merge"] = bool(cat_info.map.needs_merge or out["needs_on_ramp"] or inferred_merge)
 
         return out
 
@@ -982,6 +1323,10 @@ class SchemaScenarioGenerator:
                         prompt = build_schema_repair_prompt(last_payload, invalid_constraints, category, cat_info)
                 else:
                     spec = _ensure_direction_and_lane_constraints(spec)
+                    spec = _canonicalize_constraints(spec)
+                    spec = _canonicalize_actors(spec)
+                    spec = _ensure_interaction_coverage(spec)
+                    spec = _canonicalize_constraints(spec)
                     valid, errors = validate_spec(spec)
                     conflict_errors, conflict_warnings = _conflict_findings(spec, cat_info)
                     if conflict_errors:

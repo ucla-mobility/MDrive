@@ -53,6 +53,7 @@ __all__ = [
     "CategoryDefinition",
     "MapRequirements",
     "ValidationRules",
+    "RequiredRelation",
     "VariationAxis",
     "TopologyType",
     "ActorKind",

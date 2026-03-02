@@ -578,11 +578,37 @@ class LeaderboardEvaluator(object):
             # Only add if not already present (in case of duplicates across scenarios)
             if ego_id_str not in route_path_dict:
                 route_path_dict[ego_id_str] = xml_path
-        
-        for ego_id in range(args.ego_num):
-            route_indexer_dict[ego_id] = RouteIndexer(route_path_dict[str(ego_id)], args.scenarios, args.repetitions)
-            if ego_id==0:
-                route_indexer = route_indexer_dict[ego_id]
+
+        if not route_path_dict:
+            raise RuntimeError(
+                f"No route XML files found under {args.routes_dir}"
+            )
+
+        route_indexer = None
+        if args.ego_num > 0:
+            for ego_id in range(args.ego_num):
+                if str(ego_id) not in route_path_dict:
+                    raise RuntimeError(
+                        f"Missing ego route XML for ego_id={ego_id}. "
+                        f"Discovered keys: {sorted(route_path_dict.keys())}"
+                    )
+                route_indexer_dict[ego_id] = RouteIndexer(
+                    route_path_dict[str(ego_id)], args.scenarios, args.repetitions
+                )
+                if ego_id == 0:
+                    route_indexer = route_indexer_dict[ego_id]
+        else:
+            # No-ego mode still needs a primary route indexer to iterate scenario configs.
+            def _route_key_order(key: str):
+                try:
+                    return (0, int(key))
+                except (TypeError, ValueError):
+                    return (1, str(key))
+
+            first_key = sorted(route_path_dict.keys(), key=_route_key_order)[0]
+            route_indexer = RouteIndexer(
+                route_path_dict[first_key], args.scenarios, args.repetitions
+            )
 
         # if args.routes_0 is not None and args.routes_1 is not None and args.routes_2 is not None:
         #     route_indexer_0 = RouteIndexer(args.routes_0, args.scenarios, args.repetitions)

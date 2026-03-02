@@ -47,6 +47,25 @@ from scenario_generator.scene_validator import SceneValidator  # noqa: E402
 from scenario_generator.pipeline_runner import PipelineRunner  # noqa: E402
 from scenario_generator.capabilities import CATEGORY_DEFINITIONS, TopologyType, get_available_categories  # noqa: E402
 from convert_scene_to_routes import convert_scene_to_routes  # noqa: E402
+from tools.carla_validation import (  # noqa: E402
+    compute_near_miss as shared_compute_near_miss,
+    validate_spawn as shared_validate_spawn,
+)
+
+# Debug suite import (deferred to avoid circular imports)
+def _generate_debug_report(run_root: Path) -> Optional[Path]:
+    """Generate debug visualization report for the run."""
+    try:
+        from audit_debug_suite import load_run_analysis, generate_html_report
+        print("[INFO] Generating debug visualization report...")
+        analysis = load_run_analysis(run_root)
+        output_path = run_root / "debug_report.html"
+        generate_html_report(analysis, output_path)
+        print(f"[OK] Debug report saved to: {output_path}")
+        return output_path
+    except Exception as exc:
+        print(f"[WARN] Failed to generate debug report: {exc}")
+        return None
 
 
 STATES = [
@@ -568,13 +587,7 @@ def validate_spawn(world, expected_actor_ids: List[int]) -> Tuple[bool, str]:
     """
     Check that all expected actor ids resolve to live actors in the world.
     """
-    for aid in expected_actor_ids:
-        actor = world.get_actor(aid)
-        if actor is None:
-            return False, f"missing_actor_{aid}"
-        if not actor.is_alive:
-            return False, f"dead_actor_{aid}"
-    return True, ""
+    return shared_validate_spawn(world, expected_actor_ids)
 
 
 def _bounding_sphere_radius(actor) -> float:
@@ -648,66 +661,18 @@ def _compute_near_miss(
     role_lookup: Optional[Dict[int, str]] = None,
     debug_hits: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[bool, bool, float]:
-    """
-    Returns (hit_this_tick, severe_hit, min_ttc_local).
-    hit_this_tick is True if any projected collision within ttc_thresh AND closing_speed>closing_min.
-    severe_hit if any TTC <= ttc_severe with the same closing condition.
-    """
-    try:
-        ego_loc = ego_actor.get_location()
-    except Exception:
-        # Actor was destroyed or unavailable; skip collision checks this tick.
-        return False, False, float("inf")
-    ego_vel = _actor_velocity(ego_actor)
-    ego_r = _actor_radius(ego_actor)
-
-    min_ttc = float("inf")
-    hit = False
-    severe = False
-
-    for other in other_actors:
-        try:
-            other_id = other.id
-        except Exception:
-            continue
-        if other_id == ego_actor.id:
-            continue
-        try:
-            other_loc = other.get_location()
-        except Exception:
-            continue
-        other_vel = _actor_velocity(other)
-        closing = _closing_speed(ego_loc, ego_vel, other_loc, other_vel)
-        if closing <= closing_min:
-            continue
-        other_r = _actor_radius(other)
-        r_sum = ego_r + other_r
-        steps = max(1, int(horizon_s / step_s))
-        for i in range(1, steps + 1):
-            t = i * step_s
-            p_ego = _project_location(ego_loc, ego_vel, t, carla_module)
-            p_other = _project_location(other_loc, other_vel, t, carla_module)
-            dist = p_ego.distance(p_other)
-            if dist <= r_sum:
-                min_ttc = min(min_ttc, t)
-                if debug_hits is not None:
-                    debug_hits.append({
-                        "ego_id": getattr(ego_actor, "id", None),
-                        "other_id": other_id,
-                        "other_role": role_lookup.get(other_id) if role_lookup else "",
-                        "t": t,
-                        "dist": dist,
-                        "r_sum": r_sum,
-                        "closing": closing,
-                        "hit": t <= ttc_thresh,
-                        "severe": t <= ttc_severe,
-                    })
-                if t <= ttc_thresh:
-                    hit = True
-                if t <= ttc_severe:
-                    severe = True
-                break
-    return hit, severe, min_ttc
+    return shared_compute_near_miss(
+        ego_actor=ego_actor,
+        other_actors=other_actors,
+        carla_module=carla_module,
+        horizon_s=horizon_s,
+        step_s=step_s,
+        ttc_thresh=ttc_thresh,
+        ttc_severe=ttc_severe,
+        closing_min=closing_min,
+        role_lookup=role_lookup,
+        debug_hits=debug_hits,
+    )
 
 
 def _run_baseline_constant_velocity(
@@ -2202,6 +2167,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--resume", action="store_true", help="Resume an existing run directory.")
     parser.add_argument("--overwrite", action="store_true", help="Delete existing run directory first.")
+    # Debug suite options
+    parser.add_argument(
+        "--debug-report",
+        action="store_true",
+        default=True,
+        help="Generate HTML debug visualization report after run (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-debug-report",
+        action="store_true",
+        help="Disable automatic debug report generation",
+    )
+    parser.add_argument(
+        "--open-debug-report",
+        action="store_true",
+        help="Open debug report in browser after generation",
+    )
     return parser.parse_args()
 
 
@@ -2328,6 +2310,20 @@ def main() -> None:
         _update_best_marks(csv_path, ranked)
         _log_kept_best(category, ranked, args.count_per_combination)
         _create_kept_best_symlinks(run_root, ranked)
+    
+    # Generate debug visualization report
+    if args.debug_report and not args.no_debug_report:
+        report_path = _generate_debug_report(run_root)
+        if report_path and args.open_debug_report:
+            import webbrowser
+            webbrowser.open(f"file://{report_path.resolve()}")
+    
+    print(f"\n{'='*60}")
+    print(f"Audit benchmark complete: {run_root}")
+    print(f"CSV log: {csv_path}")
+    if args.debug_report and not args.no_debug_report:
+        print(f"Debug report: {run_root / 'debug_report.html'}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":

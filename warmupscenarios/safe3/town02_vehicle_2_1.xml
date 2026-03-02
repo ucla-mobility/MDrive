@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Vehicle_1_is_traveling_straight_" town="Town02" role="ego" speed="7.0">
+    <waypoint x="117.979" y="240.915" z="0.000" yaw="0.034825"/>
+    <waypoint x="123.979" y="240.919" z="0.000" yaw="-41.489916"/>
+    <waypoint x="136.119" y="230.182" z="0.000" yaw="-89.941930"/>
+    <waypoint x="136.138" y="211.182" z="0.000" yaw="-89.941930"/>
+  </route>
+</routes>

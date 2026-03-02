@@ -1,7 +1,6 @@
 import json
 import math
 import random
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,9 +11,7 @@ from .constants import LANE_WIDTH_M, LATERAL_TO_M, LATERAL_ALIASES
 from .geometry import (
     cumulative_dist,
     heading_deg_from_vec,
-    left_normal_world,
     point_and_tangent_at_s,
-    right_normal_world,
     wrap180,
     _project_point_to_path_s_m,
 )
@@ -1514,7 +1511,6 @@ def _check_distance_constraints(
     
     Returns list of (entity_id, other_id, actual_distance, target_distance) for unsatisfied constraints.
     """
-    spec_by_id = {str(s["id"]): s for s in specs}
     violations = []
     
     def _find_placement(entity_id: str) -> Optional[CandidatePlacement]:
@@ -1846,7 +1842,6 @@ def expand_group_to_actors(
 
     seg_len = float(cumulative_dist(pts)[-1])
     p, t = point_and_tangent_at_s(pts, chosen.s_along)
-    rn = right_normal_world(t)  # +right
 
     start_lat = gp.get("start_lateral")
     end_lat = gp.get("end_lateral")

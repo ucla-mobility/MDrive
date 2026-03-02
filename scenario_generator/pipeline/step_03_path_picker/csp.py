@@ -193,12 +193,10 @@ def _solve_paths_csp(
     # This must happen BEFORE role inference so we don't confuse side/main classification.
     if crop_region:
         # Intersection/topology (non-corridor/on-ramp) needs a margin so entries just outside
-        # the crop aren’t dropped; corridor/on-ramp stays strict.
-        margin = 10.0 if (not require_straight and not require_on_ramp) else 0.0
-        original_count = len(candidates)
-        inside = [c for c in candidates if _candidate_entry_in_crop(c, crop_region, margin=margin)]
-        inside_road_ids = {_candidate_entry_road_id(c) for c in inside}
-        inside_cardinals = {_candidate_entry_cardinal(c) for c in inside}
+        # the crop aren’t dropped; corridor/on-ramp stays strict on first pass.
+        base_margin = 10.0 if (not require_straight and not require_on_ramp) else 0.0
+        original_candidates = list(candidates)
+        original_count = len(original_candidates)
 
         def _clamp_point_to_box(pt: Optional[tuple], box: Dict[str, Any], m: float) -> Optional[tuple]:
             if pt is None or not box:
@@ -215,38 +213,57 @@ def _solve_paths_csp(
             except Exception:
                 return pt
 
-        # Allow candidates whose entry road_id matches any kept road_id OR whose entry cardinal
-        # is an opposite direction of a kept cardinal; clamp entry point to box+margin.
-        extras = []
-        for c in candidates:
-            if c in inside:
-                continue
-            rid = _candidate_entry_road_id(c)
-            ent_card = _candidate_entry_cardinal(c)
-            is_same_road = rid is not None and rid in inside_road_ids
-            opp_map = {"N": "S", "S": "N", "E": "W", "W": "E"}
-            is_opposite_card = ent_card and opp_map.get(ent_card) in inside_cardinals
-            if not (is_same_road or is_opposite_card):
-                continue
-            sig = c.get("signature", {})
-            ent = sig.get("entry", {})
-            pt = ent.get("point")
-            clamped = _clamp_point_to_box(
-                (pt.get("x"), pt.get("y")) if isinstance(pt, dict) else None,
-                crop_region,
-                margin,
-            )
-            if clamped:
-                ent["point"] = {"x": clamped[0], "y": clamped[1]}
-                sig["entry"] = ent
-                c["signature"] = sig
-            extras.append(c)
+        def _filter_with_margin(margin: float) -> Tuple[List[Dict[str, Any]], int]:
+            inside = [c for c in original_candidates if _candidate_entry_in_crop(c, crop_region, margin=margin)]
+            inside_road_ids = {_candidate_entry_road_id(c) for c in inside}
+            inside_cardinals = {_candidate_entry_cardinal(c) for c in inside}
+            extras: List[Dict[str, Any]] = []
+            for c in original_candidates:
+                if c in inside:
+                    continue
+                rid = _candidate_entry_road_id(c)
+                ent_card = _candidate_entry_cardinal(c)
+                is_same_road = rid is not None and rid in inside_road_ids
+                opp_map = {"N": "S", "S": "N", "E": "W", "W": "E"}
+                is_opposite_card = ent_card and opp_map.get(ent_card) in inside_cardinals
+                if not (is_same_road or is_opposite_card):
+                    continue
+                sig = c.get("signature", {})
+                ent = sig.get("entry", {})
+                pt = ent.get("point")
+                clamped = _clamp_point_to_box(
+                    (pt.get("x"), pt.get("y")) if isinstance(pt, dict) else None,
+                    crop_region,
+                    margin,
+                )
+                if clamped:
+                    ent["point"] = {"x": clamped[0], "y": clamped[1]}
+                    sig["entry"] = ent
+                    c["signature"] = sig
+                extras.append(c)
+            return inside + extras, len(extras)
 
-        candidates = inside + extras
-        filtered_count = len(candidates)
-        print(f"[INFO] CSP: Crop region filter: {original_count} -> {filtered_count} candidates (margin={margin}, strict=True, kept_same_road_extras={len(extras)})")
+        candidates, extras_count = _filter_with_margin(base_margin)
+        print(
+            f"[INFO] CSP: Crop region filter: {original_count} -> {len(candidates)} candidates "
+            f"(margin={base_margin}, strict=True, kept_same_road_extras={extras_count})"
+        )
         if not candidates:
-            raise ValueError("No candidates have entry points inside the crop region.")
+            relaxed_margin = max(10.0, base_margin + 15.0)
+            relaxed_candidates, relaxed_extras_count = _filter_with_margin(relaxed_margin)
+            print(
+                f"[WARN] CSP: strict crop filter produced zero candidates; retrying relaxed margin {relaxed_margin}m "
+                f"-> {len(relaxed_candidates)} candidates (kept_same_road_extras={relaxed_extras_count})"
+            )
+            if relaxed_candidates:
+                candidates = relaxed_candidates
+            else:
+                # Last-resort guardrail: keep search alive instead of cascading to LLM-only fallback.
+                candidates = original_candidates
+                print(
+                    f"[WARN] CSP: relaxed crop filter still empty; using unfiltered candidates "
+                    f"({len(candidates)}) as fallback."
+                )
     
     if require_straight:
         print("[INFO] CSP: require_straight=True, filtering to straight paths only")
@@ -416,7 +433,6 @@ def _solve_paths_csp(
 
     def _candidate_effective_length(cand: Dict[str, Any], vehicle: str) -> float:
         base = _candidate_length(cand)
-        lanes = (cand.get("signature") or {}).get("lanes", [])
         
         # If require_straight, heavily penalize turning paths
         if require_straight:

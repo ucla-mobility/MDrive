@@ -15,6 +15,7 @@ import signal
 import sys
 import time
 import math
+import re
 from typing import Optional
 
 import py_trees
@@ -199,7 +200,20 @@ class ScenarioManager(object):
         self.scenario_tree=[] # important!!!!
 
         self.ego_vehicles_num = ego_vehicles_num
-        if self.ego_vehicles_num != 1 :
+        if self.ego_vehicles_num == 0:
+            scenario_obj = getattr(scenario, "scenario", None)
+            if isinstance(scenario_obj, list):
+                for item in scenario_obj:
+                    if item is not None:
+                        self.scenario.append(item)
+            elif scenario_obj is not None:
+                self.scenario.append(scenario_obj)
+            for scenario_item in self.scenario:
+                try:
+                    self.scenario_tree.append(scenario_item.scenario_tree)
+                except Exception:
+                    pass
+        elif self.ego_vehicles_num != 1 :
             for ego_vehicle_id in range(ego_vehicles_num):
                 self.scenario.append(scenario.scenario[ego_vehicle_id])
             for ego_vehicle_id in range(ego_vehicles_num):
@@ -379,6 +393,11 @@ class ScenarioManager(object):
                         self.scenario_tree[vehicle_num].tick_once()
                 except:
                     pass
+            if self.ego_vehicles_num == 0 and self.scenario_tree:
+                try:
+                    self.scenario_tree[0].tick_once()
+                except Exception:
+                    pass
 
             if self._debug_mode:
                 print("\n")
@@ -393,6 +412,12 @@ class ScenarioManager(object):
                                 self.scenario_tree[vehicle_num], show_status=True)
                             sys.stdout.flush()
                     except:
+                        pass
+                if self.ego_vehicles_num == 0 and self.scenario_tree:
+                    try:
+                        py_trees.display.print_ascii_tree(self.scenario_tree[0], show_status=True)
+                        sys.stdout.flush()
+                    except Exception:
                         pass
 
             # destroy ego if it is not in RUNNING status or not alive
@@ -455,24 +480,107 @@ class ScenarioManager(object):
 
             # set spectator
             spectator = CarlaDataProvider.get_world().get_spectator()
-            if CarlaDataProvider.get_hero_actor(hero_id=0):
-                ego_trans = CarlaDataProvider.get_hero_actor(hero_id=0).get_transform()
-                self.prev_ego_trans = ego_trans
+            if self.ego_vehicles_num > 0:
+                if CarlaDataProvider.get_hero_actor(hero_id=0):
+                    ego_trans = CarlaDataProvider.get_hero_actor(hero_id=0).get_transform()
+                    self.prev_ego_trans = ego_trans
+                else:
+                    for vehicle_num in range(1, self.ego_vehicles_num):
+                        if CarlaDataProvider.get_hero_actor(hero_id=vehicle_num):
+                            ego_trans = self.ego_vehicles[vehicle_num].get_transform()
+                            self.prev_ego_trans = ego_trans
+                            break
+                    # if none of the ego vehicle is alive
+                    ego_trans = self.prev_ego_trans
+                if ego_trans is not None:
+                    spectator.set_transform(
+                        carla.Transform(
+                            ego_trans.location + carla.Location(z=50),
+                            carla.Rotation(pitch=-90),
+                        )
+                    )
             else:
-                for vehicle_num in range(1, self.ego_vehicles_num): 
-                    if CarlaDataProvider.get_hero_actor(hero_id=vehicle_num):
-                        ego_trans = self.ego_vehicles[vehicle_num].get_transform()
-                        self.prev_ego_trans = ego_trans
-                        break
-                # if none of the ego vehicle is alive
-                ego_trans = self.prev_ego_trans
-            spectator.set_transform(carla.Transform(ego_trans.location + carla.Location(z=50),
-                                                        carla.Rotation(pitch=-90)))
+                target_tf = None
+                world = CarlaDataProvider.get_world()
+                fake_names = [
+                    n.strip()
+                    for n in os.environ.get("CUSTOM_FAKE_EGO_CAMERA_NAMES", "").split(",")
+                    if n.strip()
+                ]
+                try:
+                    vehicle_actors = list(world.get_actors().filter("vehicle.*")) if world else []
+                except Exception:
+                    vehicle_actors = []
+                if fake_names and vehicle_actors:
+                    for fake_name in fake_names:
+                        for actor in vehicle_actors:
+                            try:
+                                if actor.attributes.get("role_name", "") == fake_name:
+                                    target_tf = actor.get_transform()
+                                    break
+                            except Exception:
+                                continue
+                        if target_tf is not None:
+                            break
+                if target_tf is None and vehicle_actors:
+                    try:
+                        target_tf = vehicle_actors[0].get_transform()
+                    except Exception:
+                        target_tf = None
+                if target_tf is not None:
+                    spectator.set_transform(
+                        carla.Transform(
+                            target_tf.location + carla.Location(z=50),
+                            carla.Rotation(pitch=-90),
+                        )
+                    )
 
             # terminate route scenarios once all egos are either completed OR blocked
             log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
             all_egos_done = True
-            if log_replay_ego:
+            done_details = None
+            if self.ego_vehicles_num == 0:
+                fake_names = [
+                    n.strip()
+                    for n in os.environ.get("CUSTOM_FAKE_EGO_CAMERA_NAMES", "").split(",")
+                    if n.strip()
+                ]
+                fake_done_flags = []
+                fake_done_known_count = 0
+                for fake_name in fake_names:
+                    key_name = re.sub(r"[^A-Za-z0-9_]+", "_", str(fake_name)).strip("_")
+                    done_key = f"log_replay_done_actor_{key_name}"
+                    try:
+                        done_val = py_trees.blackboard.Blackboard().get(done_key)
+                    except Exception:
+                        done_val = None
+                    if done_val is not None:
+                        fake_done_known_count += 1
+                    fake_done_flags.append(bool(done_val))
+
+                # Debug: Log fake_ego done status periodically
+                import time
+                if not hasattr(self, '_last_fake_ego_debug'):
+                    self._last_fake_ego_debug = 0
+                if time.time() - self._last_fake_ego_debug > 5:
+                    print(f"[ScenarioManager] fake_ego done check: names={fake_names}, "
+                          f"known={fake_done_known_count}/{len(fake_names)}, flags={fake_done_flags}")
+                    self._last_fake_ego_debug = time.time()
+
+                if fake_names and fake_done_known_count == len(fake_names):
+                    all_egos_done = all(fake_done_flags)
+                    done_details = f"fake_ego_replay_done={dict(zip(fake_names, fake_done_flags))}"
+                elif self.scenario_tree:
+                    try:
+                        tree_status = self.scenario_tree[0].status
+                    except Exception:
+                        tree_status = py_trees.common.Status.RUNNING
+                    all_egos_done = tree_status != py_trees.common.Status.RUNNING
+                    done_details = f"scenario_tree_status={tree_status}"
+                else:
+                    all_egos_done = True
+                    done_details = "scenario_tree=empty"
+            elif log_replay_ego:
                 for idx in range(self.ego_vehicles_num):
                     try:
                         done_key = f"log_replay_done_ego_{idx}"
@@ -522,8 +630,7 @@ class ScenarioManager(object):
                         break
 
             if all_egos_done and self._running:
-                done_details = None
-                if log_replay_ego:
+                if log_replay_ego and self.ego_vehicles_num > 0:
                     flags = []
                     for idx in range(self.ego_vehicles_num):
                         try:
@@ -840,10 +947,15 @@ class ScenarioManager(object):
 
         if self.get_running_status():
             # print("terminate ego vehicle in the first step {}".format(ego_vehicle_id))
-            for ego_vehicle_id in range(len(self.ego_vehicles)):
-                if self.scenario[ego_vehicle_id] is not None:
-                    # print("terminate ego vehicle {}".format(ego_vehicle_id))
-                    self.scenario[ego_vehicle_id].terminate()
+            if len(self.ego_vehicles) == 0:
+                for scenario_item in self.scenario:
+                    if scenario_item is not None:
+                        scenario_item.terminate()
+            else:
+                for ego_vehicle_id in range(len(self.ego_vehicles)):
+                    if self.scenario[ego_vehicle_id] is not None:
+                        # print("terminate ego vehicle {}".format(ego_vehicle_id))
+                        self.scenario[ego_vehicle_id].terminate()
 
             if self._agent is not None:
                 self._agent.cleanup()

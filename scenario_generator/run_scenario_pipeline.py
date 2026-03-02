@@ -13,6 +13,11 @@ Outputs per scenario:
 - picked_paths_detailed.json      (chosen ego paths)
 - scene_objects.json / .png       (final placements)
 - routes output (optional, when --routes-out-dir is set)
+
+NOTE:
+This is a legacy free-text runner kept for compatibility. The canonical
+category-based pipeline entrypoint
+is `scenario_generator/start_pipeline.py`.
 """
 
 import argparse

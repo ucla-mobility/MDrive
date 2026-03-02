@@ -1313,15 +1313,18 @@ def _delayed_actor_interferes(actor_plan, all_actor_plans, collision_dist=3.5):
 def _make_plan_speed_callback(
     plan_transforms: "Optional[List[carla.Transform]]",
     plan_speeds: "Optional[List[float]]",
+    plan_times: "Optional[List[float]]" = None,
     fallback_speed: float = 8.0,
 ):
     """Return a *speed_callback* for ``WaypointFollower`` that yields
     per-segment speeds derived from the original log-replay trajectory.
 
-    The callback finds the plan waypoint closest to the actor's current
-    location and returns the pre-computed speed for that waypoint.  This
-    lets the physics-based PID controller drive at the correct speed for
-    each portion of the route.
+    By default the callback finds the plan waypoint closest to the actor's
+    current location and returns the pre-computed speed for that waypoint.
+    For routes with a long leading zero-speed prefix (parked-start logs),
+    nearest-waypoint lookup can deadlock at index 0 forever. In that case,
+    if plan_times is available, this callback uses scenario time progression
+    to advance the speed profile deterministically.
 
     If *plan_speeds* or *plan_transforms* are ``None`` (or empty), a
     trivial ``lambda`` that returns the constant *fallback_speed* is
@@ -1341,15 +1344,68 @@ def _make_plan_speed_callback(
     ]
     _spds = list(plan_speeds)
     _n = len(_pts)
+    _n_spd = len(_spds)
+    if _n_spd == 0:
+        return lambda _actor: fallback_speed
+
+    # Detect parked-start trajectories where nearest-waypoint speed lookup can deadlock.
+    lead_zero = 0
+    for s in _spds:
+        if float(s) <= 0.05:
+            lead_zero += 1
+        else:
+            break
+
+    use_time_profile = False
+    _times_rel: List[float] = []
+    # Even a single leading zero-speed sample can deadlock nearest-waypoint control:
+    # actor stays at wp0, callback keeps returning speed[0]==0 forever.
+    # Use timeline progression whenever a stopped prefix exists.
+    if (
+        plan_times
+        and len(plan_times) == _n_spd
+        and lead_zero >= 1
+    ):
+        try:
+            t0 = float(plan_times[0])
+            prev_t = 0.0
+            for t in plan_times:
+                rel_t = max(0.0, float(t) - t0)
+                # enforce monotonic non-decreasing timeline
+                if rel_t < prev_t:
+                    rel_t = prev_t
+                _times_rel.append(rel_t)
+                prev_t = rel_t
+            use_time_profile = True
+        except Exception:  # pylint: disable=broad-except
+            use_time_profile = False
+            _times_rel = []
 
     # ---- Cursor-based nearest-waypoint search ---------------------------------
     # Vehicles only move *forward* along their plan, so we keep a cursor
     # and only search a small window around it.  This is O(1) amortised
     # per tick instead of O(n) brute-force.
-    _state = {"cursor": 0}
+    _state = {"cursor": 0, "start_time": None}
     _SEARCH_RADIUS = 20  # waypoints to check around the cursor
 
     def _callback(actor):
+        if use_time_profile and _times_rel:
+            now = None
+            try:
+                now = float(GameTime.get_time())
+            except Exception:  # pylint: disable=broad-except
+                now = None
+            if now is not None:
+                if _state["start_time"] is None:
+                    _state["start_time"] = now
+                rel_t = max(0.0, now - float(_state["start_time"]))
+                cur = int(_state["cursor"])
+                # Monotonic forward index progression by route-relative time.
+                while cur + 1 < _n_spd and _times_rel[cur + 1] <= rel_t + 1e-4:
+                    cur += 1
+                _state["cursor"] = cur
+                return max(0.0, float(_spds[cur]))
+
         loc = actor.get_location()
         ax, ay = float(loc.x), float(loc.y)
 
@@ -1367,7 +1423,7 @@ def _make_plan_speed_callback(
                 best_idx = idx
 
         _state["cursor"] = best_idx
-        return max(0.0, _spds[best_idx])
+        return max(0.0, float(_spds[best_idx]))
 
     return _callback
 
@@ -2374,9 +2430,13 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
 
         target_pitch = float(smoothed.rotation.pitch)
         target_roll = float(smoothed.rotation.roll)
-        if not self._ground_align_vehicle_tilt and current_tf is not None:
-            target_pitch = float(current_tf.rotation.pitch)
-            target_roll = float(current_tf.rotation.roll)
+        # NOTE: Previously, when ground_align_vehicle_tilt was False, this block
+        # overwrote target_pitch/roll with the actor's current transform values.
+        # With set_simulate_physics(False), current_tf.rotation stays at whatever
+        # was last set_transform()'d (starts at 0, stays at 0) — so the XML's
+        # ground-aligned pitch/roll were silently discarded every tick, leaving
+        # all vehicles flat.  Now we always use the planned (XML) pitch/roll as
+        # the target, preserving pre-baked ground-alignment values.
 
         pitch_delta = float(target_pitch) - float(prev_pitch)
         roll_delta = float(target_roll) - float(prev_roll)
@@ -2755,6 +2815,19 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         if self._debug:
             self._last_index_dbg = self._last_index
         self._debug_log(sim_time, note="replay", target=target)
+
+        # Debug: Log position periodically for each actor
+        if not hasattr(self, '_debug_log_count'):
+            self._debug_log_count = 0
+        self._debug_log_count += 1
+        if self._debug_log_count % 50 == 1:  # Log every 50 frames
+            try:
+                actor_loc = self._actor.get_location() if self._actor else None
+                print(f"[LogReplayFollower] {self.name}: t={replay_time:.2f}s, "
+                      f"target=({target.location.x:.2f},{target.location.y:.2f},{target.location.z:.2f}), "
+                      f"actor_id={self._actor.id if self._actor else 'None'}")
+            except Exception:
+                pass
 
         if self._should_animate_walker():
             applied = self._apply_walker_replay_control(target, sim_time)
@@ -3162,7 +3235,12 @@ class RouteScenario(BasicScenario):
         """
         This function is to find the proper tf and set up sensors on it.
         """
-        tf_list = self._get_multi_tf(self.get_new_config_trajectory().copy(), 
+        if self.sensor_tf_num == 0:
+            return
+        traj = self.get_new_config_trajectory()
+        if traj is None:
+            return
+        tf_list = self._get_multi_tf(traj.copy(),
                                           tf_num=self.sensor_tf_num)
         for j in range(self.sensor_tf_num):
             self.sensor_tf_list[j].setup_sensors(tf_list[j])
@@ -3480,6 +3558,20 @@ class RouteScenario(BasicScenario):
         # Transform the scenario file into a dictionary, defines possible trigger position for each type of scenario 
         world_annotations = RouteParser.parse_annotations_file(config.scenario_file)
 
+        # ── No ego vehicles (e.g. --npc-only-fake-ego replay) ──
+        # Skip route interpolation entirely: there are no egos to drive and
+        # replay actors are teleported directly.  A* path-finding between
+        # consecutive waypoints can crash on custom maps with disconnected
+        # road-graph segments, and its output is unused anyway.
+        if self.ego_vehicles_num == 0:
+            self.route = []
+            CarlaDataProvider.set_ego_vehicle_route([])
+            config.agent.set_global_plan([], [])
+            self.sampled_scenarios_definitions = []
+            self.timeout = self._estimate_route_timeout()
+            return
+
+        # ── Normal path: one or more ego vehicles ──
         # generate trajectory for ego-vehicles
         # trajectory's element is a list of waypoint(carla.Location object)
         trajectory = self._cal_multi_routes(world, config)
@@ -3699,15 +3791,34 @@ class RouteScenario(BasicScenario):
             if max_time is not None:
                 return int(max_time + INITIAL_SECONDS_DELAY)
 
-        route_length = 0.0  # in meters
+        # When ego_vehicles_num == 0 (e.g., --npc-only-fake-ego mode), estimate timeout
+        # from custom actor replay times instead of ego routes.
+        if self.ego_vehicles_num == 0 and self._custom_actor_configs:
+            max_actor_time = None
+            for actor_cfg in self._custom_actor_configs:
+                plan_times = actor_cfg.get("plan_times")
+                if plan_times and len(plan_times) > 0:
+                    t_last = float(plan_times[-1])
+                    if max_actor_time is None or t_last > max_actor_time:
+                        max_actor_time = t_last
+            if max_actor_time is not None:
+                timeout = int(max_actor_time + INITIAL_SECONDS_DELAY)
+                print(f"[RouteScenario] NPC-only mode timeout: {timeout}s (max_actor_time={max_actor_time:.1f}s)")
+                return timeout
 
-        prev_point = self.route[0][0][0]
-        for current_point, _ in self.route[0][1:]:
-            dist = current_point.location.distance(prev_point.location)
-            route_length += dist
-            prev_point = current_point
+        # Fallback: estimate from route length if available
+        if self.route and len(self.route) > 0 and len(self.route[0]) > 0:
+            route_length = 0.0  # in meters
+            prev_point = self.route[0][0][0]
+            for current_point, _ in self.route[0][1:]:
+                dist = current_point.location.distance(prev_point.location)
+                route_length += dist
+                prev_point = current_point
+            return int(SECONDS_GIVEN_PER_METERS * route_length + INITIAL_SECONDS_DELAY)
 
-        return int(SECONDS_GIVEN_PER_METERS * route_length + INITIAL_SECONDS_DELAY)
+        # Last resort fallback for empty routes
+        print("[RouteScenario] WARNING: Cannot estimate route timeout - using default 60s")
+        return 60
 
     # pylint: disable=no-self-use
     def _draw_waypoints(self, world, waypoints, vertical_shift, persistency=-1):
@@ -4102,8 +4213,8 @@ class RouteScenario(BasicScenario):
         )
         if actor_log_replay_requested:
             print(
-                "[RouteScenario] CUSTOM_ACTOR_LOG_REPLAY is ignored. "
-                "Custom actors always use policy control."
+                "[RouteScenario] CUSTOM_ACTOR_LOG_REPLAY enabled: forcing replay control "
+                "for dynamic custom actors."
             )
         debug_spawn = os.environ.get("CUSTOM_ACTOR_SPAWN_DEBUG", "").lower() in (
             "1",
@@ -4182,6 +4293,13 @@ class RouteScenario(BasicScenario):
             role = actor_cfg.get("role", "npc")
             name = actor_cfg.get("rolename") or actor_cfg.get("name") or "unknown"
             model = actor_cfg.get("model", "unknown")
+            control_mode = str(actor_cfg.get("control_mode", "policy")).strip().lower()
+            if control_mode not in ("policy", "replay"):
+                control_mode = "policy"
+            if str(role).lower() in ("static", "static_prop"):
+                control_mode = "replay"
+            if actor_log_replay_requested and str(role).lower() not in ("static", "static_prop"):
+                control_mode = "replay"
             self._custom_actor_spawn_states[name] = {
                 "name": name,
                 "role": role,
@@ -4206,18 +4324,37 @@ class RouteScenario(BasicScenario):
                     roll=spawn_tf_src.rotation.roll,
                 ),
             )
-            adjusted_plan_transforms = [
-                carla.Transform(
-                    carla.Location(x=tf.location.x, y=tf.location.y, z=tf.location.z),
+            is_walker_like = role in ("pedestrian", "walker", "bicycle", "cyclist")
+            
+            # For replay mode actors, we want to preserve the original X/Y trajectory
+            # but can optionally ground-normalize the Z values to match CARLA terrain.
+            # Full X/Y snapping would break the logged trajectory.
+            should_ground_plan_transforms = (
+                normalize_actor_z
+                and not follow_exact
+                and world_map is not None
+            )
+            
+            adjusted_plan_transforms = []
+            for tf in plan_transforms:
+                new_z = tf.location.z
+                if should_ground_plan_transforms:
+                    # Only adjust Z to nearest ground, keep original X/Y
+                    snapped_wp = world_map.get_waypoint(
+                        tf.location,
+                        project_to_road=True,
+                        lane_type=carla.LaneType.Driving if not is_walker_like else carla.LaneType.Any,
+                    )
+                    if snapped_wp is not None:
+                        new_z = snapped_wp.transform.location.z
+                adjusted_plan_transforms.append(carla.Transform(
+                    carla.Location(x=tf.location.x, y=tf.location.y, z=new_z),
                     carla.Rotation(
                         pitch=tf.rotation.pitch,
                         yaw=tf.rotation.yaw,
                         roll=tf.rotation.roll,
                     ),
-                )
-                for tf in plan_transforms
-            ]
-            is_walker_like = role in ("pedestrian", "walker", "bicycle", "cyclist")
+                ))
 
             snapped_to_road = False
             ground_z_for_actor: Optional[float] = None
@@ -4246,14 +4383,17 @@ class RouteScenario(BasicScenario):
                     ground_z_for_actor = best_z
                     snapped_to_road = True
 
-            snap_pref = actor_cfg.get("snap_to_road", True)
+            snap_spawn_pref = actor_cfg.get(
+                "snap_spawn_to_road",
+                actor_cfg.get("snap_to_road", True),
+            )
             if follow_exact:
-                snap_pref = False
-            should_snap_to_road = (
-                snap_pref
+                snap_spawn_pref = False
+            should_snap_spawn = (
+                snap_spawn_pref
                 and role not in ("static", "static_prop", "pedestrian", "walker", "bicycle", "cyclist")
             )  # keep static props and pedestrians at their authored pose
-            if world_map is not None and should_snap_to_road:
+            if world_map is not None and should_snap_spawn:
                 snapped_wp = world_map.get_waypoint(
                     spawn_tf.location,
                     project_to_road=True,
@@ -4436,7 +4576,13 @@ class RouteScenario(BasicScenario):
 
             # For pedestrians and cyclists, use the authored plan directly without road snapping
             is_non_vehicle = role in ("pedestrian", "walker", "bicycle", "cyclist")
-            snap_plan = should_snap_to_road and not is_non_vehicle
+            snap_plan_pref = actor_cfg.get("snap_to_road", True)
+            if follow_exact:
+                snap_plan_pref = False
+            # Skip route computation when using replay mode - transforms are already authored
+            if control_mode == "replay":
+                snap_plan_pref = False
+            snap_plan = bool(snap_plan_pref) and not is_non_vehicle
 
             plan_locations = []
             for loc in actor_cfg["plan"]:
@@ -4503,7 +4649,7 @@ class RouteScenario(BasicScenario):
                             route_plan[0] = (spawn_wp, first_option)
                     dense_plan = route_plan
             if not dense_plan:
-                if plan_locations and snap_plan:
+                if plan_locations and (snap_plan or should_snap_spawn):
                     plan_locations[0] = carla.Location(
                         x=spawn_tf.location.x,
                         y=spawn_tf.location.y,
@@ -4515,6 +4661,7 @@ class RouteScenario(BasicScenario):
                 {
                     "actor": new_actor,
                     "name": actor_cfg["name"],
+                    "control_mode": str(control_mode),
                     "plan": dense_plan,
                     "plan_transforms": adjusted_plan_transforms,
                     "plan_times": plan_times,
@@ -4537,6 +4684,8 @@ class RouteScenario(BasicScenario):
         # Done as a post-pass so we can check every actor's trajectory.
         _STAGING_THRESHOLD = 0.5
         for ap in self._custom_actor_plans:
+            if str(ap.get("control_mode", "policy")).lower() == "replay":
+                continue
             _pt = ap.get("plan_times") or []
             _st = float(_pt[0]) if _pt else 0.0
             if _st <= _STAGING_THRESHOLD:
@@ -5238,12 +5387,23 @@ class RouteScenario(BasicScenario):
             vehicle_ground_lift = float(os.environ.get("CUSTOM_VEHICLE_GROUND_LIFT", "0.04"))
         except Exception:  # pylint: disable=broad-except
             vehicle_ground_lift = 0.04
+        try:
+            walker_ground_lift = float(os.environ.get("CUSTOM_WALKER_GROUND_LIFT", "0.06"))
+        except Exception:  # pylint: disable=broad-except
+            walker_ground_lift = 0.06
         ego_ground_align_tilt = os.environ.get("CUSTOM_EGO_GROUND_ALIGN_TILT", "").lower() in (
             "1",
             "true",
             "yes",
         )
         ego_ground_smooth_pose = os.environ.get("CUSTOM_EGO_GROUND_SMOOTH_POSE", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        disable_actor_replay_runtime_ground_pose = os.environ.get(
+            "CUSTOM_ACTOR_REPLAY_DISABLE_RUNTIME_GROUND_POSE", ""
+        ).lower() in (
             "1",
             "true",
             "yes",
@@ -5256,13 +5416,17 @@ class RouteScenario(BasicScenario):
         world = CarlaDataProvider.get_world()
         world_map = CarlaDataProvider.get_map()
 
-        for ego_vehicle_id in range(len(self.list_scenarios)):
+        scenario_slots = len(self.list_scenarios)
+        if scenario_slots == 0 and self.ego_vehicles_num == 0 and self._custom_actor_plans:
+            scenario_slots = 1
+
+        for ego_vehicle_id in range(scenario_slots):
             behavior_tmp = py_trees.composites.Parallel(policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ONE)
 
             subbehavior = py_trees.composites.Parallel(name="Behavior",
                                                     policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ALL)
 
-            if log_replay_ego:
+            if log_replay_ego and ego_vehicle_id < len(self.ego_vehicles):
                 transforms = (
                     self._ego_replay_transforms[ego_vehicle_id]
                     if ego_vehicle_id < len(self._ego_replay_transforms)
@@ -5306,12 +5470,83 @@ class RouteScenario(BasicScenario):
                     )
 
             if ego_vehicle_id == 0 and self._custom_actor_plans:
-                for actor_plan in self._custom_actor_plans:
+                print(f"[RouteScenario] Building behaviors for {len(self._custom_actor_plans)} custom actors")
+                if disable_actor_replay_runtime_ground_pose:
+                    print(
+                        "[RouteScenario] CUSTOM_ACTOR_REPLAY_DISABLE_RUNTIME_GROUND_POSE enabled: "
+                        "custom replay actors will use XML pose without per-tick ground pose rewrite."
+                    )
+                for actor_idx, actor_plan in enumerate(self._custom_actor_plans):
+                    actor_name = actor_plan.get("name", f"actor_{actor_idx}")
+                    control_mode = str(actor_plan.get("control_mode", "policy")).strip().lower()
+                    print(f"[RouteScenario] Actor '{actor_name}': control_mode='{control_mode}'")
                     if os.environ.get('DEBUG_FINISH', '').lower() in ('1', 'true', 'yes'):
                         print(f"[DEBUG FINISH] Building behavior for actor: {actor_plan.get('name')}")
                         print(f"[DEBUG FINISH]   behavior spec: {actor_plan.get('behavior')}")
                         print(f"[DEBUG FINISH]   target_speed: {actor_plan.get('target_speed')}")
                         print(f"[DEBUG FINISH]   plan length: {len(actor_plan.get('plan') or [])}")
+                    if control_mode == "replay":
+                        _plan_tfs = actor_plan.get("plan_transforms") or []
+                        _plan_times = actor_plan.get("plan_times") or []
+                        _role = str(actor_plan.get("role", "npc")).lower()
+                        _is_walker_like = _role in ("pedestrian", "walker", "bicycle", "cyclist")
+                        _disable_runtime_ground_pose = (
+                            bool(disable_actor_replay_runtime_ground_pose)
+                            and (not _is_walker_like)
+                        )
+                        # Debug: Log replay setup for each actor
+                        _actor_name = actor_plan.get("name", f"actor_{actor_idx}")
+                        print(f"[RouteScenario] Setting up LogReplayFollower for '{_actor_name}': "
+                              f"plan_tfs={len(_plan_tfs)}, plan_times={len(_plan_times)}")
+                        if _plan_tfs and len(_plan_tfs) > 0:
+                            _start_tf = _plan_tfs[0]
+                            _end_tf = _plan_tfs[-1]
+                            print(f"[RouteScenario]   start=({_start_tf.location.x:.2f}, {_start_tf.location.y:.2f}, {_start_tf.location.z:.2f}) "
+                                  f"end=({_end_tf.location.x:.2f}, {_end_tf.location.y:.2f}, {_end_tf.location.z:.2f})")
+                        if _plan_times and len(_plan_times) > 0:
+                            print(f"[RouteScenario]   time_range=[{_plan_times[0]:.2f}s, {_plan_times[-1]:.2f}s]")
+                        if _plan_tfs and _plan_times and len(_plan_tfs) == len(_plan_times):
+                            _stage_tf = _make_stage_transform(200000 + actor_idx, _plan_tfs[0])
+                            _actor_name_raw = str(actor_plan.get("name") or f"actor_{actor_idx}")
+                            _actor_name_key = re.sub(r"[^A-Za-z0-9_]+", "_", _actor_name_raw).strip("_") or f"actor_{actor_idx}"
+                            subbehavior.add_child(
+                                LogReplayFollower(
+                                    actor_plan["actor"],
+                                    _plan_tfs,
+                                    _plan_times,
+                                    name=f"LogReplayActor-{actor_plan.get('name')}",
+                                    done_blackboard_key=f"log_replay_done_actor_{_actor_name_key}",
+                                    stage_transform=_stage_tf,
+                                    stage_before=True,
+                                    stage_after=True,
+                                    fail_on_exception=False,
+                                    ground_each_tick=(not _disable_runtime_ground_pose),
+                                    ground_lane_type=(
+                                        carla.LaneType.Any if _is_walker_like else carla.LaneType.Driving
+                                    ),
+                                    ground_world_map=world_map,
+                                    ground_world=world,
+                                    ground_prefer_ray=_is_walker_like,
+                                    ground_z_extra=(
+                                        float(walker_ground_lift)
+                                        if _is_walker_like
+                                        else float(vehicle_ground_lift)
+                                    ),
+                                    ground_align_vehicle_tilt=(
+                                        bool(ego_ground_align_tilt)
+                                        and (not _disable_runtime_ground_pose)
+                                    ),
+                                    ground_smooth_vehicle_pose=(
+                                        bool(ego_ground_smooth_pose)
+                                        and (not _disable_runtime_ground_pose)
+                                    ),
+                                )
+                            )
+                            continue
+                        print(
+                            f"[RouteScenario] Replay requested for actor {actor_plan.get('name')} "
+                            "but timing data is missing; falling back to policy."
+                        )
                     custom_behavior = self._build_custom_actor_behavior(actor_plan)
                     if custom_behavior is None:
                         if os.environ.get('DEBUG_FINISH', '').lower() in ('1', 'true', 'yes'):
@@ -5319,6 +5554,7 @@ class RouteScenario(BasicScenario):
                         _ap_speed_cb = _make_plan_speed_callback(
                             actor_plan.get("plan_transforms"),
                             actor_plan.get("plan_speeds"),
+                            actor_plan.get("plan_times"),
                             fallback_speed=actor_plan["target_speed"],
                         )
                         # Compute initial speed from plan_speeds or fall back to target_speed
@@ -5367,7 +5603,11 @@ class RouteScenario(BasicScenario):
 
             scenario_behaviors = []
             blackboard_list = []
-            list_scenarios = self.list_scenarios[ego_vehicle_id]
+            list_scenarios = (
+                self.list_scenarios[ego_vehicle_id]
+                if ego_vehicle_id < len(self.list_scenarios)
+                else []
+            )
             for i, scenario in enumerate(list_scenarios):
                 if scenario.scenario.behavior is not None:
                     route_var_name = scenario.config.route_var_name
@@ -5384,18 +5624,19 @@ class RouteScenario(BasicScenario):
                             behaviour=scenario.scenario.behavior)
                         scenario_behaviors.append(oneshot_idiom)
 
-            # Add behavior that manages the scenarios trigger conditions
-            scenario_triggerer = ScenarioTriggerer(
-                self.ego_vehicles[ego_vehicle_id],
-                self.route[ego_vehicle_id],
-                blackboard_list,
-                scenario_trigger_distance,
-                repeat_scenarios=False
-            )
-
-            subbehavior.add_child(scenario_triggerer)  # make ScenarioTriggerer the first thing to be checked
+            # Add behavior that manages the scenarios trigger conditions when an ego exists.
+            if ego_vehicle_id < len(self.ego_vehicles) and ego_vehicle_id < len(self.route):
+                scenario_triggerer = ScenarioTriggerer(
+                    self.ego_vehicles[ego_vehicle_id],
+                    self.route[ego_vehicle_id],
+                    blackboard_list,
+                    scenario_trigger_distance,
+                    repeat_scenarios=False
+                )
+                subbehavior.add_child(scenario_triggerer)  # make ScenarioTriggerer the first thing to be checked
             subbehavior.add_children(scenario_behaviors)
-            subbehavior.add_child(Idle())  # The behaviours cannot make the route scenario stop
+            if self.ego_vehicles_num > 0:
+                subbehavior.add_child(Idle())  # The behaviours cannot make the route scenario stop
             behavior_tmp.add_child(subbehavior)
             behavior.append(behavior_tmp)
         return behavior

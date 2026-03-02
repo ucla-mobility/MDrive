@@ -1,0 +1,19 @@
+{
+  "behaviors": [
+    {
+      "route_id": "07_placement",
+      "actor_name": "entity_4",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "vehicle": "Vehicle 2",
+        "distance_m": 8.0,
+        "evidence": ""
+      },
+      "action": {
+        "type": "start_motion",
+        "direction": null,
+        "target_vehicle": null
+      }
+    }
+  ]
+}

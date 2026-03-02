@@ -22,7 +22,7 @@ from .csp import (
     solve_weighted_csp_with_extension,
     validate_actor_specs,
 )
-from .constants import LATERAL_TO_M
+from .constants import LATERAL_TO_M, LANE_WIDTH_M, SIDEWALK_OFFSET_M
 from .filters import _contains_exact_quote, _should_drop_stage1_entity
 from .guardrails import (
     apply_after_turn_segment_corrections,
@@ -30,6 +30,7 @@ from .guardrails import (
     build_repair_prompt,
     validate_stage2_output,
 )
+from .geometry import heading_deg_from_vec, point_and_tangent_at_s, right_normal_world, wrap180
 from .model import generate_with_model
 from .nodes import _override_seg_points_with_picked, build_segments_from_nodes, load_nodes
 from .parsing import parse_llm_json
@@ -37,7 +38,6 @@ from .prompts import build_stage1_prompt, build_stage2_prompt, build_vehicle_seg
 from .spawn import build_motion_waypoints, compute_spawn_from_anchor, resolve_nodes_path
 from .viz import visualize
 import math
-import numpy as np
 
 
 def run_object_placer(args, model=None, tokenizer=None):
@@ -196,6 +196,447 @@ def run_object_placer(args, model=None, tokenizer=None):
             print(f"[INFO] Removed {removed} moving actor(s) with no nearby ego path", flush=True)
         return adjusted
 
+    def _extract_ego_spawns_from_picked(picked_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        for p in picked_items:
+            if not isinstance(p, dict):
+                continue
+            vehicle_name = str(p.get("vehicle", "")).strip()
+            if not vehicle_name or vehicle_name in seen:
+                continue
+            sig = p.get("signature", {}) if isinstance(p.get("signature"), dict) else {}
+            entry = sig.get("entry", {}) if isinstance(sig.get("entry"), dict) else {}
+            point = entry.get("point", {}) if isinstance(entry.get("point"), dict) else {}
+            x = point.get("x")
+            y = point.get("y")
+            yaw = entry.get("heading_deg")
+            if x is None or y is None:
+                segs = sig.get("segments_detailed", [])
+                if isinstance(segs, list) and segs:
+                    first_seg = segs[0] if isinstance(segs[0], dict) else {}
+                    start_obj = first_seg.get("start", {}) if isinstance(first_seg.get("start"), dict) else {}
+                    start_point = start_obj.get("point", {}) if isinstance(start_obj.get("point"), dict) else {}
+                    x = start_point.get("x")
+                    y = start_point.get("y")
+                    if yaw is None:
+                        yaw = start_obj.get("heading_deg")
+            if x is None or y is None:
+                continue
+            if yaw is None:
+                yaw = 0.0
+            out.append(
+                {
+                    "vehicle": vehicle_name,
+                    "spawn": {
+                        "x": float(x),
+                        "y": float(y),
+                        "yaw_deg": float(yaw),
+                    },
+                }
+            )
+            seen.add(vehicle_name)
+        return out
+
+    def _ego_path_point_cloud(picked_items: List[Dict[str, Any]]) -> np.ndarray:
+        pts: List[Tuple[float, float]] = []
+        for p in picked_items:
+            if not isinstance(p, dict):
+                continue
+            sig = p.get("signature", {}) if isinstance(p.get("signature"), dict) else {}
+            segs = sig.get("segments_detailed", [])
+            if not isinstance(segs, list):
+                continue
+            for seg in segs:
+                if not isinstance(seg, dict):
+                    continue
+                sample = seg.get("polyline_sample")
+                if not isinstance(sample, list):
+                    continue
+                for pt in sample:
+                    if not isinstance(pt, dict):
+                        continue
+                    x = pt.get("x")
+                    y = pt.get("y")
+                    if x is None or y is None:
+                        continue
+                    pts.append((float(x), float(y)))
+        if not pts:
+            return np.zeros((0, 2), dtype=float)
+        return np.asarray(pts, dtype=float)
+
+    def _ego_lane_samples_from_picked(picked_items: List[Dict[str, Any]]) -> np.ndarray:
+        """
+        Sample ego lane centerline points with local tangent vectors.
+        Returned rows: [x, y, tx, ty].
+        """
+        rows: List[Tuple[float, float, float, float]] = []
+        for p in picked_items:
+            if not isinstance(p, dict):
+                continue
+            sig = p.get("signature", {}) if isinstance(p.get("signature"), dict) else {}
+            segs = sig.get("segments_detailed", [])
+            if not isinstance(segs, list):
+                continue
+            for seg in segs:
+                if not isinstance(seg, dict):
+                    continue
+                poly = seg.get("polyline_sample")
+                if not isinstance(poly, list) or len(poly) < 2:
+                    continue
+                pts: List[Tuple[float, float]] = []
+                for pt in poly:
+                    if not isinstance(pt, dict):
+                        continue
+                    x = pt.get("x")
+                    y = pt.get("y")
+                    if x is None or y is None:
+                        continue
+                    pts.append((float(x), float(y)))
+                if len(pts) < 2:
+                    continue
+                arr = np.asarray(pts, dtype=float)
+                for i in range(len(arr)):
+                    if i == 0:
+                        vec = arr[1] - arr[0]
+                    elif i == len(arr) - 1:
+                        vec = arr[-1] - arr[-2]
+                    else:
+                        vec = arr[i + 1] - arr[i - 1]
+                    n = float(np.linalg.norm(vec))
+                    if n < 1e-6:
+                        continue
+                    rows.append((float(arr[i, 0]), float(arr[i, 1]), float(vec[0] / n), float(vec[1] / n)))
+        if not rows:
+            return np.zeros((0, 4), dtype=float)
+        return np.asarray(rows, dtype=float)
+
+    def _lane_samples_from_segment_bank(
+        segments: List[Dict[str, Any]],
+        crop_bounds: Optional[Tuple[float, float, float, float]] = None,
+        stride: int = 4,
+    ) -> np.ndarray:
+        """
+        Sample map lane centerline points from full segment bank.
+        Returned rows: [x, y, tx, ty].
+        """
+        rows: List[Tuple[float, float, float, float]] = []
+        step = max(1, int(stride))
+        xmin = xmax = ymin = ymax = None
+        margin = 15.0
+        if crop_bounds is not None:
+            xmin, xmax, ymin, ymax = crop_bounds
+        for seg in segments or []:
+            if not isinstance(seg, dict):
+                continue
+            pts = seg.get("points")
+            if pts is None:
+                continue
+            arr = np.asarray(pts, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] < 2 or len(arr) < 2:
+                continue
+            if xmin is not None:
+                sxmin = float(np.min(arr[:, 0]))
+                sxmax = float(np.max(arr[:, 0]))
+                symin = float(np.min(arr[:, 1]))
+                symax = float(np.max(arr[:, 1]))
+                if sxmax < xmin - margin or sxmin > xmax + margin or symax < ymin - margin or symin > ymax + margin:
+                    continue
+            for i in range(0, len(arr), step):
+                x_i = float(arr[i, 0])
+                y_i = float(arr[i, 1])
+                if xmin is not None:
+                    if x_i < xmin - margin or x_i > xmax + margin or y_i < ymin - margin or y_i > ymax + margin:
+                        continue
+                if i == 0:
+                    vec = arr[1] - arr[0]
+                elif i == len(arr) - 1:
+                    vec = arr[-1] - arr[-2]
+                else:
+                    vec = arr[i + 1] - arr[i - 1]
+                n = float(np.linalg.norm(vec))
+                if n < 1e-6:
+                    continue
+                rows.append((x_i, y_i, float(vec[0] / n), float(vec[1] / n)))
+        if not rows:
+            return np.zeros((0, 4), dtype=float)
+        return np.asarray(rows, dtype=float)
+
+    def _estimate_road_lateral_bounds(
+        seg_pts: np.ndarray,
+        anchor_s: float,
+        lane_samples: np.ndarray,
+        along_window_m: float = 20.0,
+        max_angle_diff_deg: float = 40.0,
+        max_lateral_m: float = 35.0,
+        clip_percentile: float = 0.0,
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Estimate local drivable-road lateral bounds around the crossing anchor.
+        Returns (road_edge_min_lat, road_edge_max_lat) in anchor-local lateral coordinates,
+        where 0 is anchor lane center, + is right of travel direction.
+        """
+        if lane_samples is None or lane_samples.size == 0:
+            return None
+
+        p_anchor, t_anchor = point_and_tangent_at_s(seg_pts, anchor_s)
+        t_norm = np.asarray(t_anchor, dtype=float)
+        t_n = float(np.linalg.norm(t_norm))
+        if t_n < 1e-6:
+            return None
+        t_norm /= t_n
+        n_right = right_normal_world(t_norm)
+
+        cos_min = math.cos(math.radians(max_angle_diff_deg))
+        kept_lats: List[float] = []
+
+        for row in lane_samples:
+            x, y, tx, ty = float(row[0]), float(row[1]), float(row[2]), float(row[3])
+            rel = np.asarray([x - float(p_anchor[0]), y - float(p_anchor[1])], dtype=float)
+            along = float(rel[0] * t_norm[0] + rel[1] * t_norm[1])
+            if abs(along) > along_window_m:
+                continue
+            cosang = abs(float(tx * t_norm[0] + ty * t_norm[1]))
+            if cosang < cos_min:
+                continue
+            lat = float(rel[0] * n_right[0] + rel[1] * n_right[1])
+            if abs(lat) > float(max_lateral_m):
+                continue
+            kept_lats.append(lat)
+
+        if len(kept_lats) < 4:
+            return None
+
+        lat_arr = np.asarray(kept_lats, dtype=float)
+        if lat_arr.size >= 12 and clip_percentile > 0.0:
+            lo = float(np.percentile(lat_arr, clip_percentile))
+            hi = float(np.percentile(lat_arr, 100.0 - clip_percentile))
+        else:
+            lo = float(np.min(lat_arr))
+            hi = float(np.max(lat_arr))
+
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            return None
+
+        # Convert centerline extrema into lane-edge envelope.
+        edge_min = float(lo - 0.5 * LANE_WIDTH_M)
+        edge_max = float(hi + 0.5 * LANE_WIDTH_M)
+        return edge_min, edge_max
+
+    def _estimate_sidewalk_offset_from_lanes(
+        seg_pts: np.ndarray,
+        anchor_s: float,
+        lane_samples: np.ndarray,
+        along_window_m: float = 20.0,
+        max_angle_diff_deg: float = 40.0,
+        max_lateral_m: float = 35.0,
+    ) -> float:
+        """
+        Estimate an off-road start offset from local road bounds.
+        Fallbacks to SIDEWALK_OFFSET_M when bounds are not recoverable.
+        """
+        bounds = _estimate_road_lateral_bounds(
+            seg_pts=seg_pts,
+            anchor_s=anchor_s,
+            lane_samples=lane_samples,
+            along_window_m=along_window_m,
+            max_angle_diff_deg=max_angle_diff_deg,
+            max_lateral_m=max_lateral_m,
+        )
+        if bounds is None:
+            return SIDEWALK_OFFSET_M
+        edge_min, edge_max = bounds
+        # Keep a small sidewalk clearance from the detected road edge.
+        est = max(abs(edge_min), abs(edge_max)) + 0.5
+        return max(SIDEWALK_OFFSET_M, float(est))
+
+    def _min_dist_to_cloud(point_xy: Tuple[float, float], cloud: np.ndarray) -> float:
+        if cloud is None or cloud.size == 0:
+            return float("inf")
+        px, py = point_xy
+        d = np.linalg.norm(cloud - np.asarray([[float(px), float(py)]], dtype=float), axis=1)
+        return float(np.min(d)) if d.size > 0 else float("inf")
+
+    def _stabilize_walker_crossing(
+        category: str,
+        motion: Dict[str, Any],
+        anchor_spawn: Dict[str, float],
+        seg_pts: np.ndarray,
+        waypoints: List[Dict[str, Any]],
+        ego_cloud: np.ndarray,
+        min_sidewalk_clearance_m: float = 3.5,
+        lane_cloud: Optional[np.ndarray] = None,
+        min_lane_edge_clearance_m: float = 0.5,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
+        if category != "walker":
+            return waypoints, motion, float("inf")
+        if str((motion or {}).get("type", "")).lower() != "cross_perpendicular":
+            return waypoints, motion, float("inf")
+        if not waypoints or not isinstance(waypoints[0], dict):
+            return waypoints, motion, float("inf")
+
+        def _spawn_clearance(wps: List[Dict[str, Any]]) -> float:
+            if not wps or not isinstance(wps[0], dict):
+                return float("inf")
+            x = float(wps[0].get("x", 0.0))
+            y = float(wps[0].get("y", 0.0))
+            return _min_dist_to_cloud((x, y), ego_cloud)
+
+        lane_required = 0.5 * LANE_WIDTH_M + max(0.0, float(min_lane_edge_clearance_m))
+
+        def _spawn_lane_clearance(wps: List[Dict[str, Any]]) -> float:
+            if lane_cloud is None or lane_cloud.size == 0:
+                return float("inf")
+            if not wps or not isinstance(wps[0], dict):
+                return float("inf")
+            x = float(wps[0].get("x", 0.0))
+            y = float(wps[0].get("y", 0.0))
+            return _min_dist_to_cloud((x, y), lane_cloud)
+
+        def _push_off_lanes(
+            p: np.ndarray,
+            direction: np.ndarray,
+            required_clearance_m: float,
+            max_push_m: float = 8.0,
+        ) -> Tuple[np.ndarray, float]:
+            if lane_cloud is None or lane_cloud.size == 0:
+                return p, 0.0
+            q = np.asarray(p, dtype=float)
+            u = np.asarray(direction, dtype=float)
+            n = float(np.linalg.norm(u))
+            if n < 1e-9:
+                return q, 0.0
+            u /= n
+            pushed = 0.0
+            for _ in range(12):
+                d = _min_dist_to_cloud((float(q[0]), float(q[1])), lane_cloud)
+                if d >= required_clearance_m - 1e-3:
+                    break
+                step = max(0.25, required_clearance_m - d + 0.05)
+                remaining = max_push_m - pushed
+                if remaining <= 1e-6:
+                    break
+                step = min(step, remaining)
+                q = q + step * u
+                pushed += step
+            return q, pushed
+
+        def _enforce_lane_clearance(
+            wps: List[Dict[str, Any]],
+            m: Dict[str, Any],
+        ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
+            if lane_cloud is None or lane_cloud.size == 0:
+                return wps, m, float("inf")
+            if not isinstance(wps, list) or len(wps) < 2:
+                return wps, m, _spawn_lane_clearance(wps)
+            if not isinstance(wps[0], dict) or not isinstance(wps[-1], dict):
+                return wps, m, _spawn_lane_clearance(wps)
+
+            p0 = np.asarray([float(wps[0].get("x", 0.0)), float(wps[0].get("y", 0.0))], dtype=float)
+            p1 = np.asarray([float(wps[-1].get("x", 0.0)), float(wps[-1].get("y", 0.0))], dtype=float)
+            v = p1 - p0
+            nv = float(np.linalg.norm(v))
+            if nv < 1e-9:
+                return wps, m, _spawn_lane_clearance(wps)
+            u = v / nv
+
+            q0, push0 = _push_off_lanes(p0, -u, lane_required)
+            q1, push1 = _push_off_lanes(p1, +u, lane_required)
+            if push0 <= 1e-6 and push1 <= 1e-6:
+                return wps, m, _spawn_lane_clearance(wps)
+
+            out_wps: List[Dict[str, Any]] = []
+            yaw = wrap180(heading_deg_from_vec(q1 - q0))
+            denom = max(1, len(wps) - 1)
+            for idx, wp in enumerate(wps):
+                alpha = float(idx) / float(denom)
+                p = q0 + alpha * (q1 - q0)
+                nw = dict(wp)
+                nw["x"] = float(p[0])
+                nw["y"] = float(p[1])
+                nw["yaw_deg"] = float(yaw)
+                out_wps.append(nw)
+
+            out_motion = dict(m)
+            new_dist = float(np.linalg.norm(q1 - q0))
+            old_dist = float(out_motion.get("cross_distance_m", 0.0) or 0.0)
+            out_motion["cross_distance_m"] = max(old_dist, new_dist)
+            return out_wps, out_motion, _spawn_lane_clearance(out_wps)
+
+        waypoints, motion, lane_spawn_clearance = _enforce_lane_clearance(waypoints, motion)
+        ego_spawn_clearance = _spawn_clearance(waypoints)
+        if lane_spawn_clearance >= lane_required and ego_spawn_clearance >= min_sidewalk_clearance_m:
+            return waypoints, motion, ego_spawn_clearance
+
+        current_clearance = ego_spawn_clearance
+        best_wps = waypoints
+        best_motion = dict(motion)
+        best_clearance = current_clearance
+        best_lane_clearance = lane_spawn_clearance
+        if best_lane_clearance >= lane_required and current_clearance >= min_sidewalk_clearance_m:
+            return best_wps, best_motion, best_clearance
+
+        original_side = str(best_motion.get("cross_direction", "unknown") or "unknown").lower()
+        side_candidates = [original_side] + [s for s in ("left", "right") if s != original_side]
+        tried = set()
+        base_offset = float(best_motion.get("start_offset_m", 0.0) or 0.0)
+        if base_offset < 1e-6:
+            base_offset = 5.25
+
+        base_anchor_s = float(best_motion.get("anchor_s_along", 0.5) or 0.5)
+        anchor_deltas = (0.0, -0.08, 0.08, -0.16, 0.16, -0.24, 0.24, -0.32, 0.32, -0.4, 0.4)
+
+        for side in side_candidates:
+            if side not in ("left", "right"):
+                continue
+            for extra in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+                for d_anchor in anchor_deltas:
+                    trial = dict(best_motion)
+                    trial["cross_direction"] = side
+                    trial["start_offset_m"] = max(base_offset + extra, 5.25)
+                    trial["anchor_s_along"] = min(0.95, max(0.05, base_anchor_s + d_anchor))
+                    key = (
+                        trial["cross_direction"],
+                        round(float(trial["start_offset_m"]), 3),
+                        round(float(trial["anchor_s_along"]), 3),
+                    )
+                    if key in tried:
+                        continue
+                    tried.add(key)
+                    trial_anchor = compute_spawn_from_anchor(
+                        seg_pts,
+                        float(trial["anchor_s_along"]),
+                        "center",
+                    )
+                    wps = build_motion_waypoints(trial, category, trial_anchor, seg_pts)
+                    if not isinstance(wps, list) or not wps:
+                        continue
+                    wps, trial, lane_clr = _enforce_lane_clearance(wps, trial)
+                    clr = _spawn_clearance(wps)
+                    meets_lane = lane_clr >= lane_required
+                    meets_ego = clr >= min_sidewalk_clearance_m
+                    best_meets_lane = best_lane_clearance >= lane_required
+                    best_meets_ego = best_clearance >= min_sidewalk_clearance_m
+                    better = False
+                    if meets_lane and not best_meets_lane:
+                        better = True
+                    elif meets_lane == best_meets_lane and meets_ego and not best_meets_ego:
+                        better = True
+                    elif meets_lane == best_meets_lane and meets_ego == best_meets_ego:
+                        if lane_clr > best_lane_clearance + 1e-6:
+                            better = True
+                        elif abs(lane_clr - best_lane_clearance) <= 1e-6 and clr > best_clearance + 1e-6:
+                            better = True
+                    if better:
+                        best_lane_clearance = lane_clr
+                        best_clearance = clr
+                        best_wps = wps
+                        best_motion = trial
+                    if best_lane_clearance >= lane_required and best_clearance >= min_sidewalk_clearance_m:
+                        return best_wps, best_motion, best_clearance
+
+        return best_wps, best_motion, best_clearance
+
     def _bump(key: str, amount: int = 1) -> None:
         if stats is None:
             return
@@ -241,6 +682,32 @@ def run_object_placer(args, model=None, tokenizer=None):
 
     # Build vehicle segment summaries for LLM
     vehicle_segments = build_vehicle_segment_summaries(picked)
+    ego_path_cloud = _ego_path_point_cloud(picked)
+    ego_lane_samples = _ego_lane_samples_from_picked(picked)
+    crop_bounds: Optional[Tuple[float, float, float, float]] = None
+    if isinstance(crop_region, dict):
+        try:
+            crop_bounds = (
+                float(crop_region["xmin"]),
+                float(crop_region["xmax"]),
+                float(crop_region["ymin"]),
+                float(crop_region["ymax"]),
+            )
+        except Exception:
+            crop_bounds = None
+    # Keep full-resolution lane samples so walker off-road checks are reliable near intersections.
+    map_lane_samples = _lane_samples_from_segment_bank(all_segments, crop_bounds=crop_bounds, stride=1)
+    if ego_lane_samples.size == 0:
+        sidewalk_lane_samples = map_lane_samples
+    elif map_lane_samples.size == 0:
+        sidewalk_lane_samples = ego_lane_samples
+    else:
+        sidewalk_lane_samples = np.vstack([ego_lane_samples, map_lane_samples])
+    lane_center_cloud = (
+        sidewalk_lane_samples[:, :2].astype(float, copy=False)
+        if isinstance(sidewalk_lane_samples, np.ndarray) and sidewalk_lane_samples.size > 0
+        else np.zeros((0, 2), dtype=float)
+    )
     print(f"[TIMING] object_placer setup (load paths, assets, summaries): {time.time() - t0:.2f}s", flush=True)
 
     # Load HF model if not provided
@@ -741,7 +1208,7 @@ def run_object_placer(args, model=None, tokenizer=None):
         ]
     print(f"[TIMING] asset matching for {len(entities)} entities: {time.time() - t0:.2f}s", flush=True)
 
-    ego_spawns: List[Dict[str, Any]] = []
+    ego_spawns: List[Dict[str, Any]] = _extract_ego_spawns_from_picked(picked)
 
     # Handle empty entities case early
     if not entities:
@@ -890,30 +1357,6 @@ def run_object_placer(args, model=None, tokenizer=None):
             for w in warns[:50]:
                 print("[WARNING] Stage2(CSP): " + w)
 
-            # Extract ego vehicle spawn positions BEFORE CSP solve so CSP can enforce buffer constraints
-            ego_spawns = []
-            for p in picked:
-                vehicle_name = p.get("vehicle", "")
-                sig = p.get("signature", {}) if isinstance(p.get("signature"), dict) else {}
-                entry = sig.get("entry", {}) if isinstance(sig.get("entry"), dict) else {}
-                
-                if entry and isinstance(entry, dict):
-                    entry_point = entry.get("point", {})
-                    if isinstance(entry_point, dict):
-                        ego_x = entry_point.get("x")
-                        ego_y = entry_point.get("y")
-                        heading = entry.get("heading_deg", 0.0)
-                        
-                        if ego_x is not None and ego_y is not None:
-                            ego_spawns.append({
-                                "vehicle": vehicle_name,
-                                "spawn": {
-                                    "x": float(ego_x),
-                                    "y": float(ego_y),
-                                    "yaw_deg": float(heading)
-                                }
-                            })
-
             if not actor_specs:
                 print("[DEBUG] actor_specs is EMPTY after validation - no actors will be placed!", flush=True)
                 actors = []
@@ -1032,12 +1475,11 @@ def run_object_placer(args, model=None, tokenizer=None):
         placed_tv = str(placement.get("target_vehicle") or "").strip()
         if intended and intended.lower() not in ("", "none", "unknown") and placed_tv not in (intended, ""):
             # Try to re-anchor to intended vehicle's first segment midpoint
-            picked_entry = next((p for p in picked if p.get("vehicle") == intended), None)
-            if picked_entry:
-                seg_ids = (picked_entry.get("signature", {}) or {}).get("segment_ids", [])
-                segs = (picked_entry.get("signature", {}) or {}).get("segments_detailed", [])
-                if seg_ids:
-                    placement = dict(placement)
+                picked_entry = next((p for p in picked if p.get("vehicle") == intended), None)
+                if picked_entry:
+                    seg_ids = (picked_entry.get("signature", {}) or {}).get("segment_ids", [])
+                    if seg_ids:
+                        placement = dict(placement)
                     placement["target_vehicle"] = intended
                     placement["segment_index"] = 1
                     placement["seg_id"] = seg_ids[0]
@@ -1226,7 +1668,59 @@ def run_object_placer(args, model=None, tokenizer=None):
             # (we don't strictly enforce this)
             cat = "static"
 
+        if cat == "walker" and str((motion or {}).get("type", "")).lower() == "cross_perpendicular":
+            anchor_s = float(motion.get("anchor_s_along", s_along))
+            road_bounds = _estimate_road_lateral_bounds(
+                seg_pts=seg_pts,
+                anchor_s=anchor_s,
+                lane_samples=sidewalk_lane_samples,
+            )
+            if road_bounds is not None:
+                # Spawn just outside outermost lane edge and cross through to opposite side.
+                edge_min, edge_max = road_bounds
+                edge_clearance_m = max(0.5, float(motion.get("edge_clearance_m", 0.5) or 0.5))
+                motion["road_lat_min_m"] = float(edge_min)
+                motion["road_lat_max_m"] = float(edge_max)
+                motion["edge_clearance_m"] = float(edge_clearance_m)
+
+                road_width = max(0.0, float(edge_max - edge_min))
+                required_cross = road_width + 2.0 * edge_clearance_m
+                prev_cross = float(motion.get("cross_distance_m", 0.0) or 0.0)
+                motion["cross_distance_m"] = max(prev_cross, required_cross)
+
+                prev_offset = float(motion.get("start_offset_m", 0.0) or 0.0)
+                required_start = max(abs(edge_min), abs(edge_max)) + edge_clearance_m
+                motion["start_offset_m"] = max(prev_offset, required_start)
+            else:
+                estimated_offset = _estimate_sidewalk_offset_from_lanes(
+                    seg_pts=seg_pts,
+                    anchor_s=anchor_s,
+                    lane_samples=sidewalk_lane_samples,
+                )
+                prev_offset = float(motion.get("start_offset_m", 0.0) or 0.0)
+                motion["start_offset_m"] = max(prev_offset, estimated_offset)
+
         wps = build_motion_waypoints(motion, cat, spawn, seg_pts)
+        if cat == "walker" and str((motion or {}).get("type", "")).lower() == "cross_perpendicular":
+            placement_obj = a.get("placement", {}) if isinstance(a.get("placement"), dict) else {}
+            trigger_obj = a.get("trigger", {}) if isinstance(a.get("trigger"), dict) else {}
+            target_vehicle = str(trigger_obj.get("vehicle", "")).strip() or str(placement_obj.get("target_vehicle", "")).strip()
+            fixed_wps, fixed_motion, spawn_clearance = _stabilize_walker_crossing(
+                category=cat,
+                motion=motion,
+                anchor_spawn=spawn,
+                seg_pts=seg_pts,
+                waypoints=wps,
+                ego_cloud=ego_path_cloud,
+                lane_cloud=lane_center_cloud,
+            )
+            if fixed_wps is not wps:
+                motion = fixed_motion
+                wps = fixed_wps
+                print(
+                    f"[INFO] Adjusted walker crossing for sidewalk clearance vs {target_vehicle or 'ego path'} (min dist: {spawn_clearance:.2f}m)",
+                    flush=True,
+                )
         if isinstance(wps, list) and wps and isinstance(wps[0], dict) and "x" in wps[0] and "y" in wps[0]:
             # Align spawn to the first waypoint so spawn == trajectory start.
             spawn = {

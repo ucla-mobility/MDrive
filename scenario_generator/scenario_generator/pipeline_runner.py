@@ -214,6 +214,19 @@ def _entities_from_schema(schema: Optional[Dict[str, Any]]) -> Optional[List[Dic
     return entities
 
 
+def _hardcoded_crop_override(category: str, town: str) -> Optional[List[float]]:
+    """
+    Deterministic crop overrides for categories with known robust map regions.
+    """
+    key = (str(category).strip(), str(town).strip())
+    hardcoded: Dict[Tuple[str, str], List[float]] = {
+        # Known T-junction in Town02 (x:[100,180], y:[200,260]).
+        ("Major/Minor Unsignalized Entry", "Town02"): [100.0, 180.0, 200.0, 260.0],
+    }
+    vals = hardcoded.get(key)
+    return list(vals) if vals is not None else None
+
+
 class PipelineRunner:
     """
     Wrapper around the scenario pipeline with muted output and structured results.
@@ -357,7 +370,8 @@ class PipelineRunner:
         if cat_info:
             if scenario_schema is None:
                 scenario_schema = {}
-            scenario_schema.setdefault("allow_static_props", cat_info.allow_static_props)
+            # Category policy is authoritative; do not allow schema payload to override it.
+            scenario_schema["allow_static_props"] = cat_info.allow_static_props
 
         parent_dir = Path(__file__).parent.parent
         if str(parent_dir) not in sys.path:
@@ -423,14 +437,29 @@ class PipelineRunner:
             spec.topology == "two_lane_corridor" or 
             (cat_info and cat_info.map.topology == TopologyType.TWO_LANE_CORRIDOR)
         )
+        is_t_junction = (
+            spec.topology == "t_junction" or
+            (cat_info and cat_info.map.topology == TopologyType.T_JUNCTION)
+        )
         
         # Check if this is a ROUNDABOUT topology - use hardcoded Town03 crop
         is_roundabout = (
             spec.topology == "roundabout" or
             (cat_info and cat_info.map.topology == TopologyType.ROUNDABOUT)
         )
-        
-        if is_roundabout:
+
+        forced_crop_vals = _hardcoded_crop_override(category, town)
+        crops = []
+        junction_center = None  # Track junction center for T-junction filtering
+
+        if forced_crop_vals is not None:
+            print(f"[INFO] Using hardcoded crop for '{category}' in {town}: {forced_crop_vals}")
+            crop_vals = list(forced_crop_vals)
+            junction_center = (
+                0.5 * (float(crop_vals[0]) + float(crop_vals[1])),
+                0.5 * (float(crop_vals[2]) + float(crop_vals[3])),
+            )
+        elif is_roundabout:
             # Roundabout is only available in Town03
             if town != "Town03":
                 return False, None, f"Roundabout topology only available in Town03, got {town}"
@@ -481,84 +510,85 @@ class PipelineRunner:
                 max_depth=8,
             )
 
-        if not crops:
-            return False, None, f"No candidate crops found for {town}"
+        if forced_crop_vals is None:
+            if not crops:
+                return False, None, f"No candidate crops found for {town}"
 
-        count_on_ramp = sum(1 for c in crops if getattr(c, "has_on_ramp", False))
-        count_merge = sum(1 for c in crops if getattr(c, "has_merge_onto_same_road", False))
-        count_multi_lane = sum(1 for c in crops if getattr(c, "has_multi_lane", False))
-        count_oncoming = sum(1 for c in crops if getattr(c, "has_oncoming_pair", False))
+            count_on_ramp = sum(1 for c in crops if getattr(c, "has_on_ramp", False))
+            count_merge = sum(1 for c in crops if getattr(c, "has_merge_onto_same_road", False))
+            count_multi_lane = sum(1 for c in crops if getattr(c, "has_multi_lane", False))
+            count_oncoming = sum(1 for c in crops if getattr(c, "has_oncoming_pair", False))
 
-        if spec.needs_on_ramp and count_on_ramp == 0:
-            return False, None, (
-                f"No crops with on-ramp geometry found for {town}; "
-                f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
-                f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
-            )
-        if spec.needs_merge_onto_same_road and count_merge == 0:
-            return False, None, (
-                f"No crops with merge geometry found for {town}; "
-                f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
-                f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
-            )
-        if spec.needs_multi_lane and count_multi_lane == 0:
-            return False, None, (
-                f"No multi-lane crops found for {town}; "
-                f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
-                f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
-            )
-        if spec.needs_oncoming and count_oncoming == 0:
-            return False, None, (
-                f"No oncoming-pair crops found for {town}; "
-                f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
-                f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
+            if spec.needs_on_ramp and count_on_ramp == 0:
+                return False, None, (
+                    f"No crops with on-ramp geometry found for {town}; "
+                    f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
+                    f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
+                )
+            if spec.needs_merge_onto_same_road and count_merge == 0:
+                return False, None, (
+                    f"No crops with merge geometry found for {town}; "
+                    f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
+                    f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
+                )
+            if spec.needs_multi_lane and count_multi_lane == 0:
+                return False, None, (
+                    f"No multi-lane crops found for {town}; "
+                    f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
+                    f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
+                )
+            if spec.needs_oncoming and count_oncoming == 0:
+                return False, None, (
+                    f"No oncoming-pair crops found for {town}; "
+                    f"total={len(crops)}, on_ramp={count_on_ramp}, merge={count_merge}, "
+                    f"multi_lane={count_multi_lane}, oncoming={count_oncoming}"
+                )
+
+            scenario = crop_picker.Scenario(sid=scenario_id, text=scenario_text)
+            res = crop_picker.solve_assignment(
+                scenarios=[scenario],
+                specs={scenario_id: spec},
+                crops=crops,
+                domain_k=50,
+                capacity_per_crop=10,
+                reuse_weight=4000.0,
+                junction_penalty=25000.0,
+                log_every=0,
             )
 
-        scenario = crop_picker.Scenario(sid=scenario_id, text=scenario_text)
-        res = crop_picker.solve_assignment(
-            scenarios=[scenario],
-            specs={scenario_id: spec},
-            crops=crops,
-            domain_k=50,
-            capacity_per_crop=10,
-            reuse_weight=4000.0,
-            junction_penalty=25000.0,
-            log_every=0,
-        )
+            assignments = res.detailed.get("assignments", {})
 
-        assignments = res.detailed.get("assignments", {})
-        junction_center = None  # Track junction center for T-junction filtering
-        is_t_junction = spec.topology == "t_junction"
-        
-        if scenario_id not in assignments:
-            if is_roundabout:
-                # For roundabout we already picked the hardcoded crop; skip constraint filtering.
-                cand = crops[0]
-                crop_vals = [cand.crop.xmin, cand.crop.xmax, cand.crop.ymin, cand.crop.ymax]
-                junction_center = getattr(cand, 'center_xy', None)
+            if scenario_id not in assignments:
+                if is_roundabout:
+                    # For roundabout we already picked the hardcoded crop; skip constraint filtering.
+                    cand = crops[0]
+                    crop_vals = [cand.crop.xmin, cand.crop.xmax, cand.crop.ymin, cand.crop.ymax]
+                    junction_center = getattr(cand, "center_xy", None)
+                else:
+                    satisfying = [c for c in crops if crop_satisfies_spec(spec, c)]
+                    if not satisfying:
+                        return False, None, (
+                            f"No crops satisfy geometry spec; "
+                            f"needs_on_ramp={spec.needs_on_ramp}, "
+                            f"needs_merge_onto_same_road={spec.needs_merge_onto_same_road}, "
+                            f"needs_multi_lane={spec.needs_multi_lane}, "
+                            f"needs_oncoming={spec.needs_oncoming}"
+                        )
+                    cand = min(satisfying, key=lambda c: c.area)
+                    crop_vals = [cand.crop.xmin, cand.crop.xmax, cand.crop.ymin, cand.crop.ymax]
+                    junction_center = getattr(cand, "center_xy", None)
             else:
-                satisfying = [c for c in crops if crop_satisfies_spec(spec, c)]
-                if not satisfying:
-                    return False, None, (
-                        f"No crops satisfy geometry spec; "
-                        f"needs_on_ramp={spec.needs_on_ramp}, "
-                        f"needs_merge_onto_same_road={spec.needs_merge_onto_same_road}, "
-                        f"needs_multi_lane={spec.needs_multi_lane}, "
-                        f"needs_oncoming={spec.needs_oncoming}"
-                    )
-                cand = min(satisfying, key=lambda c: c.area)
-                crop_vals = [cand.crop.xmin, cand.crop.xmax, cand.crop.ymin, cand.crop.ymax]
-                junction_center = getattr(cand, 'center_xy', None)
-        else:
-            crop_vals = assignments[scenario_id]["crop"]
-            # Try to find the matching crop to get junction center
-            for c in crops:
-                if (abs(c.crop.xmin - crop_vals[0]) < 0.1 and 
-                    abs(c.crop.xmax - crop_vals[1]) < 0.1 and
-                    abs(c.crop.ymin - crop_vals[2]) < 0.1 and
-                    abs(c.crop.ymax - crop_vals[3]) < 0.1):
-                    junction_center = getattr(c, 'center_xy', None)
-                    break
+                crop_vals = assignments[scenario_id]["crop"]
+                # Try to find the matching crop to get junction center
+                for c in crops:
+                    if (
+                        abs(c.crop.xmin - crop_vals[0]) < 0.1
+                        and abs(c.crop.xmax - crop_vals[1]) < 0.1
+                        and abs(c.crop.ymin - crop_vals[2]) < 0.1
+                        and abs(c.crop.ymax - crop_vals[3]) < 0.1
+                    ):
+                        junction_center = getattr(c, "center_xy", None)
+                        break
         crop = CropBox(xmin=crop_vals[0], xmax=crop_vals[1], ymin=crop_vals[2], ymax=crop_vals[3])
 
         data = load_nodes(str(nodes_path))

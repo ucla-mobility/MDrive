@@ -6,7 +6,7 @@ This module defines what the scenario generation pipeline CAN and CANNOT express
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional, Tuple, Literal
+from typing import Dict, List, Set, Tuple, Literal
 from enum import Enum
 
 
@@ -538,7 +538,7 @@ CATEGORY_DEFINITIONS: Dict[str, CategoryDefinition] = {
         must_include=[
             "Define one exit segment, in one vehicles lane to be the construction zone, and do not place any props outside this area",
             "Clusters of multiple types of construction related static props in work zone",
-            "Construction props must be selected ONLY from the following assets: cones (constructioncone, trafficcone01, trafficcone02), barriers (streetbarrier, barrel, chainbarrier, chainbarrierend), warning sign (trafficwarning), and at most one construction/utility vehicle (truck or van)."
+            "Construction props must be selected ONLY from the following assets: cones (constructioncone, trafficcone01, trafficcone02), barriers (streetbarrier, barrel, chainbarrier, chainbarrierend), warning sign (trafficwarning), and at most one construction/utility vehicle (truck or van).",
             "All vehicles exit segments must be either the construction zone lane or an adjacent lane to the construction zone",
             "Vehicles may turn into the exit segment lane"
             
@@ -593,7 +593,7 @@ CATEGORY_DEFINITIONS: Dict[str, CategoryDefinition] = {
         avoid=[
             "Props on either side of the road that do not contribute to the overtaking scenario",
             "Having all vehicles travel in the same direction",
-            "Any lane changes"
+            "Any lane changes",
             "This is a two lane road - no additional lanes may be referenced or used beyond the two lanes (one per direction)",
             "Do not include ANY opposite_approach_as constraint besides between Vehicle 1 and Vehicle 2"
         ],

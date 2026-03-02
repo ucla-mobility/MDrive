@@ -1,0 +1,620 @@
+{
+  "ego": [
+    {
+      "file": "ucla_v2_custom_ego_vehicle_0.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "ego_0",
+      "kind": "ego",
+      "model": "vehicle.lincoln.mkz_2020"
+    },
+    {
+      "file": "ucla_v2_custom_ego_vehicle_1.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "ego_1",
+      "kind": "ego",
+      "model": "vehicle.lincoln.mkz_2020"
+    }
+  ],
+  "npc": [
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_11_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "11",
+      "kind": "npc",
+      "model": "vehicle.volkswagen.t2",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_13_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "13",
+      "kind": "npc",
+      "model": "vehicle.mini.cooper_s",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_14_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "14",
+      "kind": "npc",
+      "model": "vehicle.ford.crown",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_17_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "17",
+      "kind": "npc",
+      "model": "vehicle.mercedes.coupe",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_19_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "19",
+      "kind": "npc",
+      "model": "vehicle.volkswagen.t2",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_20_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "20",
+      "kind": "npc",
+      "model": "vehicle.tesla.model3",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_22_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "22",
+      "kind": "npc",
+      "model": "vehicle.lincoln.mkz_2017",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_25_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "25",
+      "kind": "npc",
+      "model": "vehicle.mercedes.coupe_2020",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_27_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "27",
+      "kind": "npc",
+      "model": "vehicle.mercedes.coupe",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_29_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "29",
+      "kind": "npc",
+      "model": "vehicle.lincoln.mkz_2017",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_30_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "30",
+      "kind": "npc",
+      "model": "vehicle.tesla.model3",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_31_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "31",
+      "kind": "npc",
+      "model": "vehicle.volkswagen.t2",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_32_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "32",
+      "kind": "npc",
+      "model": "vehicle.citroen.c3",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_33_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "33",
+      "kind": "npc",
+      "model": "vehicle.nissan.micra",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_34_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "34",
+      "kind": "npc",
+      "model": "vehicle.seat.leon",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/npc/ucla_v2_custom_Vehicle_35_npc.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "35",
+      "kind": "npc",
+      "model": "vehicle.mitsubishi.fusorosa",
+      "control_mode": "replay"
+    }
+  ],
+  "static": [
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_28_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "28",
+      "kind": "static",
+      "model": "vehicle.mercedes.sprinter",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_48_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "48",
+      "kind": "static",
+      "model": "vehicle.chevrolet.impala",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_50_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "50",
+      "kind": "static",
+      "model": "vehicle.mercedes.coupe_2020",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_2_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "2",
+      "kind": "static",
+      "model": "vehicle.audi.tt",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_3_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "3",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_4_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "4",
+      "kind": "static",
+      "model": "vehicle.lincoln.mkz_2017",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_5_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "5",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_6_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "6",
+      "kind": "static",
+      "model": "vehicle.dodge.charger_2020",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_7_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "7",
+      "kind": "static",
+      "model": "vehicle.nissan.micra",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_8_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "8",
+      "kind": "static",
+      "model": "vehicle.mercedes.coupe_2020",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_9_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "9",
+      "kind": "static",
+      "model": "vehicle.bmw.grandtourer",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_12_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "12",
+      "kind": "static",
+      "model": "vehicle.tesla.model3",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_15_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "15",
+      "kind": "static",
+      "model": "vehicle.lincoln.mkz_2017",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_23_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "23",
+      "kind": "static",
+      "model": "vehicle.mini.cooper_s",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_24_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "24",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_26_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "26",
+      "kind": "static",
+      "model": "vehicle.volkswagen.t2",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/static/ucla_v2_custom_Vehicle_46_static.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "46",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "control_mode": "replay"
+    }
+  ],
+  "walker": [
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_36_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "36",
+      "kind": "walker",
+      "model": "walker.pedestrian.0006",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_37_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "37",
+      "kind": "walker",
+      "model": "walker.pedestrian.0003",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_38_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "38",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_39_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "39",
+      "kind": "walker",
+      "model": "walker.pedestrian.0004",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_40_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "40",
+      "kind": "walker",
+      "model": "walker.pedestrian.0003",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_41_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "41",
+      "kind": "walker",
+      "model": "walker.pedestrian.0004",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_42_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "42",
+      "kind": "walker",
+      "model": "walker.pedestrian.0004",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_43_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "43",
+      "kind": "walker",
+      "model": "walker.pedestrian.0005",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_45_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "45",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_49_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "49",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_51_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "51",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_53_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "53",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_54_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "54",
+      "kind": "walker",
+      "model": "walker.pedestrian.0003",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_56_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "56",
+      "kind": "walker",
+      "model": "walker.pedestrian.0003",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_59_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "59",
+      "kind": "walker",
+      "model": "walker.pedestrian.0005",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_60_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "60",
+      "kind": "walker",
+      "model": "walker.pedestrian.0005",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_63_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "63",
+      "kind": "walker",
+      "model": "walker.pedestrian.0002",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_64_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "64",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_67_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "67",
+      "kind": "walker",
+      "model": "walker.pedestrian.0004",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_68_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "68",
+      "kind": "walker",
+      "model": "walker.pedestrian.0002",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_69_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "69",
+      "kind": "walker",
+      "model": "walker.pedestrian.0003",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_71_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "71",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_72_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "72",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_75_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "75",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_76_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "76",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_77_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "77",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_78_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "78",
+      "kind": "walker",
+      "model": "walker.pedestrian.0008",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_79_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "79",
+      "kind": "walker",
+      "model": "walker.pedestrian.0006",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_80_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "80",
+      "kind": "walker",
+      "model": "walker.pedestrian.0002",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_81_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "81",
+      "kind": "walker",
+      "model": "walker.pedestrian.0004",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_84_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "84",
+      "kind": "walker",
+      "model": "walker.pedestrian.0005",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_44_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "44",
+      "kind": "walker",
+      "model": "walker.pedestrian.0007",
+      "control_mode": "replay"
+    },
+    {
+      "file": "actors/walker/ucla_v2_custom_Walker_85_walker.xml",
+      "route_id": "2023-04-04-15-41-17_13_1",
+      "town": "ucla_v2",
+      "name": "85",
+      "kind": "walker",
+      "model": "walker.pedestrian.0002",
+      "control_mode": "replay"
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+Background:
+    vehicle_amount: 0
+    pedestrian_amount: 0
+    CRAZY_LEVEL: 0
+    CRAZY_PROPORTION: 0
+    turn_off_light: True
+
+Scenario1: 
+    ControlLoss:
+        proportion: 0.0 # Proportion of the scenario in Scenario1
+        no_of_jitter: 10 # Number of jittering for the vehicle
+        noise_mean: 0 # Mean of the noise
+        noise_std: 0.01 # Standard deviation of the noise
+        dynamic_mean_for_steer: 0.001 # Mean of the dynamic noise for steer
+        dynamic_mean_for_throttle: 0.045 # Mean of the dynamic noise for throttle
+        abort_distance_to_intersection: 10 # Distance to the intersection to abort the scenario
+        start_distance: 20 # Distance the vehicle should travel before the scenario starts 
+        trigger_dist: 2 # Distance to the trigger point to trigger the scenario
+        end_distance: 30 # Distance the vehicle should travel before the scenario ends
+        ego_vehicle_max_steer: 0.0 # Set but not used in this scenario
+        ego_vehicle_max_throttle: 1.0 # Set but not used in this scenario
+        ego_vehicle_target_velocity: 15 # Set but not used in this scenario
+        distance: [14,48,74] # Distance between the noise points and the trigger point
+    
+    CutIn:
+        proportion: 0.0 # Proportion of the scenario in Scenario1
+        velocity: 40 # initial velocity of the cutin vehicle
+        delta_velocity: 10 # velocity difference between the cutin vehicle and the ego vehicle
+        trigger_distance: 30 # Distance between the trigger point and the ego vehicle
+        catch_distance: 40 # Distance between the ego vehicle and the cutin vehicle
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario1
+
+# Set but no Scenario2 trigger point in scenario json file
+Scenario2: 
+    FollowLeadingVehicle:
+        proportion: 0.0 # Proportion of the scenario in Scenario2
+        first_vehicle_location: 25 # Location of the first vehicle
+        first_vehicle_speed: 10 # Speed of the first vehicle
+        other_actor_max_brake: 1.0 # Max brake speed of the other actor
+        other_actor_stop_in_front_intersection: 20 # Distance to the intersection to stop the other actor
+        trigger_distance: 20 # Distance between the leadig actor and the hero actor to end the scenario
+    
+    FollowLeadingVehicleWithObstacle:
+        proportion: 0.0 # Proportion of the scenario in Scenario2
+        first_actor_location: 25 # Location of the first vehicle
+        second_head_distance: 41 # Distance between the first and second vehicle
+        second_actor_location: 66 # Location of the second vehicle: _second_actor_location = _first_actor_location + _second_head_distance
+        first_actor_speed: 10 # Speed of the first vehicle
+        second_actor_speed: 1.5 # Speed of the second vehicle
+        other_actor_max_brake: 1.0 # Max brake speed of the other actor
+
+    CutIn:
+        proportion: 0.0 # Proportion of the scenario in Scenario1
+        velocity: 40 # initial velocity of the cutin vehicle
+        delta_velocity: 10 # velocity difference between the cutin vehicle and the ego vehicle
+        trigger_distance: 30 # Distance between the trigger point and the ego vehicle
+        catch_distance: 40 # Distance between the ego vehicle and the cutin vehicle
+
+    ChangeLane:
+        proportion: 0.0 # Proportion of the scenario in Scenario2
+        fast_vehicle_velocity: 70 # Velocity of the fast vehicle
+        slow_vehicle_velocity: 0 # Velocity of the slow vehicle
+        change_lane_velocity: 15 # Set but not used in this scenario
+        slow_vehicle_distance: 100 # Distance between the slow vehicle and the trigger point
+        fast_vehicle_distance: 20 # Distance between the fast vehicle and the trigger point
+        trigger_distance: 30 # Distance between the trigger point and the ego vehicle
+        max_brake: 1 # Max brake speed of the slow vehicle
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario2
+
+Scenario3: 
+    StationaryObjectCrossing:
+        proportion: 0.0 # Proportion of the scenario in Scenario3
+        ego_vehicle_distance_driven: 40 # Distance the ego vehicle should drive before the scenario ends
+        other_actor_target_velocity: 15 # Target velocity of the other actor
+        start_distance: 40 # Distance between the trigger point and the static object
+
+    DynamicObjectCrossing:
+        proportion: 0.0 # Proportion of the scenario in Scenario3
+        time: 5 # Time for the pedestrian to cross the road
+        trigger_distance: 10 # Distance between the trigger point and the ego vehicle
+        bbox_dist: 1.45 # Distance between the pedestrian and the ego vehicle
+        speed: 10 # Speed of the pedestrian
+        walk_distance: 10 # Distance the pedestrian should walk
+        min_trigger_dist: 6 # Minimum distance between the trigger point and the ego vehicle
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario3
+
+Scenario4: 
+    VehicleTurningRight:
+        proportion: 0.0 # Proportion of the scenario in Scenario4
+        trigger_distance_from_intersection: 70 # Distance between the trigger point and the intersection
+        trigger_distance: 10 # Distance between the trigger point and the ego vehicle
+        target_velocity: 15 # Target velocity of the ego vehicle
+        start_distance: 40 # Distance between the trigger point and the static object
+        other_actor_max_brake: 1 # Max brake speed of the other actor
+
+    VehicleTurningLeft:
+        proportion: 0.0 # Proportion of the scenario in Scenario4
+        trigger_distance_from_intersection: 70 # Distance between the trigger point and the intersection
+        trigger_distance: 10 # Distance between the trigger point and the ego vehicle
+        target_velocity: 15 # Target velocity of the ego vehicle
+        start_distance: 40 # Distance between the trigger point and the static object
+        other_actor_max_brake: 1 # Max brake speed of the other actor
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario4
+
+Scenario5:
+    OppositeVehicleRunningRedLight:
+        proportion: 0.0 # Proportion of the scenario in Scenario5
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario5
+
+Scenario6:
+    SignalizedJunctionStraight:
+        proportion: 0.0 # Proportion of the scenario in Scenario6
+        other_actor_target_velocity: 40 # Target velocity of the other actor
+        trigger_distance: 30 # Distance between the trigger point and the ego vehicle
+        traffic_light_trigger_dist: 3 # Distance between the trigger point and the traffic light
+        traffic_light_green_dist: 50 # Distance between the green traffic light and the trigger point
+        start_distance: 35 # Distance between the trigger point and the static object
+        target_speed: 50 # Target speed of the ego vehicle
+        
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario6
+
+Scenario7:
+    ManeuverOppositeDirection:
+        proportion: 0.0 # Proportion of the scenario in Scenario7
+        trigger_distance: 50 # Distance between the trigger point and the ego vehicle
+        start_distance: 20 # Distance between the trigger point and the static object
+        obstacle_distance: 40 # Distance between the trigger point and the obstacle
+        obstacle_wait_time: 10 # Time to wait for the obstacle
+        obstacle_speed: 15 # Speed of the obstacle
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario7
+ 
+Scenario8:
+    OppositeVehicleTakingPriority:
+        proportion: 0.0 # Proportion of the scenario in Scenario8
+        start_distance: 12 # Distance between the trigger point and the static object
+        trigger_distance: 30 # Distance between the trigger point and the ego vehicle 
+        
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario8
+
+Scenario9: 
+    NoSignalJunctionCrossing:
+        proportion: 0.0 # Proportion of the scenario in Scenario9
+        trigger_distance: 70 # Distance between the trigger point and the ego vehicle
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario9
+
+Scenario10:
+    InvadingTurn:
+        proportion: 0.0 # Proportion of the scenario in Scenario10
+        trigger_dist_from_intersection: 30 # Distance between the trigger point and the intersection
+        target_speed: 20 # Target speed of the ego vehicle
+        start_distance: 30 # Distance between the trigger point and the static object
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the scenario in Scenario10
+
+CycleScenarios:
+    CyclistCrossing:
+        proportion : 0.0
+        cross_time: 0.5 # Time for the cyclist to cross the road
+        spawn_dist: 20 # Distance between the cyclist and the trigger point
+        walk_dist: 30 # Distance the cyclist should walk
+        trigger_dist: 5 # Distance between the trigger point and the ego vehicle
+        end_dist: 40 # Distance between the end point and the ego vehicle
+        speed: 4 # Speed of the cyclist
+
+    FreeRide:
+        proportion: 1.0 # Proportion of the FreeRide scenario
+
+PedestrianScenarios:  
+    PedestrianCrossingJunction:
+        proportion: 0.0 # Proportion of the scenario in PedestrianScenarios
+        cross_time: 0.5 # Time for the pedestrian to cross the road
+        spawn_dist: 20 # Distance between the pedestrian and the trigger point
+        walk_dist: 30 # Distance the pedestrian should walk
+        trigger_dist: 5 # Distance between the trigger point and the ego vehicle
+        end_dist: 40 # Distance between the end point and the ego vehicle
+        speed: 4 # Speed of the pedestrian
+    
+    FreeRide:
+        proportion: 1.0 # Proportion of the FreeRide scenario
+
+PassingScenarios:
+    PassObstacle:
+        proportion: 0.0 # Proportion of PassObstacle scenario
+        spawn_dist: 30 # Spawn the actor at this distance (maybe not precise)
+        end_dist: 60 # Distance betwwen the trigger point and the ego-vehicle when the scenario ends
+
+    FreeRide:
+        proportion: 1.0 # Proportion of FreeRide
+

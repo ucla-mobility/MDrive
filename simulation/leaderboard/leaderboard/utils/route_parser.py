@@ -125,6 +125,7 @@ def _load_custom_actor_manifest() -> Dict[str, List[Dict[str, object]]]:
                     "name": entry.get("name") or rel_path_obj.stem,
                     "speed": entry.get("speed"),
                     "model": entry.get("model"),
+                    "control_mode": entry.get("control_mode"),
                 }
             )
 
@@ -308,6 +309,12 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
         # Optional opt-out: route attribute snap_to_road="false" disables road snapping for this actor
         snap_attr = str(route_node.attrib.get("snap_to_road", "true")).lower()
         snap_to_road = snap_attr not in ("false", "0", "no", "off")
+        # Optional spawn-only override: allows lane-snapped spawn while keeping authored plan handling.
+        snap_spawn_attr = route_node.attrib.get("snap_spawn_to_road")
+        if snap_spawn_attr is None:
+            snap_spawn_to_road = snap_to_road
+        else:
+            snap_spawn_to_road = str(snap_spawn_attr).lower() not in ("false", "0", "no", "off")
 
         for index, waypoint in enumerate(route_node.iter("waypoint")):
             try:
@@ -344,6 +351,17 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
         role = (entry.get("kind") or entry.get("role") or "npc").lower()
         role_defaults = ROLE_DEFAULTS.get(role, {})
 
+        route_control_mode = str(route_node.attrib.get("control_mode", "")).strip().lower()
+        manifest_control_mode = str(entry.get("control_mode", "")).strip().lower()
+        if route_control_mode in ("policy", "replay"):
+            control_mode = route_control_mode
+        elif manifest_control_mode in ("policy", "replay"):
+            control_mode = manifest_control_mode
+        elif role in ("static", "static_prop"):
+            control_mode = "replay"
+        else:
+            control_mode = "policy"
+
         default_model = entry.get("model") or role_defaults.get("model") or "vehicle.*"
         try:
             target_speed = float(entry.get("speed", role_defaults.get("speed", global_default_speed)))
@@ -364,6 +382,8 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
                 "target_speed": target_speed,
                 "avoid_collision": entry.get("avoid_collision", False),
                 "snap_to_road": snap_to_road,
+                "snap_spawn_to_road": snap_spawn_to_road,
+                "control_mode": control_mode,
             }
         )
 

@@ -1,0 +1,42 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "07_placement",
+      "speed": 7.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "07_placement",
+      "speed": 9.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [
+    {
+      "file": "actors/pedestrians/town05_entity_1_walker_crossing.xml",
+      "kind": "pedestrian",
+      "model": "walker.pedestrian.0001",
+      "name": "entity_1",
+      "route_id": "07_placement",
+      "speed": 1.02,
+      "town": "Town05"
+    }
+  ],
+  "static": []
+}

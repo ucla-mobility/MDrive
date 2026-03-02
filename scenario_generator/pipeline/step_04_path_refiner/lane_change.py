@@ -1,4 +1,5 @@
 import random
+import hashlib
 from typing import Any, Dict, List, Tuple
 
 from .geometry import (
@@ -38,8 +39,10 @@ def apply_merge_into_lane_of(
     m_segs = m_sig.get("segments_detailed", []) if isinstance(m_sig.get("segments_detailed", []), list) else []
     t_segs = t_sig.get("segments_detailed", []) if isinstance(t_sig.get("segments_detailed", []), list) else []
 
-    # Deterministic jitter so each pair has distinct merge geometry
-    rng = random.Random(hash((mover.get("vehicle", ""), target.get("vehicle", ""))))
+    # Stable deterministic jitter so each pair has distinct merge geometry across processes.
+    seed_key = f"{mover.get('vehicle', '')}::{target.get('vehicle', '')}".encode("utf-8")
+    seed = int.from_bytes(hashlib.blake2b(seed_key, digest_size=8).digest(), "big")
+    rng = random.Random(seed)
 
     m_pts, _ = _segments_to_polyline_with_map(m_segs)
     t_pts, _ = _segments_to_polyline_with_map(t_segs)

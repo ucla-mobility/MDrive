@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<routes>
-  <route id="behavior_smoke_003" town="Town05" role="npc" model="vehicle.audi.a2" speed="8.0">
-    <waypoint x="-141.692" y="94.905" z="0.000" yaw="13.526259"/>
-    <waypoint x="-123.839" y="99.200" z="0.000" yaw="13.526259"/>
-  </route>
-</routes>

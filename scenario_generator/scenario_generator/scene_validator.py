@@ -17,7 +17,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple
 from enum import Enum
 
 from .capabilities import CATEGORY_DEFINITIONS, TopologyType, RequiredRelation, EgoManeuver
@@ -594,6 +594,234 @@ class SceneValidator:
                         return (True, closest_point)
 
         return (min_dist <= threshold_m, closest_point if min_dist <= threshold_m else None)
+
+    def _polyline_min_distance(
+        self,
+        poly1: List[Tuple[float, float]],
+        poly2: List[Tuple[float, float]],
+    ) -> float:
+        if len(poly1) < 2 or len(poly2) < 2:
+            return float("inf")
+        min_dist = float("inf")
+        for i in range(len(poly1) - 1):
+            a0, a1 = poly1[i], poly1[i + 1]
+            for j in range(len(poly2) - 1):
+                b0, b1 = poly2[j], poly2[j + 1]
+                dist, _ = self._segment_segment_distance(a0, a1, b0, b1)
+                if dist < min_dist:
+                    min_dist = dist
+        return min_dist
+
+    def _roundabout_overlap_ok(
+        self,
+        scene_data: Dict[str, Any],
+        proximity_threshold_m: float = 6.0,
+    ) -> Tuple[bool, str]:
+        """Roundabout scenarios require non-disjoint ego interactions."""
+        egos = scene_data.get("ego_picked", [])
+        if not isinstance(egos, list) or len(egos) < 2:
+            return False, "Roundabout requires at least two ego vehicles."
+
+        payload = []
+        for ego in egos:
+            if not isinstance(ego, dict):
+                continue
+            vehicle = str(ego.get("vehicle", "")).strip() or "unknown"
+            sig = ego.get("signature", {}) if isinstance(ego.get("signature"), dict) else {}
+            entry = sig.get("entry", {}) if isinstance(sig.get("entry"), dict) else {}
+            exit_info = sig.get("exit", {}) if isinstance(sig.get("exit"), dict) else {}
+            poly = self._extract_polylines_from_scene({"ego_picked": [ego]}).get(vehicle, [])
+            payload.append(
+                {
+                    "vehicle": vehicle,
+                    "entry": str(entry.get("cardinal4", "unknown")).lower(),
+                    "exit": str(exit_info.get("cardinal4", "unknown")).lower(),
+                    "poly": poly,
+                }
+            )
+
+        if len(payload) < 2:
+            return False, "Roundabout ego paths missing geometry."
+
+        for i in range(len(payload)):
+            for j in range(i + 1, len(payload)):
+                a = payload[i]
+                b = payload[j]
+                if a["exit"] != "unknown" and a["exit"] == b["exit"]:
+                    return True, f"{a['vehicle']} and {b['vehicle']} share the same exit."
+                if (
+                    a["exit"] != "unknown"
+                    and b["entry"] != "unknown"
+                    and a["exit"] == b["entry"]
+                ) or (
+                    b["exit"] != "unknown"
+                    and a["entry"] != "unknown"
+                    and b["exit"] == a["entry"]
+                ):
+                    return True, f"{a['vehicle']} exit aligns with {b['vehicle']} entry (swap/merge)."
+                d = self._polyline_min_distance(a["poly"], b["poly"])
+                if d <= proximity_threshold_m:
+                    return True, (
+                        f"{a['vehicle']} and {b['vehicle']} approach within {d:.1f}m "
+                        f"(<= {proximity_threshold_m:.1f}m)."
+                    )
+
+        min_pair = float("inf")
+        pair_name = "unknown"
+        for i in range(len(payload)):
+            for j in range(i + 1, len(payload)):
+                d = self._polyline_min_distance(payload[i]["poly"], payload[j]["poly"])
+                if d < min_pair:
+                    min_pair = d
+                    pair_name = f"{payload[i]['vehicle']} vs {payload[j]['vehicle']}"
+        return False, f"Closest ego-path pair ({pair_name}) is {min_pair:.1f}m apart (disjoint roundabout traversal)."
+
+    def _validate_pedestrian_crosswalk_semantics(
+        self,
+        scene_data: Dict[str, Any],
+        result: "SceneValidationResult",
+    ) -> bool:
+        """
+        Ensure walkers start from road side (not middle of vehicle path) and
+        then traverse into/through the vehicle corridor.
+        Returns True when all hard checks pass.
+        """
+        actors = scene_data.get("actors", [])
+        if not isinstance(actors, list):
+            actors = []
+        walkers = []
+        for actor in actors:
+            if not isinstance(actor, dict):
+                continue
+            cat = str(actor.get("category", "")).lower()
+            kind = str(actor.get("kind", "")).lower()
+            semantic = str(actor.get("semantic", "")).lower()
+            if cat == "walker" or kind == "walker" or "walker" in semantic or "pedestrian" in semantic:
+                walkers.append(actor)
+
+        if not walkers:
+            result.add_issue(
+                ValidationIssue.MISSING_ACTOR,
+                "error",
+                "Pedestrian Crosswalk requires at least one walker actor.",
+                pipeline_stage="step_05_object_placer",
+            )
+            return False
+
+        samples_by_vehicle = self._extract_polyline_samples_with_meta(scene_data)
+        ego_points: List[Tuple[float, float]] = []
+        for samples in samples_by_vehicle.values():
+            for pt in samples:
+                ego_points.append((float(pt["x"]), float(pt["y"])))
+        if not ego_points:
+            # Other checks will already fail this scene; do not duplicate hard-fail here.
+            return True
+
+        def _min_dist_to_ego(x: float, y: float) -> float:
+            return min(math.hypot(x - ex, y - ey) for ex, ey in ego_points)
+
+        def _min_dist_to_vehicle(vehicle: str, x: float, y: float) -> Optional[float]:
+            if not vehicle:
+                return None
+            samples = samples_by_vehicle.get(vehicle, [])
+            if not samples:
+                return None
+            return min(
+                math.hypot(x - float(pt["x"]), y - float(pt["y"]))
+                for pt in samples
+            )
+
+        ok = True
+        for walker in walkers:
+            motion = walker.get("motion", {}) if isinstance(walker.get("motion"), dict) else {}
+            motion_type = str(motion.get("type", "")).lower()
+            if motion_type != "cross_perpendicular":
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_MOTION,
+                    "error",
+                    f"Walker '{walker.get('id', 'walker')}' is '{motion_type or 'unknown'}' instead of cross_perpendicular.",
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+                continue
+
+            spawn = walker.get("spawn", {}) if isinstance(walker.get("spawn"), dict) else {}
+            if "x" not in spawn or "y" not in spawn:
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_POSITION,
+                    "error",
+                    f"Walker '{walker.get('id', 'walker')}' is missing spawn coordinates.",
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+                continue
+
+            sx = float(spawn["x"])
+            sy = float(spawn["y"])
+            trigger = walker.get("trigger", {}) if isinstance(walker.get("trigger"), dict) else {}
+            placement = walker.get("placement", {}) if isinstance(walker.get("placement"), dict) else {}
+            target_vehicle = str(trigger.get("vehicle", "")).strip() or str(placement.get("target_vehicle", "")).strip()
+
+            # Hard floor against obvious lane-centerline starts.
+            d_start_any = _min_dist_to_ego(sx, sy)
+            if d_start_any < 0.8:
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_POSITION,
+                    "error",
+                    (
+                        f"Walker '{walker.get('id', 'walker')}' starts nearly on an ego lane "
+                        f"centerline ({d_start_any:.1f}m)."
+                    ),
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+            # For crosswalk semantics, evaluate side-of-road relative to intended vehicle.
+            d_start_target = _min_dist_to_vehicle(target_vehicle, sx, sy)
+            if d_start_target is not None and d_start_target < 2.2:
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_POSITION,
+                    "error",
+                    (
+                        f"Walker '{walker.get('id', 'walker')}' starts too close to target "
+                        f"vehicle lane ({target_vehicle}, {d_start_target:.1f}m)."
+                    ),
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+
+            path_points = self._sample_actor_path_points(walker)
+            if not path_points:
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_MOTION,
+                    "error",
+                    f"Walker '{walker.get('id', 'walker')}' has no traversable waypoint path.",
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+                continue
+
+            if d_start_target is not None:
+                d_min = min(_min_dist_to_vehicle(target_vehicle, px, py) or float("inf") for px, py in path_points)
+                miss_msg = (
+                    f"Walker '{walker.get('id', 'walker')}' never approaches target vehicle "
+                    f"corridor ({target_vehicle}, closest {d_min:.1f}m)."
+                )
+            else:
+                d_min = min(_min_dist_to_ego(px, py) for px, py in path_points)
+                miss_msg = (
+                    f"Walker '{walker.get('id', 'walker')}' never approaches vehicle corridor "
+                    f"(closest {d_min:.1f}m)."
+                )
+            if d_min > 4.5:
+                result.add_issue(
+                    ValidationIssue.WRONG_ACTOR_POSITION,
+                    "error",
+                    miss_msg,
+                    pipeline_stage="step_05_object_placer",
+                )
+                ok = False
+
+        return ok
     
     def _validate_path_intersections(
         self, 
@@ -1660,7 +1888,16 @@ class SceneValidator:
                 rels.add(rel)
         result["relationships"] = sorted(rels)
 
+        allow_static_props = bool(self._get_spec_value(scenario_spec, "allow_static_props", True))
         actors = self._get_spec_value(scenario_spec, "actors", []) or []
+        static_kind_exact = {
+            "parked_vehicle",
+            "static_prop",
+            "construction_cone",
+            "construction_barrier",
+            "traffic_cone",
+        }
+        static_kind_tokens = ("static", "parked", "barrier", "cone", "debris", "obstacle", "prop")
         for actor in actors:
             if isinstance(actor, dict):
                 kind = actor.get("kind")
@@ -1674,6 +1911,13 @@ class SceneValidator:
                     motion = motion.value
             if not kind:
                 continue
+            kind_l = str(kind).strip().lower()
+            motion_l = str(motion).strip().lower() if motion is not None else ""
+            if not allow_static_props:
+                is_static_kind = kind_l in static_kind_exact or any(tok in kind_l for tok in static_kind_tokens)
+                is_static_motion = motion_l in {"static", "stopped"}
+                if is_static_kind or is_static_motion:
+                    continue
             actor_entry = {"kind": str(kind)}
             if motion:
                 actor_entry["motion"] = str(motion)
@@ -1898,6 +2142,19 @@ class SceneValidator:
                     "On-ramp geometry or usage missing",
                     expected="at least one ramp entry plus mainline with a merge",
                     actual=f"entry roads: {geometry['distinct_entry_roads']}",
+                    pipeline_stage="step_03_path_picker",
+                )
+
+        if category == "Pedestrian Crosswalk":
+            if not self._validate_pedestrian_crosswalk_semantics(scene_data, result):
+                hard_error = True
+
+        if category == "Roundabout Navigation":
+            overlap_ok, overlap_msg = self._roundabout_overlap_ok(scene_data)
+            if not overlap_ok:
+                add_error(
+                    ValidationIssue.NO_INTERACTION,
+                    f"Roundabout interaction requirement failed: {overlap_msg}",
                     pipeline_stage="step_03_path_picker",
                 )
 

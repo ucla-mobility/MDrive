@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<routes>
-  <route id="behavior_smoke_001" town="Town05" role="pedestrian" model="walker.pedestrian.0001" speed="1.7">
-    <waypoint x="-108.653" y="100.192" z="0.000" yaw="-89.928380"/>
-    <waypoint x="-108.631" y="82.692" z="0.000" yaw="-89.928380"/>
-  </route>
-</routes>

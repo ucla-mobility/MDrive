@@ -8,12 +8,15 @@ v2xpnp/Sample_Dataset
 benchmark_runs
 scenario_generator/log
 scenario_generator/routes
+all_videos/
+debug_runs_passed/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 reports/
+debug_runs/
 
 # C extensions
 *.so
@@ -287,3 +290,11 @@ simulation/assets/LMDrive
 testscenarios/
 carla912/
 benchmarkfull/
+
+# scenario_generator generated artifacts
+scenario_generator/log/
+scenario_generator/routes/
+scenario_generator/debug_output/
+scenario_generator/legal_paths_test/
+scenario_generator/crop_map.json
+scenario_generator/crop_map_detailed.json

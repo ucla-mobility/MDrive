@@ -4,19 +4,22 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from setup_scenario_from_zip import prepare_routes_from_zip, parse_route_metadata
 
@@ -69,6 +72,12 @@ CARLA_RESTART_WAIT = 2.0
 CARLA_CRASH_MULTIPLIER = 2.0
 CARLA_PORT_TRIES = 8
 CARLA_PORT_STEP = 1
+UCLA_V2_CROSSWALK_MAP_TOKEN = "ucla_v2"
+UCLA_V2_CROSSWALK_Z_MODE_DEFAULT = "hybrid_raycast"
+UCLA_V2_CROSSWALK_TRIM_DEFAULT = 1
+UCLA_V2_CROSSWALK_HIGH_Z_PRUNE_DEFAULT = 4
+UCLA_V2_CROSSWALK_POLL_SEC_DEFAULT = 2.0
+UCLA_V2_CROSSWALK_CACHE_DEFAULT = "v2xpnp/map/ucla_v2_crosswalk_surface_z_cache.json"
 
 
 @dataclass
@@ -120,6 +129,10 @@ PLANNER_SPECS: dict[str, PlannerSpec] = {
         # LogReplayFollower in route_scenario.py when CUSTOM_EGO_LOG_REPLAY=1 is set
         agent="simulation/leaderboard/team_code/logreplay_agent.py",
         agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml",
+    ),
+    "minimal": PlannerSpec(
+        agent="simulation/leaderboard/team_code/minimal_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/example_config.yaml",
     ),
     "vad": PlannerSpec(
         agent="simulation/leaderboard/team_code/vad_b2d_agent.py",
@@ -235,6 +248,47 @@ def parse_args() -> argparse.Namespace:
         help="Seconds to wait after restarting CARLA before starting the next scenario.",
     )
     parser.add_argument(
+        "--inject-ucla-v2-crosswalk",
+        dest="inject_ucla_v2_crosswalk",
+        action="store_true",
+        help="Automatically draw the UCLA v2 debug crosswalk overlay while evaluator runs.",
+    )
+    parser.add_argument(
+        "--no-inject-ucla-v2-crosswalk",
+        dest="inject_ucla_v2_crosswalk",
+        action="store_false",
+        help="Disable automatic UCLA v2 debug crosswalk overlay injection.",
+    )
+    parser.add_argument(
+        "--ucla-v2-crosswalk-cache-file",
+        default=UCLA_V2_CROSSWALK_CACHE_DEFAULT,
+        help="Path to persistent UCLA v2 crosswalk surface-z cache JSON.",
+    )
+    parser.add_argument(
+        "--ucla-v2-crosswalk-trim-outermost-per-side",
+        type=int,
+        default=UCLA_V2_CROSSWALK_TRIM_DEFAULT,
+        help="Outer stripes removed per side for UCLA v2 crosswalk overlay.",
+    )
+    parser.add_argument(
+        "--ucla-v2-crosswalk-high-z-prune-count",
+        type=int,
+        default=UCLA_V2_CROSSWALK_HIGH_Z_PRUNE_DEFAULT,
+        help="Highest-z stripe count pruned for UCLA v2 crosswalk overlay.",
+    )
+    parser.add_argument(
+        "--ucla-v2-crosswalk-z-mode",
+        default=UCLA_V2_CROSSWALK_Z_MODE_DEFAULT,
+        choices=("hybrid_raycast", "raycast", "ground_projection", "waypoint"),
+        help="Z sampling mode for UCLA v2 crosswalk overlay.",
+    )
+    parser.add_argument(
+        "--ucla-v2-crosswalk-poll-sec",
+        type=float,
+        default=UCLA_V2_CROSSWALK_POLL_SEC_DEFAULT,
+        help="Polling interval (seconds) for UCLA v2 overlay worker.",
+    )
+    parser.add_argument(
         "--scenario-parameter",
         default="simulation/leaderboard/leaderboard/scenarios/scenario_parameter_Interdrive_no_npc.yaml",
         help="Scenario parameter YAML.",
@@ -273,6 +327,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--normalize-actor-z",
+        default=True,
         action="store_true",
         help="Adjust custom actor Z to nearest ground height without changing x/y or rotation.",
     )
@@ -466,6 +521,23 @@ def parse_args() -> argparse.Namespace:
             "Control mode for custom actors. "
             "'policy' uses regular controller behavior (WaypointFollower). "
             "'replay' uses transform/timing log replay."
+        ),
+    )
+    parser.add_argument(
+        "--npc-only-fake-ego",
+        action="store_true",
+        help=(
+            "No-ego mode: keep ego XML files as planner-compatible artifacts, but run this evaluation "
+            "with ego trajectories injected as custom NPC actors and capture images from those fake-ego actors."
+        ),
+    )
+    parser.add_argument(
+        "--fake-ego-control-mode",
+        choices=("policy", "replay"),
+        default=None,
+        help=(
+            "Control mode used specifically for fake-ego actors when --npc-only-fake-ego is enabled. "
+            "If omitted, fake-egos use --custom-actor-control-mode (same as regular NPCs)."
         ),
     )
     parser.add_argument(
@@ -760,6 +832,7 @@ def parse_args() -> argparse.Namespace:
             "For every scenario variant, also run a copy with inter-ego negotiation disabled."
         ),
     )
+    parser.set_defaults(inject_ucla_v2_crosswalk=False)
     return parser.parse_args()
 
 
@@ -893,6 +966,7 @@ class CarlaProcessManager:
 
 
 _active_carla_manager: CarlaProcessManager | None = None
+_active_crosswalk_worker: "UCLAV2CrosswalkWorker | None" = None
 _signal_handlers_installed = False
 
 
@@ -904,6 +978,8 @@ def _install_signal_handlers() -> None:
     def _handler(signum: int, frame: object | None) -> None:
         if _active_carla_manager is not None:
             _active_carla_manager.stop()
+        if _active_crosswalk_worker is not None:
+            _active_crosswalk_worker.stop()
         if signum == signal.SIGINT:
             raise KeyboardInterrupt
         sys.exit(0)
@@ -931,7 +1007,10 @@ def count_negotiation_modes(args: argparse.Namespace) -> int:
 
 
 def estimate_scenario_timeout(args: argparse.Namespace, routes_dir: Path) -> float:
-    ego_routes = detect_ego_routes(routes_dir)
+    ego_routes = detect_ego_routes(
+        routes_dir,
+        replay_mode=(args.planner == "log-replay"),
+    )
     route_count = max(1, ego_routes)
     expected_runs = max(1, args.repetitions) * count_variants(args) * count_negotiation_modes(args)
     base = float(args.timeout) * route_count * expected_runs
@@ -988,9 +1067,175 @@ def find_carla_egg(carla_root: Path) -> Path:
     return artifacts[0]
 
 
-def detect_ego_routes(routes_dir: Path) -> int:
+def _ensure_carla_import_for_overlay(carla_root: Path) -> object:
+    carla_python = carla_root / "PythonAPI"
+    carla_pkg = carla_root / "PythonAPI" / "carla"
+    carla_artifact = find_carla_egg(carla_root)
+    for path in (carla_python, carla_pkg, carla_artifact):
+        p = str(path)
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    import carla  # type: ignore
+
+    return carla
+
+
+def _load_crosswalk_experiment_module(repo_root: Path):
+    module_path = repo_root / "v2xpnp" / "scripts" / "crosswalk_experiment.py"
+    module_name = "crosswalk_experiment_runtime"
+    spec = importlib.util.spec_from_file_location(module_name, str(module_path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to create import spec for {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    # Register before exec so dataclass/type resolution can find module globals.
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise
+    return module
+
+
+class UCLAV2CrosswalkWorker:
+    def __init__(
+        self,
+        repo_root: Path,
+        carla_root: Path,
+        host: str,
+        port: int,
+        cache_file: Path,
+        trim_outermost_per_side: int,
+        high_z_prune_count: int,
+        z_mode: str,
+        poll_sec: float,
+    ) -> None:
+        self.repo_root = repo_root
+        self.carla_root = carla_root
+        self.host = str(host)
+        self.port = int(port)
+        self.cache_file = Path(cache_file)
+        self.trim_outermost_per_side = max(0, int(trim_outermost_per_side))
+        self.high_z_prune_count = max(0, int(high_z_prune_count))
+        self.z_mode = str(z_mode)
+        self.poll_sec = max(0.2, float(poll_sec))
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        # Use bounded-life non-persistent debug lines to prevent unbounded haze buildup
+        # even if CARLA keeps a persistent debug cache across world transitions.
+        self._draw_refresh_sec = max(3.0, 2.0 * self.poll_sec)
+        self._draw_life_time_sec = self._draw_refresh_sec + 0.75
+        self._last_apply_monotonic = 0.0
+        self._warned_cache_miss = False
+        self._apply_count = 0
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="ucla_v2_crosswalk_worker",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+            self._thread = None
+
+    def _run(self) -> None:
+        try:
+            carla = _ensure_carla_import_for_overlay(self.carla_root)
+            cw = _load_crosswalk_experiment_module(self.repo_root)
+            cache = cw.load_surface_z_cache(self.cache_file)
+        except Exception as exc:
+            print(f"[WARN] Crosswalk worker init failed: {exc}")
+            return
+
+        client = carla.Client(self.host, self.port)
+        client.set_timeout(2.0)
+
+        while not self._stop_event.is_set():
+            frame = -1
+            try:
+                world = client.get_world()
+                map_name = str(world.get_map().name).lower()
+                if UCLA_V2_CROSSWALK_MAP_TOKEN not in map_name:
+                    time.sleep(self.poll_sec)
+                    continue
+
+                snapshot = world.get_snapshot()
+                frame = int(snapshot.frame) if snapshot is not None else -1
+                now = time.monotonic()
+                if self._last_apply_monotonic > 0.0 and (
+                    now - self._last_apply_monotonic
+                ) < self._draw_refresh_sec:
+                    time.sleep(self.poll_sec)
+                    continue
+
+                cw.apply_ucla_v2_crosswalk(
+                    world=world,
+                    carla_map_cache=self.repo_root / "v2xpnp" / "map" / "carla_map_cache.pkl",
+                    stripe_step_override=0.0,
+                    cid_z_boosts={},
+                    z_mode=self.z_mode,
+                    z_cache=cache,
+                    trim_outermost_per_side=self.trim_outermost_per_side,
+                    high_z_prune_count=self.high_z_prune_count,
+                    # Match standalone script behavior: use cache first, but allow
+                    # live sampling fallback for robust geometry.
+                    surface_z_cache_only=False,
+                    draw_life_time_s=self._draw_life_time_sec,
+                    draw_persistent_lines=False,
+                )
+                self._last_apply_monotonic = now
+                self._apply_count += 1
+                print(
+                    f"[INFO] UCLA v2 crosswalk applied on {world.get_map().name} "
+                    f"frame={frame} apply_count={self._apply_count} "
+                    f"life={self._draw_life_time_sec:.2f}s refresh={self._draw_refresh_sec:.2f}s"
+                )
+            except Exception as exc:
+                # Keep retries bounded after failures; non-persistent lines prevent
+                # unbounded stacking, but we still rate-limit retries.
+                self._last_apply_monotonic = time.monotonic()
+                if not self._warned_cache_miss:
+                    print(
+                        "[WARN] UCLA v2 crosswalk injection failed "
+                        f"(cache/load/sampling issue): {exc}"
+                    )
+                    self._warned_cache_miss = True
+            time.sleep(self.poll_sec)
+
+        try:
+            cw.save_surface_z_cache(self.cache_file, cache)
+        except Exception:
+            pass
+
+
+def detect_ego_routes(routes_dir: Path, replay_mode: bool = False) -> int:
+    """
+    Count ego route XML files for the active planner mode.
+
+    replay_mode=False -> count non-REPLAY ego routes (default planners, e.g. TCP)
+    replay_mode=True  -> count *_REPLAY ego routes (log-replay planner)
+    """
     count = 0
     for xml_path in routes_dir.rglob("*.xml"):
+        if "actors" in os.path.normpath(str(xml_path)).split(os.sep):
+            continue
+        is_replay_file = "_REPLAY" in xml_path.stem
+        if replay_mode and not is_replay_file:
+            continue
+        if not replay_mode and is_replay_file:
+            continue
         try:
             _, _, role = parse_route_metadata(xml_path.read_bytes())
         except Exception:
@@ -1061,6 +1306,358 @@ def read_manifest(routes_dir: Path) -> tuple[Path | None, Dict[str, List[Dict[st
     except (json.JSONDecodeError, OSError):
         return manifest_path, None
     return manifest_path, data
+
+
+def _extract_trailing_index(path: Path) -> int | None:
+    stem = path.stem
+    match = re.search(r"(\d+)$", stem)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_ego_route_records(
+    routes_dir: Path,
+    replay_mode: bool = False,
+) -> List[Tuple[int, Path, str, str, str | None]]:
+    """
+    Collect ego route XML records from routes_dir.
+
+    replay_mode=True  → only collect *_REPLAY.xml files (for --planner log-replay)
+    replay_mode=False → skip *_REPLAY.xml files (for all other planners, use GRP-simplified)
+    """
+    records: List[Tuple[int, Path, str, str, str | None]] = []
+    fallback_idx = 0
+    for xml_path in sorted(routes_dir.rglob("*.xml")):
+        if "actors" in os.path.normpath(str(xml_path)).split(os.sep):
+            continue
+        is_replay_file = "_REPLAY" in xml_path.stem
+        if replay_mode and not is_replay_file:
+            continue   # log-replay: only want _REPLAY files
+        if not replay_mode and is_replay_file:
+            continue   # other planners: skip _REPLAY files
+        try:
+            route_id, town, role = parse_route_metadata(xml_path.read_bytes())
+        except Exception:
+            continue
+        if role != "ego":
+            continue
+
+        # Strip _REPLAY suffix before extracting the numeric ego index
+        stem_clean = xml_path.stem.replace("_REPLAY", "")
+        ego_idx = _extract_trailing_index(Path(stem_clean))
+        if ego_idx is None:
+            ego_idx = fallback_idx
+            fallback_idx += 1
+
+        model = None
+        try:
+            xml_root = ET.parse(str(xml_path)).getroot()
+            route_node = xml_root.find("route")
+            if route_node is not None:
+                model = route_node.attrib.get("model")
+        except ET.ParseError:
+            pass
+
+        records.append((int(ego_idx), xml_path, str(route_id), str(town), model))
+
+    records.sort(key=lambda item: (item[0], str(item[1])))
+    return records
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_waypoint_speeds(
+    waypoints: List[Tuple[float, float, float]],
+    times: List[float],
+    default_dt: float = 0.1,
+) -> List[float]:
+    """
+    Compute per-waypoint linear speeds (m/s) from waypoint positions and timestamps.
+    """
+    n = len(waypoints)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0.0]
+
+    speeds = [0.0] * n
+    for i in range(n - 1):
+        x0, y0, z0 = waypoints[i]
+        x1, y1, z1 = waypoints[i + 1]
+        dt = default_dt
+        if i < len(times) - 1:
+            cand_dt = float(times[i + 1]) - float(times[i])
+            if cand_dt > 1e-3:
+                dt = cand_dt
+        dist = ((x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2) ** 0.5
+        speeds[i] = max(0.0, float(dist) / max(dt, 1e-3))
+    speeds[-1] = speeds[-2]
+    return speeds
+
+
+def _suppress_initial_jitter_for_stationary_start(
+    waypoints: List[Tuple[float, float, float]],
+    times: List[float],
+    speeds: List[float],
+) -> List[float]:
+    """
+    Force zero speed for an initial near-static prefix and clamp tiny crawl speeds.
+    This prevents parked actors from rolling early due waypoint jitter.
+    """
+    if not waypoints or not speeds:
+        return speeds
+    if len(waypoints) != len(speeds):
+        return speeds
+
+    n = len(waypoints)
+    # Keep suppression conservative: only remove startup creep in a short prefix.
+    move_speed_thr = 0.25  # m/s
+    move_disp_thr = 0.6  # m from initial point
+    max_hold_seconds = 1.5
+
+    t_vals: List[float] = []
+    if len(times) == n:
+        t_vals = [float(t) for t in times]
+    else:
+        t_vals = [0.1 * float(i) for i in range(n)]
+
+    t0 = float(t_vals[0]) if t_vals else 0.0
+    cap_idx = n
+    for i in range(1, n):
+        if float(t_vals[i]) - t0 >= max_hold_seconds:
+            cap_idx = i
+            break
+
+    x0, y0, z0 = waypoints[0]
+    move_idx = None
+    for i in range(1, n):
+        xi, yi, zi = waypoints[i]
+        disp = ((xi - x0) ** 2 + (yi - y0) ** 2 + (zi - z0) ** 2) ** 0.5
+        seg_speed = max(float(speeds[i - 1]), float(speeds[i]))
+        if disp >= move_disp_thr or seg_speed >= move_speed_thr:
+            move_idx = i
+            break
+
+    if move_idx is None:
+        # Never zero an entire trajectory; return original profile.
+        return speeds
+
+    hold_until = max(0, min(int(move_idx), int(cap_idx)))
+
+    out = list(speeds)
+    for i in range(min(hold_until, len(out))):
+        out[i] = 0.0
+
+    # Clamp tiny crawl speeds globally to avoid PID creeping on noisy tracks.
+    for i, s in enumerate(out):
+        if float(s) < 0.05:
+            out[i] = 0.0
+
+    return out
+
+
+def _estimate_target_speed_from_speeds(speeds: List[float]) -> float | None:
+    if not speeds:
+        return None
+    moving = [float(s) for s in speeds if float(s) >= 0.3]
+    sample = moving if moving else [float(s) for s in speeds]
+    if not sample:
+        return None
+    sample_sorted = sorted(sample)
+    idx = min(len(sample_sorted) - 1, max(0, int(0.75 * (len(sample_sorted) - 1))))
+    return max(0.0, float(sample_sorted[idx]))
+
+
+def _build_fake_ego_npc_xml(
+    src_xml: Path,
+    dst_xml: Path,
+    control_mode: str,
+    model: str | None,
+) -> float | None:
+    """
+    Convert an ego route XML into an NPC-style route XML suitable for custom actor policy/replay control.
+    Returns the computed target speed (m/s) when available.
+    """
+    root = ET.parse(str(src_xml)).getroot()
+    route_node = root.find("route")
+    if route_node is None:
+        raise RuntimeError(f"Missing <route> in {src_xml}")
+
+    town = route_node.attrib.get("town", "Town01")
+    route_id = route_node.attrib.get("id", "0")
+    waypoints = list(route_node.iter("waypoint"))
+    if not waypoints:
+        raise RuntimeError(f"No <waypoint> entries in {src_xml}")
+
+    xyz: List[Tuple[float, float, float]] = []
+    times: List[float] = []
+    for wp in waypoints:
+        x = _safe_float(wp.attrib.get("x")) or 0.0
+        y = _safe_float(wp.attrib.get("y")) or 0.0
+        z = _safe_float(wp.attrib.get("z")) or 0.0
+        xyz.append((float(x), float(y), float(z)))
+        t = _safe_float(wp.attrib.get("time"))
+        if t is None:
+            t = _safe_float(wp.attrib.get("t"))
+        times.append(float(t) if t is not None else 0.0)
+
+    speeds = _compute_waypoint_speeds(xyz, times, default_dt=0.1)
+    speeds = _suppress_initial_jitter_for_stationary_start(xyz, times, speeds)
+    target_speed = _estimate_target_speed_from_speeds(speeds)
+
+    out_root = ET.Element("routes")
+    route_attrs = {
+        "id": str(route_id),
+        "town": str(town),
+        "role": "npc",
+        # Let fake-egos use the same snap_to_road behavior as regular NPCs (defaults to true)
+        # This ensures they are properly aligned to road lanes
+        "control_mode": str(control_mode),
+    }
+    if model:
+        route_attrs["model"] = str(model)
+    if target_speed is not None and target_speed > 0.0:
+        route_attrs["target_speed"] = f"{float(target_speed):.2f}"
+
+    out_route = ET.SubElement(out_root, "route", route_attrs)
+    for i, wp in enumerate(waypoints):
+        attrs = dict(wp.attrib)
+        if i < len(speeds):
+            attrs["speed"] = f"{float(speeds[i]):.4f}"
+        ET.SubElement(out_route, "waypoint", attrs)
+
+    out_tree = ET.ElementTree(out_root)
+    if hasattr(ET, "indent"):
+        ET.indent(out_tree, space="  ")
+    out_tree.write(str(dst_xml), encoding="utf-8", xml_declaration=True)
+    return target_speed
+
+
+def prepare_npc_only_fake_ego_routes(
+    routes_dir: Path,
+    fake_ego_control_mode: str,
+    replay_mode: bool = False,
+) -> Tuple[Path, tempfile.TemporaryDirectory, List[Tuple[int, str]], Path]:
+    """
+    Create an isolated routes clone where role=ego XML files are also injected as NPC custom actors.
+
+    This keeps original planner-compatible ego XML artifacts unchanged while enabling a no-ego runtime
+    that drives those trajectories through the custom-actor stack.
+
+    replay_mode=True  → uses *_REPLAY.xml ego files (for --planner log-replay)
+    replay_mode=False → uses GRP-simplified ego files, skips *_REPLAY.xml
+    """
+    temp_dir = tempfile.TemporaryDirectory(prefix=f"{routes_dir.name}_npc_only_")
+    clone_root = Path(temp_dir.name) / routes_dir.name
+    shutil.copytree(routes_dir, clone_root)
+
+    ego_records = _collect_ego_route_records(clone_root, replay_mode=replay_mode)
+    if not ego_records:
+        temp_dir.cleanup()
+        raise RuntimeError(
+            f"--npc-only-fake-ego requested, but no role=\"ego\" routes were found under {routes_dir}."
+        )
+
+    manifest_path = clone_root / "actors_manifest.json"
+    manifest_data: Dict[str, List[Dict[str, str]]]
+    if manifest_path.exists():
+        try:
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_data = raw if isinstance(raw, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            manifest_data = {}
+    else:
+        manifest_data = {}
+
+    npc_entries = manifest_data.get("npc")
+    if not isinstance(npc_entries, list):
+        npc_entries = []
+        manifest_data["npc"] = npc_entries
+
+    ego_model_by_file: Dict[str, str] = {}
+    ego_entries = manifest_data.get("ego")
+    if isinstance(ego_entries, list):
+        for entry in ego_entries:
+            if not isinstance(entry, dict):
+                continue
+            rel_file = entry.get("file")
+            rel_model = entry.get("model")
+            if rel_file and rel_model:
+                ego_model_by_file[str(rel_file)] = str(rel_model)
+
+    existing_names = set()
+    for role_entries in manifest_data.values():
+        if not isinstance(role_entries, list):
+            continue
+        for entry in role_entries:
+            if isinstance(entry, dict):
+                name = entry.get("name")
+                if name:
+                    existing_names.add(str(name))
+
+    fake_ego_views: List[Tuple[int, str]] = []
+    used_camera_ids = set()
+
+    fake_npc_dir = clone_root / "actors" / "npc"
+    fake_npc_dir.mkdir(parents=True, exist_ok=True)
+    for ego_idx, ego_xml, route_id, town, model in ego_records:
+        base_name = f"fake_ego_{ego_idx}"
+        name = base_name
+        suffix = 1
+        while name in existing_names:
+            name = f"{base_name}_{suffix}"
+            suffix += 1
+        existing_names.add(name)
+
+        fake_xml_name = f"{str(town).lower()}_custom_FakeEgo_{ego_idx}_npc.xml"
+        fake_xml_path = fake_npc_dir / fake_xml_name
+
+        if not model:
+            rel_ego_file = ego_xml.relative_to(clone_root).as_posix()
+            model = ego_model_by_file.get(rel_ego_file)
+        if not model or str(model).strip().lower() in ("ego", "vehicle.ego", "hero"):
+            model = "vehicle.lincoln.mkz_2017"
+
+        target_speed = _build_fake_ego_npc_xml(
+            src_xml=ego_xml,
+            dst_xml=fake_xml_path,
+            control_mode=str(fake_ego_control_mode),
+            model=str(model),
+        )
+        rel_file = fake_xml_path.relative_to(clone_root).as_posix()
+        npc_entry: Dict[str, str] = {
+            "file": rel_file,
+            "route_id": str(route_id),
+            "town": str(town),
+            "name": name,
+            "kind": "npc",
+            "control_mode": str(fake_ego_control_mode),
+        }
+        if model:
+            npc_entry["model"] = str(model)
+        if target_speed is not None and target_speed > 0.0:
+            npc_entry["speed"] = round(float(target_speed), 2)
+            npc_entry["target_speed"] = round(float(target_speed), 2)
+        npc_entries.append(npc_entry)
+
+        camera_id = int(ego_idx)
+        while camera_id in used_camera_ids:
+            camera_id += 1
+        used_camera_ids.add(camera_id)
+        fake_ego_views.append((camera_id, name))
+
+    manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+    fake_ego_views.sort(key=lambda item: item[0])
+    return clone_root, temp_dir, fake_ego_views, manifest_path
 
 
 def apply_weather_override(routes_dir: Path, weather: dict[str, float]) -> None:
@@ -1168,8 +1765,16 @@ def align_ego_routes_in_directory(
 
 
 def main() -> None:
-    global _active_carla_manager
+    global _active_carla_manager, _active_crosswalk_worker
     args = parse_args()
+    if args.npc_only_fake_ego and args.planner not in (None, "log-replay"):
+        print(
+            "[WARN] --npc-only-fake-ego requires log-replay planner semantics. "
+            f"Forcing --planner log-replay (was {args.planner})."
+        )
+        args.planner = "log-replay"
+    if args.npc_only_fake_ego and args.planner is None:
+        args.planner = "log-replay"
     if args.planner:
         planner = PLANNER_SPECS[args.planner]
         if args.agent is None:
@@ -1195,6 +1800,8 @@ def main() -> None:
     scenario_name = args.scenario_name
     manifest_path: Path | None = None
     actors_manifest: Dict[str, List[Dict[str, str]]] | None = None
+    fake_ego_temp_dir: tempfile.TemporaryDirectory | None = None
+    fake_ego_views: List[Tuple[int, str]] = []
 
     if args.zip is not None:
         scenario_summary = prepare_routes_from_zip(
@@ -1310,6 +1917,26 @@ def main() -> None:
                     new_cmd.extend(
                         ["--custom-actor-control-mode", str(args.custom_actor_control_mode)]
                     )
+                    if args.inject_ucla_v2_crosswalk:
+                        new_cmd.append("--inject-ucla-v2-crosswalk")
+                    else:
+                        new_cmd.append("--no-inject-ucla-v2-crosswalk")
+                    new_cmd.extend(
+                        [
+                            "--ucla-v2-crosswalk-cache-file",
+                            str(args.ucla_v2_crosswalk_cache_file),
+                            "--ucla-v2-crosswalk-trim-outermost-per-side",
+                            str(args.ucla_v2_crosswalk_trim_outermost_per_side),
+                            "--ucla-v2-crosswalk-high-z-prune-count",
+                            str(args.ucla_v2_crosswalk_high_z_prune_count),
+                            "--ucla-v2-crosswalk-z-mode",
+                            str(args.ucla_v2_crosswalk_z_mode),
+                            "--ucla-v2-crosswalk-poll-sec",
+                            str(args.ucla_v2_crosswalk_poll_sec),
+                        ]
+                    )
+                    if args.npc_only_fake_ego:
+                        new_cmd.append("--npc-only-fake-ego")
 
                     timeout_seconds = None
                     if not args.dry_run and args.carla_crash_multiplier > 0:
@@ -1353,7 +1980,10 @@ def main() -> None:
             print(f"{'='*60}")
             return
         
-        auto_ego_num = detect_ego_routes(routes_dir)
+        auto_ego_num = detect_ego_routes(
+            routes_dir,
+            replay_mode=(args.planner == "log-replay"),
+        )
         if auto_ego_num == 0:
             raise RuntimeError(
                 f"No ego routes located under {routes_dir}. "
@@ -1361,7 +1991,47 @@ def main() -> None:
             )
         manifest_path, actors_manifest = read_manifest(routes_dir)
 
-    ego_num = args.ego_num or auto_ego_num
+    if auto_ego_num == 0:
+        raise RuntimeError(
+            f"No ego routes located under {routes_dir}. "
+            "At least one role=\"ego\" XML is required as source trajectory input."
+        )
+
+    # Determine control mode for fake_ego actors
+    # Default to "replay" for --npc-only-fake-ego mode since we want to replay recorded trajectories
+    if args.fake_ego_control_mode:
+        effective_fake_ego_control_mode = str(args.fake_ego_control_mode).strip().lower()
+    elif args.npc_only_fake_ego:
+        # When using npc-only-fake-ego, default to replay mode for accurate trajectory following
+        effective_fake_ego_control_mode = "replay"
+    else:
+        effective_fake_ego_control_mode = str(args.custom_actor_control_mode).strip().lower()
+
+    if args.npc_only_fake_ego:
+        if args.ego_num not in (None, 0):
+            print(
+                "[WARN] --npc-only-fake-ego forces --ego-num 0. "
+                f"Ignoring explicit --ego-num {args.ego_num}."
+            )
+        (
+            routes_dir,
+            fake_ego_temp_dir,
+            fake_ego_views,
+            manifest_path,
+        ) = prepare_npc_only_fake_ego_routes(
+            routes_dir=routes_dir,
+            fake_ego_control_mode=str(effective_fake_ego_control_mode),
+            replay_mode=(args.planner == "log-replay"),
+        )
+        manifest_path, actors_manifest = read_manifest(routes_dir)
+        ego_num = 0
+    else:
+        ego_num = auto_ego_num if args.ego_num is None else int(args.ego_num)
+        if ego_num <= 0:
+            raise RuntimeError(
+                "--ego-num must be >= 1 unless --npc-only-fake-ego is enabled."
+            )
+
     scenario_name = scenario_name or routes_dir.name
     results_tag = args.results_tag or scenario_name
     if args.results_subdir:
@@ -1485,10 +2155,19 @@ def main() -> None:
 
     print("Scenario directory:", routes_dir)
     print("Ego vehicles:", ego_num)
+    if args.npc_only_fake_ego:
+        print("Mode: npc-only fake-ego (no real egos)")
+        print("Fake ego control mode:", str(effective_fake_ego_control_mode))
+        if fake_ego_views:
+            view_desc = ", ".join(f"{name}->rgb_front_{idx}" for idx, name in fake_ego_views)
+            print("Fake ego camera views:", view_desc)
     if scenario_summary is not None:
         print("Actors discovered:")
         for path, role, route_id, town in scenario_summary["routes"]:
-            rel = path.relative_to(routes_dir)
+            try:
+                rel = path.relative_to(routes_dir)
+            except ValueError:
+                rel = path
             print(f"  - {role:11s} route_id={route_id:>4s} town={town} file={rel}")
     elif actors_manifest:
         print("Actors discovered:")
@@ -1521,6 +2200,7 @@ def main() -> None:
             print(f"  - {base_name}{mode_note}: {spec.description} [{nego.description}]")
 
     carla_manager = None
+    crosswalk_worker: UCLAV2CrosswalkWorker | None = None
     if args.start_carla and not args.dry_run:
         carla_manager = CarlaProcessManager(
             carla_root=carla_root,
@@ -1536,6 +2216,29 @@ def main() -> None:
         selected_port = carla_manager.start()
         if selected_port != args.port:
             args.port = selected_port
+
+    if args.inject_ucla_v2_crosswalk and not args.dry_run:
+        crosswalk_worker = UCLAV2CrosswalkWorker(
+            repo_root=repo_root,
+            carla_root=carla_root,
+            host="127.0.0.1",
+            port=int(args.port),
+            cache_file=(repo_root / str(args.ucla_v2_crosswalk_cache_file)).resolve(),
+            trim_outermost_per_side=int(args.ucla_v2_crosswalk_trim_outermost_per_side),
+            high_z_prune_count=int(args.ucla_v2_crosswalk_high_z_prune_count),
+            z_mode=str(args.ucla_v2_crosswalk_z_mode),
+            poll_sec=float(args.ucla_v2_crosswalk_poll_sec),
+        )
+        _active_crosswalk_worker = crosswalk_worker
+        crosswalk_worker.start()
+        print(
+            "[INFO] UCLA v2 crosswalk worker enabled: "
+            f"z_mode={args.ucla_v2_crosswalk_z_mode} "
+            f"trim={int(args.ucla_v2_crosswalk_trim_outermost_per_side)} "
+            f"prune={int(args.ucla_v2_crosswalk_high_z_prune_count)} "
+            f"cache={args.ucla_v2_crosswalk_cache_file} "
+            "(cache + live fallback)"
+        )
 
     try:
         for spec, negotiation in run_matrix:
@@ -1594,6 +2297,17 @@ def main() -> None:
                     env.pop("CUSTOM_ACTOR_MANIFEST", None)
                     env.pop("CUSTOM_ACTOR_ROOT", None)
                     env.pop("CUSTOM_ACTOR_BEHAVIORS", None)
+
+                if args.npc_only_fake_ego and fake_ego_views:
+                    env["CUSTOM_FAKE_EGO_CAMERA_NAMES"] = ",".join(
+                        name for _, name in fake_ego_views
+                    )
+                    env["CUSTOM_FAKE_EGO_CAMERA_IDS"] = ",".join(
+                        str(idx) for idx, _ in fake_ego_views
+                    )
+                else:
+                    env.pop("CUSTOM_FAKE_EGO_CAMERA_NAMES", None)
+                    env.pop("CUSTOM_FAKE_EGO_CAMERA_IDS", None)
 
                 if negotiation.disable_comm:
                     env["COLMDRIVER_DISABLE_NEGOTIATION"] = "1"
@@ -1699,6 +2413,12 @@ def main() -> None:
                     env["CUSTOM_ACTOR_LOG_REPLAY"] = "1"
                 else:
                     env.pop("CUSTOM_ACTOR_LOG_REPLAY", None)
+                # When custom actors are explicitly in replay mode, preserve authored
+                # XML pose exactly and avoid per-tick runtime ground pose rewrites.
+                if str(args.custom_actor_control_mode).strip().lower() == "replay":
+                    env["CUSTOM_ACTOR_REPLAY_DISABLE_RUNTIME_GROUND_POSE"] = "1"
+                else:
+                    env.pop("CUSTOM_ACTOR_REPLAY_DISABLE_RUNTIME_GROUND_POSE", None)
                 if args.smooth_log_replay_vehicles is not None:
                     env["CUSTOM_LOG_REPLAY_SMOOTH_VEHICLES"] = (
                         "1" if args.smooth_log_replay_vehicles else "0"
@@ -1789,6 +2509,9 @@ def main() -> None:
                     env["CUSTOM_EGO_NORMALIZE_Z"] = "1"
                 else:
                     env.pop("CUSTOM_EGO_NORMALIZE_Z", None)
+                # Always enable per-tick vehicle tilt alignment so vehicles
+                # pitch/roll match the road surface (4-corner ground raycast).
+                env["CUSTOM_EGO_GROUND_ALIGN_TILT"] = "1"
 
                 scenario_parameter_rel = spec.scenario_parameter or args.scenario_parameter
                 scenario_parameter_path = (repo_root / scenario_parameter_rel).resolve()
@@ -1857,9 +2580,14 @@ def main() -> None:
                 if temp_dir is not None:
                     temp_dir.cleanup()
     finally:
+        if crosswalk_worker:
+            crosswalk_worker.stop()
+        _active_crosswalk_worker = None
         if carla_manager:
             carla_manager.stop()
         _active_carla_manager = None
+        if fake_ego_temp_dir is not None:
+            fake_ego_temp_dir.cleanup()
 
 
 if __name__ == "__main__":

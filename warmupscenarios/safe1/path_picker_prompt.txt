@@ -1,0 +1,210 @@
+You are given a list of candidate vehicle paths in a road network.
+Each candidate has a NAME plus a compact SIGNATURE describing its entry direction,
+exit direction, and overall maneuver.
+
+TASK:
+Given a user scenario description (vehicles and their intended motions), choose the
+best matching candidate path NAME for each moving vehicle.
+Ignore static or parked objects; only assign paths to moving vehicles.
+
+HOW TO INTERPRET THE DESCRIPTION (IMPORTANT):
+- Vehicles are described relative to roads, directions, and other vehicles.
+- Phrases like 'coming from X', 'approaching from X', or 'on the X road' constrain
+  the ENTRY direction of the path.
+- Phrases like 'onto X', 'to X', or 'leaves onto X' constrain the EXIT direction.
+- If a vehicle is described as coming from the same direction as another vehicle,
+  their chosen paths should have the same or compatible entry direction.
+- If a T-junction is mentioned, the 'main road' refers to the straight-through road
+  and the 'side road' refers to the terminating branch.
+
+PERPENDICULAR / CROSS-TRAFFIC INTERPRETATION (CRITICAL):
+- 'Perpendicular road to the RIGHT of Vehicle X's approach': if Vehicle X is westbound (W),
+  the road to their right is the southbound road (entry=S). If Vehicle X is eastbound (E),
+  the road to their right is the northbound road (entry=N). Apply 90-degree clockwise rotation.
+- 'Perpendicular road to the LEFT of Vehicle X's approach': apply 90-degree counter-clockwise.
+- 'Turns right onto Vehicle X's exit road': the vehicle's EXIT direction must match Vehicle X's
+  exit direction. If Vehicle X exits westbound (W), the turning vehicle must also exit W.
+- 'Turns left onto Vehicle X's exit road': same logic - EXIT directions must match.
+
+PATH SELECTION GUIDELINES:
+- First match the described source and destination semantics (where the vehicle comes from and goes to).
+- Then match the maneuver (left, right, straight).
+- Prefer paths whose entry and exit directions best align with the description,
+  even if multiple candidates share the same maneuver.
+- A path that reverses 'from' vs 'onto' semantics is a poor match and should only
+  be chosen if no better option exists.
+
+IMPORTANT RULES:
+1) Return JSON ONLY (no prose, no markdown, no code fences).
+2) path_name MUST be copied EXACTLY from one of the provided candidate name strings.
+3) If ambiguous, still pick the best match and include confidence in [0,1].
+
+CANDIDATE PATHS (JSON):
+{
+  "context": {
+    "nodes": "town_nodes/Town02.json",
+    "crop_region": {
+      "xmin": 110.0,
+      "xmax": 170.0,
+      "ymin": 210.0,
+      "ymax": 250.0
+    },
+    "parameters": {
+      "max_yaw_diff_deg": 60.0,
+      "connect_radius_m": 6.0,
+      "min_path_length_m": 20.0,
+      "max_paths": 100,
+      "max_depth": 5,
+      "turn_frame": "WORLD_FRAME"
+    },
+    "num_candidates": 6,
+    "turn_frame": "WORLD_FRAME"
+  },
+  "candidates": [
+    {
+      "name": "path_001__man=right__entry=N(90deg)__exit=E(-180deg)__len=110.8m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.05729576041449,
+        "road_id": 9,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.9665774657418,
+        "road_id": 11,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 110.83356238909238
+    },
+    {
+      "name": "path_002__man=left__entry=N(90deg)__exit=W(0deg)__len=85.1m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.05729576041449,
+        "road_id": 9,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.03342253425833519,
+        "road_id": 10,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "left",
+        "left"
+      ],
+      "num_segments": 3,
+      "length_m": 85.08894090646925
+    },
+    {
+      "name": "path_003__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=126.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.96657746574166,
+        "road_id": 10,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.9665774657418,
+        "road_id": 11,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 126.00002549999597
+    },
+    {
+      "name": "path_004__man=right__entry=E(-180deg)__exit=S(-90deg)__len=78.8m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.96657746574166,
+        "road_id": 10,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.94270423958551,
+        "road_id": 9,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "right"
+      ],
+      "num_segments": 3,
+      "length_m": 78.83014158560357
+    },
+    {
+      "name": "path_005__man=straight__entry=W(0deg)__exit=W(0deg)__len=126.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.03342253425819308,
+        "road_id": 11,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.03342253425833519,
+        "road_id": 10,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 126.00002549999599
+    },
+    {
+      "name": "path_006__man=left__entry=W(0deg)__exit=S(-90deg)__len=117.1m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.03342253425819308,
+        "road_id": 11,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.94270423958551,
+        "road_id": 9,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "left",
+        "left"
+      ],
+      "num_segments": 3,
+      "length_m": 117.09153170064543
+    }
+  ],
+  "output_schema": {
+    "vehicles": [
+      {
+        "vehicle": "Vehicle 1",
+        "path_name": "path_###__...",
+        "confidence": 0.0
+      }
+    ]
+  }
+}
+
+USER SCENARIO DESCRIPTION:
+Vehicle 1 is traveling straight, and then continues straight at the intersection region. Vehicle 2 is traveling straight, coming from the opposite direction as Vehicle 1, and then continues straight at the intersection region. In the intersection, in Vehicle 1's lane, there is a parked vehicle. 
+(Only assign paths to moving vehicles; ignore static/parked props.)

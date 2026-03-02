@@ -1,0 +1,22 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town03_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "07_placement",
+      "town": "Town03"
+    },
+    {
+      "file": "town03_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "07_placement",
+      "town": "Town03"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": []
+}

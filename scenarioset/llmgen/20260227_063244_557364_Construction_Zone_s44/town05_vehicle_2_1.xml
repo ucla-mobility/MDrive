@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="ego" speed="7.0">
+    <waypoint x="-162.806" y="94.880" z="0.000" yaw="0.065570"/>
+    <waypoint x="-156.806" y="94.887" z="0.000" yaw="-2.962693"/>
+    <waypoint x="-90.642" y="91.463" z="0.000" yaw="0.065553"/>
+    <waypoint x="-64.642" y="91.493" z="0.000" yaw="0.065553"/>
+  </route>
+</routes>

@@ -1,0 +1,15 @@
+{
+  "description": "Vehicle 1 is traveling straight, and then continues straight at the intersection region. Vehicle 2 is traveling straight, coming from the opposite direction as Vehicle 1, and then continues straight at the intersection region. In the intersection, in Vehicle 1's lane, there is a parked vehicle. ",
+  "vehicles": [
+    "Vehicle 1",
+    "Vehicle 2"
+  ],
+  "constraints": {
+    "vehicle_speeds": [],
+    "spawn_relations": [],
+    "lane_changes": [],
+    "options": {
+      "synchronize_conflicts": true
+    }
+  }
+}

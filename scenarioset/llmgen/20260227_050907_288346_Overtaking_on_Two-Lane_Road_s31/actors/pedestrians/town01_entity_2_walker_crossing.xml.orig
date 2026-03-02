@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town01" role="pedestrian" model="walker.pedestrian.0001" speed="1.02">
+    <waypoint x="54.678" y="325.314" z="0.000" yaw="0.028648"/>
+    <waypoint x="56.869" y="325.315" z="0.000" yaw="0.028648"/>
+    <waypoint x="59.059" y="325.317" z="0.000" yaw="0.028648"/>
+    <waypoint x="61.250" y="325.318" z="0.000" yaw="0.028648"/>
+    <waypoint x="63.440" y="325.319" z="0.000" yaw="0.028648"/>
+    <waypoint x="65.631" y="325.320" z="0.000" yaw="0.028648"/>
+    <waypoint x="67.821" y="325.321" z="0.000" yaw="0.028648"/>
+    <waypoint x="70.012" y="325.322" z="0.000" yaw="0.028648"/>
+  </route>
+</routes>

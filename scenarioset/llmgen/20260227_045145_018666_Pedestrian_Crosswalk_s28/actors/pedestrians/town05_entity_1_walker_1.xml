@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="pedestrian" model="walker.pedestrian.0001" speed="1.7">
+    <waypoint x="-133.791" y="78.038" z="0.000" yaw="90.071620"/>
+    <waypoint x="-133.819" y="100.528" z="0.000" yaw="90.071620"/>
+  </route>
+</routes>

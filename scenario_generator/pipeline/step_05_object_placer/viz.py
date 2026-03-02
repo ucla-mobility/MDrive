@@ -507,7 +507,7 @@ def visualize(
 
         # Direction arrow
         if len(pts_off) >= 2:
-            arr = ax.annotate(
+            ax.annotate(
                 "",
                 xy=(pts_off[-1, 0], pts_off[-1, 1]),
                 xytext=(pts_off[-2, 0], pts_off[-2, 1]),
@@ -588,7 +588,7 @@ def visualize(
                     ln, = ax.plot(xs, ys, linestyle=":", linewidth=1.6, alpha=0.75, zorder=4)
                     motion_line_artists.append(ln)
 
-                arr = ax.annotate(
+                ax.annotate(
                     "",
                     xy=(xs[-1], ys[-1]),
                     xytext=(xs[-2], ys[-2]),

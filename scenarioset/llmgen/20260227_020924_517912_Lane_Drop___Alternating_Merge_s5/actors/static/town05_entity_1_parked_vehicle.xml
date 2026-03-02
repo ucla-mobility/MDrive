@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="static" model="vehicle.audi.a2" speed="0.0">
+    <waypoint x="-160.793" y="83.508" z="0.000" yaw="-179.942704"/>
+  </route>
+</routes>

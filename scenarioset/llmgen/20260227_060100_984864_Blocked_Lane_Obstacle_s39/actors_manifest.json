@@ -1,0 +1,51 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": [
+    {
+      "file": "actors/static/town05_entity_1_parked_car_1.xml",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "name": "entity_1",
+      "route_id": "07_placement",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_2_parked_car_2.xml",
+      "kind": "static",
+      "model": "vehicle.carlamotors.carlacola",
+      "name": "entity_2",
+      "route_id": "07_placement",
+      "speed": 0.0,
+      "town": "Town05"
+    }
+  ]
+}

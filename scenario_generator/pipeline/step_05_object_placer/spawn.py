@@ -13,6 +13,12 @@ from .geometry import (
     wrap180,
 )
 
+def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
 
 def infer_speed_mps(category: str, speed_profile: str) -> float:
     # Baselines: walkers ~1.7, cyclists ~4.0, vehicles ~8.0
@@ -163,6 +169,7 @@ def build_motion_waypoints(
         
         # Determine normal from segment tangent at anchor
         _, t = point_and_tangent_at_s(seg_points, float(motion.get("anchor_s_along", 0.5)))
+        n_right = right_normal_world(t)
         
         # Cross direction: use explicit direction, or infer from start lateral
         side = str(motion.get("cross_direction", "unknown")).lower()
@@ -176,32 +183,69 @@ def build_motion_waypoints(
             else:
                 side = "left"  # default to crossing left
         
-        # ALWAYS use SIDEWALK_OFFSET_M for pedestrians crossing the road
-        # This ensures pedestrians spawn from sidewalks, not from the middle of adjacent lanes
-        start_offset_m = SIDEWALK_OFFSET_M
-        
+        # If local road-edge bounds are provided, use them directly so start/end are
+        # guaranteed to be outside the outermost drivable lane by edge_clearance_m.
+        road_lat_min = _safe_float(motion.get("road_lat_min_m"))
+        road_lat_max = _safe_float(motion.get("road_lat_max_m"))
+        edge_clearance_m = _safe_float(motion.get("edge_clearance_m"), 0.5)
+        if edge_clearance_m is None:
+            edge_clearance_m = 0.5
+        edge_clearance_m = max(0.0, float(edge_clearance_m))
+
+        # Get base point from lane center of the anchor segment
+        center_spawn = compute_spawn_from_anchor(seg_points, float(motion.get("anchor_s_along", 0.5)), "center")
+        p_center = np.array([center_spawn["x"], center_spawn["y"]], dtype=float)
+
+        if (
+            road_lat_min is not None
+            and road_lat_max is not None
+            and float(road_lat_max) > float(road_lat_min)
+        ):
+            if side == "left":
+                # Start from right side of roadway envelope, cross toward left.
+                start_lat = float(road_lat_max) + edge_clearance_m
+                end_lat = float(road_lat_min) - edge_clearance_m
+            else:
+                # Start from left side of roadway envelope, cross toward right.
+                start_lat = float(road_lat_min) - edge_clearance_m
+                end_lat = float(road_lat_max) + edge_clearance_m
+
+            p0 = p_center + start_lat * n_right
+            p1 = p_center + end_lat * n_right
+            cross_vec = p1 - p0
+            norm = float(np.linalg.norm(cross_vec))
+            if norm > 1e-9:
+                yaw = wrap180(heading_deg_from_vec(cross_vec / norm))
+            else:
+                yaw = wrap180(heading_deg_from_vec(n_right))
+            return [
+                {"x": float(p0[0]), "y": float(p0[1]), "yaw_deg": float(yaw), "speed_mps": speed},
+                {"x": float(p1[0]), "y": float(p1[1]), "yaw_deg": float(yaw), "speed_mps": speed},
+            ]
+
+        # Fallback: infer sidewalk offset scalar and crossing distance.
+        start_offset_m = float(motion.get("start_offset_m", SIDEWALK_OFFSET_M))
+        if start_offset_m < SIDEWALK_OFFSET_M:
+            start_offset_m = SIDEWALK_OFFSET_M
+
         # Calculate road crossing geometry
         # Crossing distance: from sidewalk to opposite sidewalk across the entire road
         # Need to cross: sidewalk + all lanes + opposite sidewalk
         # For multi-lane roads, use a larger crossing distance
-        default_road_crossing_m = 2 * SIDEWALK_OFFSET_M + 2 * LANE_WIDTH_M
+        default_road_crossing_m = 2 * start_offset_m + 2 * LANE_WIDTH_M
         dist = float(motion.get("cross_distance_m", default_road_crossing_m))
-        
-        # Get base point from lane center of the anchor segment
-        center_spawn = compute_spawn_from_anchor(seg_points, float(motion.get("anchor_s_along", 0.5)), "center")
-        p_center = np.array([center_spawn["x"], center_spawn["y"]], dtype=float)
         
         # Determine start side based on cross direction
         # If crossing "left" (rightward to leftward), start from right side (offroad_right)
         # If crossing "right" (leftward to rightward), start from left side (offroad_left)
         if side == "left":
             # Start from right sidewalk, cross left
-            start_normal = right_normal_world(t)
+            start_normal = n_right
             cross_normal = left_normal_world(t)
         else:
             # Start from left sidewalk, cross right
             start_normal = left_normal_world(t)
-            cross_normal = right_normal_world(t)
+            cross_normal = n_right
         
         # Calculate start point on the sidewalk (off-road)
         p0 = p_center + start_offset_m * start_normal

@@ -17,7 +17,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import matplotlib.pyplot as plt

@@ -5,7 +5,7 @@ import numpy as np
 
 import generate_legal_paths as glp
 
-from .models import CropFeatures, CropKey, GeometrySpec
+from .models import CropFeatures, CropKey
 
 
 def _opposite_dir(d: str) -> str:
@@ -261,8 +261,9 @@ def compute_crop_features(
     # (handles cases where curved roads cause 4 cardinal directions but still form a T)
     is_t_fallback = (len(dirs) == 3) or (len(all_roads) == 3 and len(dirs) <= 4)
 
-    is_t = is_t_corridor or is_t_fallback
     is_four = (len(dirs) >= 4 and len(all_roads) >= 4)
+    # Keep topology flags mutually exclusive to avoid ambiguous downstream logic.
+    is_t = (is_t_corridor or is_t_fallback) and not is_four
 
     by_exit: Dict[Tuple[int, int], set] = {}
     for s in sigs:

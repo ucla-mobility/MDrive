@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .geometry import (
     CropBox,
@@ -263,7 +263,6 @@ def refine_spawn_and_speeds_soft_csp(
     W_SPAWN_REL = 4.0
     W_START_SHIFT = 0.2
     W_SPEED_SHIFT = 0.2
-    W_SPAWN_SEP = 6.0  # soft penalty if spawns are too close
     MIN_SPAWN_SEP_M = 8.0  # Increased from 4.0 to account for vehicle length + CARLA safety margin
     if min_spawn_sep_m is not None and float(min_spawn_sep_m) > 0.0:
         MIN_SPAWN_SEP_M = float(min_spawn_sep_m)
@@ -339,10 +338,34 @@ def refine_spawn_and_speeds_soft_csp(
             total += W_START_SHIFT * ds
             total += W_SPEED_SHIFT * (assign_speed[v] - base_speed[v]) ** 2
 
+        # Prefer keeping each refined path close to the original picked length.
+        # This avoids large truncations that can silently alter scenario semantics.
+        W_LENGTH_SHRINK = 200.0 if n_vehicles >= 4 else 80.0
+        MIN_KEEP_RATIO = 0.75 if n_vehicles >= 4 else 0.65
+        length_shrink_debug = []
+        for v in vehicles:
+            pts = base[v]["pts"]
+            cum = _polyline_cumdist(pts)
+            base_len = max(1e-3, float(cum[base[v]["end"]] - cum[base[v]["start"]]))
+            refined_len = max(0.0, float(cum[assign_end[v]] - cum[assign_start[v]]))
+            keep_ratio = refined_len / base_len
+            if keep_ratio < MIN_KEEP_RATIO:
+                total += W_LENGTH_SHRINK * ((MIN_KEEP_RATIO - keep_ratio) ** 2) * base_len
+                length_shrink_debug.append(
+                    {
+                        "vehicle": v,
+                        "keep_ratio": keep_ratio,
+                        "base_len_m": base_len,
+                        "refined_len_m": refined_len,
+                    }
+                )
+
         dbg = {
             "spawn_xy": {v: {"x": spawn_xy[v][0], "y": spawn_xy[v][1]} for v in vehicles},
             "conflicts": conflict_points,
         }
+        if length_shrink_debug:
+            dbg["length_shrink"] = length_shrink_debug
         if spawn_sep_debug:
             dbg["spawn_separation"] = spawn_sep_debug
         # Softly penalize choosing an end point outside the strict crop.

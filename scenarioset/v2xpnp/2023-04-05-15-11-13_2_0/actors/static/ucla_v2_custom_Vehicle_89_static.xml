@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-05-15-11-13_2_0" model="vehicle.lincoln.mkz_2017" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-0.699138" roll="0.023427" time="0.000000" x="-507.316442" y="-34.815105" yaw="-176.129217" z="10.090727" />
+    <waypoint pitch="-0.699138" roll="0.023427" time="10.500000" x="-507.316442" y="-34.815105" yaw="-176.129217" z="10.090727" />
+  </route>
+</routes>

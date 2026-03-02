@@ -1,0 +1,34 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town02_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "Vehicle_1_is_traveling_straight_",
+      "speed": 8.0,
+      "town": "Town02"
+    },
+    {
+      "file": "town02_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "Vehicle_1_is_traveling_straight_",
+      "speed": 8.0,
+      "town": "Town02"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": [
+    {
+      "file": "actors/static/town02_entity_1_parked_vehicle.xml",
+      "kind": "static",
+      "model": "vehicle.audi.a2",
+      "name": "entity_1",
+      "route_id": "Vehicle_1_is_traveling_straight_",
+      "speed": 0.0,
+      "town": "Town02"
+    }
+  ]
+}

@@ -10,11 +10,18 @@ def _maneuver_needed_count(spec: GeometrySpec, man: str) -> int:
 
 
 def crop_satisfies_spec(spec: GeometrySpec, crop: CropFeatures) -> bool:
+    is_roundabout = spec.topology == "roundabout"
+
     if spec.topology == "highway":
         if not crop.is_highway:
             return False
         if crop.lane_count_est < 3:  # Highways must have 3+ lanes
             return False
+    elif is_roundabout:
+        # Roundabout uses a fixed Town03 crop and maneuver labels in this step can
+        # classify long roundabout traversals as "uturn" instead of "left".
+        # Keep topology/flag checks, but defer maneuver feasibility to legal_paths.
+        pass
     elif spec.topology == "two_lane_corridor":
         # Enforce corridor-like geometry: no intersections/highways and at most 2 lanes.
         if crop.is_four_way or crop.is_t_junction or crop.is_highway:
@@ -23,6 +30,9 @@ def crop_satisfies_spec(spec: GeometrySpec, crop: CropFeatures) -> bool:
             return False
     elif spec.topology == "t_junction":
         if not crop.is_t_junction:
+            return False
+        # Enforce true T-junction semantics: reject cross/four-way layouts.
+        if crop.is_four_way or len(crop.dirs) > 3:
             return False
         if spec.degree == 3 and len(crop.dirs) < 3:
             return False
@@ -37,6 +47,8 @@ def crop_satisfies_spec(spec: GeometrySpec, crop: CropFeatures) -> bool:
     for man in ["straight", "left", "right"]:
         need = _maneuver_needed_count(spec, man)
         if need > 0:
+            if is_roundabout:
+                continue
             if spec.needs_on_ramp and man == "straight":
                 continue
             if crop.maneuver_stats.get(man, {}).get("count", 0.0) < 1.0:
@@ -65,6 +77,8 @@ def crop_satisfies_spec(spec: GeometrySpec, crop: CropFeatures) -> bool:
     for man in ["straight", "left", "right"]:
         need = _maneuver_needed_count(spec, man)
         if need > 0:
+            if is_roundabout:
+                continue
             if spec.needs_on_ramp and man == "straight":
                 continue
             st = crop.maneuver_stats.get(man, {})

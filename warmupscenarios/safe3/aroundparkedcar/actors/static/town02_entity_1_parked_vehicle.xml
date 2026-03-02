@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Vehicle_1_is_traveling_straight_" town="Town02" role="static" model="vehicle.audi.a2" speed="0.0">
+    <waypoint x="133.979" y="240.925" z="0.000" yaw="0.057296"/>
+  </route>
+</routes>

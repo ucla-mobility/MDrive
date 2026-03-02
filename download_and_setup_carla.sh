@@ -3,9 +3,10 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./download_and_setup_carla.sh [--validate] [--keep-base-archive]
+Usage: ./download_and_setup_carla.sh [--validate] [--keep-base-archive] [--carla-dir DIR]
 
-Installs CARLA 0.9.12 into ./carla, imports additional maps + UCLA map,
+Installs CARLA 0.9.12 into ./carla912 by default (or --carla-dir),
+imports additional maps + UCLA map,
 applies targeted UCLA stability fixes, and optionally validates startup/map load.
 EOF
 }
@@ -172,6 +173,92 @@ if residual:
 PY
 }
 
+apply_default_map_guid_fixes() {
+  local carla_dir="$1"
+  python3 - "$carla_dir" <<'PY'
+import sys
+from pathlib import Path
+
+carla_dir = Path(sys.argv[1])
+content_root = carla_dir / "CarlaUE4/Content/Carla"
+if not content_root.exists():
+    raise FileNotFoundError(content_root)
+
+# This GUID appears in stale Japanese Maple foliage material instances and
+# causes default-town crashes when no corresponding MPC default instance exists.
+stale_guid = bytes.fromhex("25a7b22a8517914f9dd35372057f911c")
+
+# Use the active CarlaParameters MPC state GUID from the installed asset.
+carla_params_uexp = content_root / "Blueprints/Game/CarlaParameters.uexp"
+if not carla_params_uexp.exists():
+    raise FileNotFoundError(carla_params_uexp)
+carla_params_data = carla_params_uexp.read_bytes()
+if len(carla_params_data) < 65:
+    raise RuntimeError(
+        f"Unexpected CarlaParameters.uexp size: {len(carla_params_data)}"
+    )
+carla_params_guid = carla_params_data[49:65]
+
+def guid_to_text(raw: bytes) -> str:
+    parts = [raw[0:4], raw[4:8], raw[8:12], raw[12:16]]
+    return "".join(part[::-1].hex() for part in parts).upper()
+
+print(f"default_map_fix_target_guid {guid_to_text(carla_params_guid)}")
+print(f"default_map_fix_stale_guid {guid_to_text(stale_guid)}")
+
+# Keep the standalone vegetation MPC asset unchanged; we only realign stale
+# references in cooked material/map assets.
+skip_paths = {
+    (content_root / "Static/Vegetation/VegetationParamCollection.uexp").resolve(),
+}
+
+patched_files = 0
+patched_refs = 0
+skipped_refs = 0
+
+files = []
+for pattern in ("*.uasset", "*.uexp", "*.umap"):
+    files.extend(content_root.rglob(pattern))
+
+for path in files:
+    if "bak" in path.name:
+        continue
+    data = path.read_bytes()
+    refs = data.count(stale_guid)
+    if refs == 0:
+        continue
+    resolved_path = path.resolve()
+    if resolved_path in skip_paths:
+        skipped_refs += refs
+        continue
+    path.write_bytes(data.replace(stale_guid, carla_params_guid))
+    patched_files += 1
+    patched_refs += refs
+
+print(f"default_map_fix_patched_files {patched_files}")
+print(f"default_map_fix_patched_refs {patched_refs}")
+print(f"default_map_fix_skipped_refs {skipped_refs}")
+
+residual = 0
+residual_files = 0
+for path in files:
+    if "bak" in path.name:
+        continue
+    resolved_path = path.resolve()
+    if resolved_path in skip_paths:
+        continue
+    data = path.read_bytes()
+    refs = data.count(stale_guid)
+    if refs:
+        residual += refs
+        residual_files += 1
+if residual:
+    raise RuntimeError(
+        f"Residual stale default-map GUID refs remain: files={residual_files}, refs={residual}"
+    )
+PY
+}
+
 cache_core_weather_files() {
   local carla_archive="$1"
   local cache_uasset="$2"
@@ -201,7 +288,6 @@ run_validation() {
   local port="${4:-2140}"
 
   local server_log="$log_dir/carla_validate_server.log"
-  local client_log="$log_dir/carla_validate_client.log"
 
   log "Validation step 1/2: starting CARLA briefly (port $port)"
   "$carla_dir/CarlaUE4.sh" -RenderOffScreen -quality-level=Low -carla-rpc-port="$port" \
@@ -230,15 +316,20 @@ run_validation() {
 
   local egg="$carla_dir/PythonAPI/carla/dist/carla-0.9.12-py3.7-linux-x86_64.egg"
   if [[ -n "$py37_bin" && -f "$egg" ]]; then
-    log "Validation step 2/2: loading UCLA map via Python client"
-    if ! "$py37_bin" "$repo_root/scripts/validate_carla_ucla_map.py" \
-      --carla-root "$carla_dir" \
-      --host 127.0.0.1 \
-      --port "$port" \
-      --map ucla_v2 >"$client_log" 2>&1; then
-      die "Python validation failed. See: $client_log"
-    fi
-    log "Python client validation passed."
+    log "Validation step 2/2: loading baseline + UCLA maps via Python client"
+    local validate_map=""
+    local client_log=""
+    for validate_map in Town02 ucla_v2; do
+      client_log="$log_dir/carla_validate_client_${validate_map}.log"
+      if ! "$py37_bin" "$repo_root/scripts/validate_carla_ucla_map.py" \
+        --carla-root "$carla_dir" \
+        --host 127.0.0.1 \
+        --port "$port" \
+        --map "$validate_map" >"$client_log" 2>&1; then
+        die "Python validation failed for map '$validate_map'. See: $client_log"
+      fi
+      log "Python client validation passed for map: $validate_map"
+    done
   else
     warn "Skipping Python client validation (requires python3.7 + CARLA py3.7 egg)."
   fi
@@ -255,14 +346,17 @@ run_validation() {
 main() {
   local do_validate="false"
   local keep_base_archive="false"
-  if [[ $# -gt 2 ]]; then
-    usage
-    exit 1
-  fi
+  local carla_dir_arg="carla912"
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --validate) do_validate="true" ;;
       --keep-base-archive) keep_base_archive="true" ;;
+      --carla-dir)
+        shift
+        [[ $# -gt 0 ]] || die "--carla-dir requires a value"
+        carla_dir_arg="$1"
+        ;;
       -h|--help) usage; exit 0 ;;
       *) usage; exit 1 ;;
     esac
@@ -278,7 +372,10 @@ main() {
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cd "$repo_root"
 
-  local carla_dir="$repo_root/carla"
+  local carla_dir="$carla_dir_arg"
+  if [[ "$carla_dir" != /* ]]; then
+    carla_dir="$repo_root/$carla_dir"
+  fi
   local work_dir="$repo_root/.carla_work"
   local stamp_dir="$work_dir/stamps"
   local log_dir="$repo_root/logs"
@@ -385,6 +482,12 @@ main() {
   log "Applying weather GUID fixes (this can take 1-3 minutes)..."
   apply_weather_binary_fixes "$carla_dir"
   log "Applied weather binary GUID fixes."
+
+  # Fix C: Ensure stale default-map foliage material GUID refs are aligned with
+  # the active CarlaParameters MPC state GUID.
+  log "Applying default-map foliage GUID compatibility fix..."
+  apply_default_map_guid_fixes "$carla_dir"
+  log "Applied default-map foliage GUID compatibility fix."
 
   # Fix B: XODR loading fix for UCLA map.
   local open_xodr="$carla_dir/CarlaUE4/Content/Carla/Maps/OpenDrive/ucla_v2.xodr"

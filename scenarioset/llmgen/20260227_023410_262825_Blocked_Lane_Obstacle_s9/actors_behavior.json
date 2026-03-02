@@ -1,0 +1,37 @@
+{
+  "behaviors": [
+    {
+      "route_id": "07_placement",
+      "actor_name": "entity_1",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "distance_m": 8.0,
+        "vehicle": "Vehicle 1",
+        "evidence": ""
+      },
+      "action": null
+    },
+    {
+      "route_id": "07_placement",
+      "actor_name": "entity_2",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "distance_m": 8.0,
+        "vehicle": "Vehicle 2",
+        "evidence": ""
+      },
+      "action": null
+    },
+    {
+      "route_id": "07_placement",
+      "actor_name": "entity_3",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "distance_m": 8.0,
+        "vehicle": "Vehicle 2",
+        "evidence": ""
+      },
+      "action": null
+    }
+  ]
+}

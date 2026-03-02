@@ -23,15 +23,12 @@ Usage:
 """
 
 import argparse
-import glob
-import json
 import math
-import os
 import sys
 import inspect
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from xml.dom import minidom
 
 import numpy as np

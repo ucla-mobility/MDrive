@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-03-18-15-32_9_0" model="vehicle.mini.cooper_s" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="1.290593" roll="2.131527" time="7.900000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.000000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.100000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.200000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.300000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.400000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+    <waypoint pitch="1.290593" roll="2.131527" time="8.500000" x="-416.793823" y="-148.556107" yaw="3.387581" z="12.920627" />
+  </route>
+</routes>
