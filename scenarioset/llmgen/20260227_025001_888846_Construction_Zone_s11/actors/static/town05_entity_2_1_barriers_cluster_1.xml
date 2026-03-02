@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="static" model="static.prop.streetbarrier" speed="0.0">
+    <waypoint x="-93.796" y="86.823" z="0.000" yaw="174.173233"/>
+  </route>
+</routes>

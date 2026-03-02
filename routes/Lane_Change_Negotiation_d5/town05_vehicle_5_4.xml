@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Lane_Change_Negotiation_d5_attempt1" town="Town05" role="ego" speed="8.0">
+    <waypoint x="-163.802" y="91.379" z="0.000" yaw="0.065549"/>
+    <waypoint x="-142.802" y="91.403" z="0.000" yaw="72.418378"/>
+    <waypoint x="-141.692" y="94.905" z="0.000" yaw="0.065542"/>
+    <waypoint x="-109.692" y="94.941" z="0.000" yaw="0.065576"/>
+    <waypoint x="-108.646" y="94.942" z="0.000" yaw="0.065550"/>
+    <waypoint x="-86.646" y="94.968" z="0.000" yaw="0.065550"/>
+  </route>
+</routes>

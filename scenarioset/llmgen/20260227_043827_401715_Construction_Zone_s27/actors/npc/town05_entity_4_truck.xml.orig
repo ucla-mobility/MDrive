@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="npc" model="vehicle.tesla.cybertruck" speed="4.8">
+    <waypoint x="-121.691" y="94.052" z="0.000" yaw="0.071620"/>
+    <waypoint x="-119.977" y="94.054" z="0.000" yaw="0.071620"/>
+    <waypoint x="-118.262" y="94.056" z="0.000" yaw="0.071620"/>
+    <waypoint x="-116.548" y="94.058" z="0.000" yaw="0.071620"/>
+    <waypoint x="-114.834" y="94.061" z="0.000" yaw="0.071620"/>
+    <waypoint x="-113.120" y="94.063" z="0.000" yaw="0.057296"/>
+    <waypoint x="-111.405" y="94.064" z="0.000" yaw="0.057296"/>
+    <waypoint x="-109.691" y="94.066" z="0.000" yaw="0.057296"/>
+  </route>
+</routes>

@@ -177,7 +177,7 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 		self.agent_name = 'lmdrive'
 		self._hic = DisplayInterface()
 		self.track = autonomous_agent.Track.SENSORS
-		self.step = -1
+		self.step = [-1] * 10  # Per-vehicle step counters
 		self.wall_start = time.time()
 		self.initialized = False
 		self.rgb_front_transform = create_carla_rgb_transform(224)
@@ -429,7 +429,6 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 	@torch.no_grad()
 	def run_step(self, input_data, timestamp):
 		control_all = []
-		self.step += 1
 		for ego_id in range(self.ego_vehicles_num):
 			if CarlaDataProvider.get_hero_actor(hero_id=ego_id) is not None:
 				control = self.run_step_single_vehicle(ego_id, input_data, timestamp)
@@ -444,25 +443,35 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 		if not self.initialized:
 			self._init()
 
-		# self.step += 1
+		self.step[ego_id] += 1
+		print(f"[DEBUG LMDRIVE] ego={ego_id}, step={self.step[ego_id]}")
 		
-		tick_data = self.tick(ego_id, input_data)
+		try:
+			tick_data = self.tick(ego_id, input_data)
+		except KeyError as e:
+			print(f"[WARN LMDRIVE] Missing sensor data {e} for ego {ego_id}, sending full brake.")
+			control = carla.VehicleControl()
+			control.steer = 0.0
+			control.throttle = 0.0
+			control.brake = 1.0
+			return control
 
-		if self.step < 20:
+		if self.step[ego_id] < 20:
 			control = carla.VehicleControl()
 			control.steer = float(0)
 			control.throttle = float(0)
 			control.brake = float(1)
+			print(f"[DEBUG LMDRIVE] ego={ego_id}, step={self.step[ego_id]} < 20, returning BRAKE control")
 			return control
 
 		realtime_mode = os.environ.get('REALTIME_MODE', '0')
 		if realtime_mode == '1':
 			# REAL-TIME
-			if self.step < self.next_action_step[ego_id] and self.step:
+			if self.step[ego_id] < self.next_action_step[ego_id] and self.step[ego_id]:
 				return self.prev_control[ego_id]
 		else:
 			# NON-REAL-TIME
-			if self.step % 5 != 0 and self.step:
+			if self.step[ego_id] % 5 != 0 and self.step[ego_id]:
 				return self.prev_control[ego_id]
 
 		
@@ -575,6 +584,7 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 		end_prob = self.softmax(is_end)[-1][1] # is_end[1] means the prob of the frame is the last frame
 
 		steer, throttle, brake, metadata = self.control_pid(waypoints, velocity)
+		print(f"[DEBUG LMDRIVE] ego={ego_id}, waypoints[0]=[{waypoints[0,0]:.2f}, {waypoints[0,1]:.2f}], velocity={velocity:.2f}, raw_control: steer={steer:.3f}, throttle={throttle:.3f}, brake={brake:.3f}")
 
 		if end_prob > 0.75:
 			self.visual_feature_buffer = []
@@ -590,11 +600,12 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 		control.steer = float(steer) * 0.8
 		control.throttle = float(throttle)
 		control.brake = float(brake)
+		print(f"[DEBUG LMDRIVE] ego={ego_id}, step={self.step[ego_id]}, control: steer={control.steer:.3f}, throttle={control.throttle:.3f}, brake={control.brake:.3f}")
 
 		end_time = time.time()
 		print(end_time-start_time)
 		
-		self.next_action_step[ego_id] = self.step + int((end_time - start_time) * 20)
+		self.next_action_step[ego_id] = self.step[ego_id] + int((end_time - start_time) * 20)
 
 		display_data = {}
 		display_data['rgb_front'] = cv2.resize(tick_data['rgb_front'], (1200, 900))
@@ -622,7 +633,7 @@ class LMDriveAgent(autonomous_agent.AutonomousAgent):
 		return control
 
 	def save(self, ego_id, tick_data):
-		frame = (self.step - 20)
+		frame = (self.step[ego_id] - 20)
 		Image.fromarray(tick_data["surface"]).save(
 			self.save_path / f"meta_{ego_id}" / ("%04d.jpg" % frame)
 		)

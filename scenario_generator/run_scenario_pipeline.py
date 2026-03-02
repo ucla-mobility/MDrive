@@ -13,6 +13,11 @@ Outputs per scenario:
 - picked_paths_detailed.json      (chosen ego paths)
 - scene_objects.json / .png       (final placements)
 - routes output (optional, when --routes-out-dir is set)
+
+NOTE:
+This is a legacy free-text runner kept for compatibility. The canonical
+category-based pipeline entrypoint
+is `scenario_generator/start_pipeline.py`.
 """
 
 import argparse
@@ -22,7 +27,7 @@ import re
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -49,8 +54,15 @@ from run_path_picker import pick_paths_with_model
 from run_path_refiner import refine_picked_paths_with_model
 
 
-def build_candidates(legal_paths, out_json_path: str, prompt_path: str, nodes_path: str, crop: CropBox,
-                     params):
+def build_candidates(
+    legal_paths,
+    out_json_path: str,
+    prompt_path: str,
+    nodes_path: str,
+    crop: CropBox,
+    params,
+    lane_counts_by_road: Optional[Dict[int, int]] = None,
+):
     candidates = []
     for i, p in enumerate(legal_paths):
         sig = build_path_signature(p)
@@ -72,6 +84,7 @@ def build_candidates(legal_paths, out_json_path: str, prompt_path: str, nodes_pa
         nodes_path=nodes_path,
         params=params,
         paths_named=candidates,
+        lane_counts_by_road=lane_counts_by_road,
     )
 
 
@@ -280,6 +293,15 @@ def _run_single_scenario(
     cropped_segments = crop_segments(all_segments, crop)
     if not cropped_segments:
         raise SystemExit("[ERROR] No segments found in crop region.")
+    lane_ids_by_road: Dict[int, set] = {}
+    for s in cropped_segments:
+        try:
+            rid = int(s.road_id)
+            lid = int(s.lane_id)
+        except Exception:
+            continue
+        lane_ids_by_road.setdefault(rid, set()).add(lid)
+    lane_counts_by_road = {rid: len(lanes) for rid, lanes in lane_ids_by_road.items()}
     adj = build_connectivity(
         cropped_segments,
         connect_radius_m=6.0,
@@ -325,6 +347,7 @@ def _run_single_scenario(
         nodes_path=str(nodes_path),
         crop=crop,
         params=params,
+        lane_counts_by_road=lane_counts_by_road,
     )
     print(f"[TIMING] build_candidates: {time.time() - t0:.2f}s")
 
@@ -474,7 +497,8 @@ def main():
 
     # Picker generation controls
     ap.add_argument("--picker-max-new-tokens", type=int, default=2048)
-    ap.add_argument("--picker-do-sample", action="store_true")
+    ap.add_argument("--picker-do-sample", action="store_true", default=True, help="Enable sampling (default: True)")
+    ap.add_argument("--picker-no-sample", dest="picker_do_sample", action="store_false", help="Disable sampling")
     ap.add_argument("--picker-temperature", type=float, default=0.2)
     ap.add_argument("--picker-top-p", type=float, default=0.95)
     ap.add_argument("--allow-fuzzy-match", action="store_true", help="Permit fuzzy path name matching")
@@ -486,7 +510,8 @@ def main():
 
     # Object placer generation controls
     ap.add_argument("--placer-max-new-tokens", type=int, default=2048)
-    ap.add_argument("--placer-do-sample", action="store_true")
+    ap.add_argument("--placer-do-sample", action="store_true", default=True, help="Enable sampling (default: True)")
+    ap.add_argument("--placer-no-sample", dest="placer_do_sample", action="store_false", help="Disable sampling")
     ap.add_argument("--placer-temperature", type=float, default=0.2)
     ap.add_argument("--placer-top-p", type=float, default=0.95)
 

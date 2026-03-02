@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="static" model="static.prop.advertisement" speed="0.0">
+    <waypoint x="-92.871" y="88.890" z="0.000" yaw="-169.532720"/>
+  </route>
+</routes>

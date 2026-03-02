@@ -1,0 +1,157 @@
+{
+  "nodes": "",
+  "crop_region": {
+    "xmin": -5.0,
+    "xmax": 5.0,
+    "ymin": -10.0,
+    "ymax": 30.0
+  },
+  "picked": [
+    {
+      "vehicle": "Vehicle 1",
+      "name": "side_left",
+      "signature": {
+        "entry": {
+          "point": {
+            "x": -15.0,
+            "y": 0.0
+          }
+        },
+        "exit": {
+          "point": {
+            "x": 0.0,
+            "y": 20.0
+          }
+        },
+        "segments_detailed": [
+          {
+            "seg_id": 101,
+            "length_m": 10.0,
+            "bbox": {
+              "xmin": -15.0,
+              "xmax": -5.0,
+              "ymin": 0.0,
+              "ymax": 0.0
+            },
+            "start": {
+              "point": {
+                "x": -15.0,
+                "y": 0.0
+              },
+              "heading_deg": 0.0
+            },
+            "end": {
+              "point": {
+                "x": -5.0,
+                "y": 0.0
+              },
+              "heading_deg": 0.0
+            },
+            "polyline_sample": [
+              {
+                "x": -15.0,
+                "y": 0.0
+              },
+              {
+                "x": -5.0,
+                "y": 0.0
+              }
+            ]
+          },
+          {
+            "seg_id": 102,
+            "length_m": 25.0,
+            "bbox": {
+              "xmin": -5.0,
+              "xmax": 0.0,
+              "ymin": 0.0,
+              "ymax": 20.0
+            },
+            "start": {
+              "point": {
+                "x": -5.0,
+                "y": 0.0
+              },
+              "heading_deg": 0.0
+            },
+            "end": {
+              "point": {
+                "x": 0.0,
+                "y": 20.0
+              },
+              "heading_deg": 90.0
+            },
+            "polyline_sample": [
+              {
+                "x": -5.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 20.0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "vehicle": "Vehicle 2",
+      "name": "main_straight",
+      "signature": {
+        "entry": {
+          "point": {
+            "x": 0.0,
+            "y": 25.0
+          }
+        },
+        "exit": {
+          "point": {
+            "x": 0.0,
+            "y": -20.0
+          }
+        },
+        "segments_detailed": [
+          {
+            "seg_id": 201,
+            "length_m": 45.0,
+            "bbox": {
+              "xmin": 0.0,
+              "xmax": 0.0,
+              "ymin": -20.0,
+              "ymax": 25.0
+            },
+            "start": {
+              "point": {
+                "x": 0.0,
+                "y": 25.0
+              },
+              "heading_deg": -90.0
+            },
+            "end": {
+              "point": {
+                "x": 0.0,
+                "y": -20.0
+              },
+              "heading_deg": -90.0
+            },
+            "polyline_sample": [
+              {
+                "x": 0.0,
+                "y": 25.0
+              },
+              {
+                "x": 0.0,
+                "y": -20.0
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

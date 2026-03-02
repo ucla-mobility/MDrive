@@ -132,12 +132,14 @@ def _safe_parse_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 def _extract_description_from_prompt(prompt: str) -> str:
     """
-    Best-effort extraction of the scene description from a combined prompt.
-    Expected marker: 'USER SCENARIO DESCRIPTION:' (used by run_scenario_pipeline).
+    Best-effort extraction of the scene payload from a combined prompt.
+    Supports both natural-language descriptions and schema JSON payloads.
     """
     if not prompt:
         return ""
-    if "USER SCENARIO DESCRIPTION:" in prompt:
+    if "USER SCENARIO SCHEMA" in prompt:
+        desc = prompt.split("USER SCENARIO SCHEMA", 1)[1].strip(": \n")
+    elif "USER SCENARIO DESCRIPTION:" in prompt:
         desc = prompt.split("USER SCENARIO DESCRIPTION:", 1)[1].strip()
     else:
         desc = prompt.strip()

@@ -1,4 +1,5 @@
 import json
+import math
 from typing import Any, Dict, List, Optional
 
 try:
@@ -122,6 +123,34 @@ def _plot_paths_together(
 
     cmap = plt.cm.get_cmap("tab20")
 
+    def _draw_segment_arrow(pts: List[tuple], color: str, alpha: float) -> None:
+        if len(pts) < 2:
+            return
+        mid = max(1, len(pts) // 2)
+        x0, y0 = pts[mid - 1]
+        x1, y1 = pts[mid]
+        dx = x1 - x0
+        dy = y1 - y0
+        seg_len = math.hypot(dx, dy)
+        if seg_len < 1e-3:
+            return
+        arrow_len = min(4.0, max(1.6, seg_len * 0.35))
+        scale = arrow_len / seg_len
+        ax.arrow(
+            x0,
+            y0,
+            dx * scale,
+            dy * scale,
+            width=0.003,
+            head_width=1.2,
+            head_length=1.6,
+            length_includes_head=True,
+            color=color,
+            alpha=alpha,
+            linewidth=0,
+            zorder=3,
+        )
+
     for i, entry in enumerate(picked):
         sig = entry.get("signature", {})
         seg_ids = sig.get("segment_ids", [])
@@ -136,6 +165,7 @@ def _plot_paths_together(
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             ax.plot(xs, ys, linewidth=2.5, alpha=0.85, color=color)
+            _draw_segment_arrow(pts, color=color, alpha=0.85)
 
         ent = sig.get("entry", {}).get("point", None)
         ex = sig.get("exit", {}).get("point", None)

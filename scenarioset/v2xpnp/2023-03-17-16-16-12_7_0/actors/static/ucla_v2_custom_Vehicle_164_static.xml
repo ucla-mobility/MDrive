@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-03-17-16-16-12_7_0" model="vehicle.mini.cooper_s_2021" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="3.235551" roll="0.004432" time="2.800000" x="-408.460199" y="-27.373004" yaw="-0.236844" z="12.511849" />
+  </route>
+</routes>

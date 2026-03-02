@@ -171,6 +171,8 @@ class BirdViewProducer:
             LOGGER.warning(
                 f"Cache file does not exist, generating cache at {cache_path}"
             )
+            # Ensure parent directory exists before creating lock file
+            Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
             self.full_road_cache = self.masks_generator.road_mask()
             self.full_lanes_cache = self.masks_generator.lanes_mask()
             self.full_centerlines_cache = self.masks_generator.centerlines_mask()

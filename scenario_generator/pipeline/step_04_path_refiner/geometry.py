@@ -317,6 +317,191 @@ def _forward_axis_at(pts: Sequence[Tuple[float, float]], idx: int) -> Tuple[floa
     return _unit((pts[k][0] - pts[j][0], pts[k][1] - pts[j][1]))
 
 
+def split_corridor_segment_detailed(
+    seg: Dict[str, Any],
+    target_length_m: float = 25.0,
+    min_splits: int = 3,
+) -> List[Dict[str, Any]]:
+    """
+    Split a single long corridor segment_detailed into multiple virtual sub-segments.
+    
+    This is used for TWO_LANE_CORRIDOR topologies where the path typically has only
+    1 segment (since it's a straight road), but the object placer needs multiple
+    segments to place objects at different positions along the path.
+    
+    Args:
+        seg: A single segment_detailed dict with polyline_sample, length_m, etc.
+        target_length_m: Target length for each sub-segment (default 25m)
+        min_splits: Minimum number of sub-segments to create (default 3)
+        
+    Returns:
+        List of segment_detailed dicts representing the split sub-segments.
+        Each sub-segment retains the same seg_id, road_id, lane_id but with
+        adjusted length_m, start/end points, and polyline_sample.
+    """
+    length_m = float(seg.get("length_m", 0.0))
+    if length_m < 1e-6:
+        return [seg]
+    
+    # Determine number of splits
+    n_splits = max(min_splits, int(math.ceil(length_m / target_length_m)))
+    if n_splits <= 1:
+        return [seg]
+    
+    # Get the polyline sample points
+    polyline = seg.get("polyline_sample", [])
+    if not polyline or len(polyline) < 2:
+        return [seg]
+    
+    pts = [(float(p["x"]), float(p["y"])) for p in polyline if "x" in p and "y" in p]
+    if len(pts) < 2:
+        return [seg]
+    
+    # Compute cumulative distances
+    cumdist = _polyline_cumdist(pts)
+    total_length = cumdist[-1]
+    if total_length < 1e-6:
+        return [seg]
+    
+    # Split points: divide into n_splits equal segments
+    split_distances = [total_length * i / n_splits for i in range(n_splits + 1)]
+    
+    # Find indices for each split point
+    def find_idx_and_interp(target_dist: float) -> Tuple[int, float, Tuple[float, float]]:
+        """Find index and interpolation for a given distance along the polyline."""
+        for i in range(len(cumdist) - 1):
+            if cumdist[i] <= target_dist <= cumdist[i + 1]:
+                seg_len = cumdist[i + 1] - cumdist[i]
+                if seg_len < 1e-9:
+                    alpha = 0.0
+                else:
+                    alpha = (target_dist - cumdist[i]) / seg_len
+                x = pts[i][0] + alpha * (pts[i + 1][0] - pts[i][0])
+                y = pts[i][1] + alpha * (pts[i + 1][1] - pts[i][1])
+                return i, alpha, (x, y)
+        return len(pts) - 1, 0.0, pts[-1]
+    
+    # Build sub-segments
+    sub_segments: List[Dict[str, Any]] = []
+    base_seg_id = seg.get("seg_id", 0)
+    
+    for split_idx in range(n_splits):
+        start_dist = split_distances[split_idx]
+        end_dist = split_distances[split_idx + 1]
+        sub_length = end_dist - start_dist
+        
+        _, _, start_pt = find_idx_and_interp(start_dist)
+        _, _, end_pt = find_idx_and_interp(end_dist)
+        
+        # Compute heading from start to end
+        dx = end_pt[0] - start_pt[0]
+        dy = end_pt[1] - start_pt[1]
+        heading = math.degrees(math.atan2(dy, dx)) if (abs(dx) > 1e-6 or abs(dy) > 1e-6) else 0.0
+        
+        # Cardinal direction from heading
+        if -45 <= heading < 45:
+            cardinal = "E"
+        elif 45 <= heading < 135:
+            cardinal = "N"
+        elif -135 <= heading < -45:
+            cardinal = "S"
+        else:
+            cardinal = "W"
+        bound = {"E": "eastbound", "W": "westbound", "N": "northbound", "S": "southbound"}.get(cardinal, "forward")
+        
+        # Create polyline sample for this sub-segment (just start and end points)
+        sub_polyline = [
+            {"x": start_pt[0], "y": start_pt[1]},
+            {"x": end_pt[0], "y": end_pt[1]},
+        ]
+        
+        # Build the sub-segment dict
+        sub_seg = {
+            "seg_id": int(base_seg_id),  # Keep same seg_id (virtual split)
+            "virtual_split_index": split_idx,  # Mark as virtual sub-segment
+            "road_id": seg.get("road_id"),
+            "section_id": seg.get("section_id"),
+            "lane_id": seg.get("lane_id"),
+            "length_m": float(sub_length),
+            "bbox": seg.get("bbox"),  # Keep original bbox
+            "start": {
+                "point": {"x": float(start_pt[0]), "y": float(start_pt[1])},
+                "heading_deg": float(heading),
+                "cardinal4": cardinal,
+                "bound": bound,
+                "orig_idx": seg.get("start", {}).get("orig_idx") if split_idx == 0 else None,
+            },
+            "end": {
+                "point": {"x": float(end_pt[0]), "y": float(end_pt[1])},
+                "heading_deg": float(heading),
+                "cardinal4": cardinal,
+                "bound": bound,
+                "orig_idx": seg.get("end", {}).get("orig_idx") if split_idx == n_splits - 1 else None,
+            },
+            "polyline_sample": sub_polyline,
+        }
+        sub_segments.append(sub_seg)
+    
+    return sub_segments
+
+
+def split_corridor_path_segments(
+    picked_entry: Dict[str, Any],
+    target_length_m: float = 25.0,
+    min_splits: int = 3,
+) -> Dict[str, Any]:
+    """
+    Process a picked path entry and split its corridor segments into sub-segments.
+    
+    This should be applied to TWO_LANE_CORRIDOR topologies after path picking
+    but before object placement, so that the LLM has multiple segment_index values
+    to choose from when placing objects.
+    
+    Args:
+        picked_entry: A single entry from the "picked" list in picked_paths.json
+        target_length_m: Target length for each sub-segment
+        min_splits: Minimum number of sub-segments to create
+        
+    Returns:
+        Modified picked_entry with split segments_detailed
+    """
+    sig = picked_entry.get("signature")
+    if not isinstance(sig, dict):
+        return picked_entry
+    
+    segments_detailed = sig.get("segments_detailed", [])
+    if not isinstance(segments_detailed, list) or not segments_detailed:
+        return picked_entry
+    
+    # Only split if we have few segments (corridor-like)
+    # Intersections/T-junctions typically have 3+ segments
+    if len(segments_detailed) > 2:
+        return picked_entry
+    
+    # Split each segment
+    new_segments: List[Dict[str, Any]] = []
+    for seg in segments_detailed:
+        length_m = float(seg.get("length_m", 0.0))
+        # Only split if segment is long enough
+        if length_m >= target_length_m * 1.5:
+            sub_segs = split_corridor_segment_detailed(seg, target_length_m, min_splits)
+            new_segments.extend(sub_segs)
+        else:
+            new_segments.append(seg)
+    
+    # Update the signature
+    new_sig = dict(sig)
+    new_sig["segments_detailed"] = new_segments
+    new_sig["num_segments"] = len(new_segments)
+    # segment_ids stays the same (virtual splits share the same underlying seg_id)
+    
+    new_entry = dict(picked_entry)
+    new_entry["signature"] = new_sig
+    new_entry["corridor_split_applied"] = True
+    
+    return new_entry
+
+
 __all__ = [
     "CropBox",
     "_build_segment_payload_from_polyline",
@@ -338,4 +523,6 @@ __all__ = [
     "_slice_segments_detailed",
     "_unit",
     "find_conflict_between_polylines",
+    "split_corridor_path_segments",
+    "split_corridor_segment_detailed",
 ]

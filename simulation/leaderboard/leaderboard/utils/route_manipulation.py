@@ -140,9 +140,13 @@ def interpolate_trajectory(world, waypoints_trajectory, hop_resolution=1.0):
         - hop_resolution: is the resolution, how dense is the provided trajectory going to be made
     """
 
-    dao = GlobalRoutePlannerDAO(world.get_map(), hop_resolution)
-    grp = GlobalRoutePlanner(dao)
-    grp.setup()
+    # Try CARLA 9.12+ API first, fall back to older DAO-based API
+    try:
+        grp = GlobalRoutePlanner(world.get_map(), hop_resolution)
+    except TypeError:
+        dao = GlobalRoutePlannerDAO(world.get_map(), hop_resolution)
+        grp = GlobalRoutePlanner(dao)
+        grp.setup()
     # Obtain route plan
     route = []
     for i in range(len(waypoints_trajectory) - 1):   # Goes until the one before the last.

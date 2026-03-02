@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town06" role="ego" speed="7.0">
+    <waypoint x="207.964" y="140.281" z="0.000" yaw="0.236344"/>
+    <waypoint x="221.045" y="140.335" z="0.000" yaw="0.236344"/>
+    <waypoint x="234.127" y="140.389" z="0.000" yaw="0.236344"/>
+    <waypoint x="247.208" y="140.442" z="0.000" yaw="0.236344"/>
+    <waypoint x="257.842" y="143.986" z="0.000" yaw="0.236344"/>
+    <waypoint x="270.923" y="144.040" z="0.000" yaw="0.236344"/>
+    <waypoint x="284.005" y="144.093" z="0.000" yaw="0.236344"/>
+    <waypoint x="297.086" y="144.147" z="0.000" yaw="0.236344"/>
+  </route>
+</routes>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Lane_Change_Negotiation_d3_attempt1" town="Town05" role="static" model="vehicle.audi.a2" speed="0.0">
+    <waypoint x="-152.807" y="95.767" z="0.000" yaw="0.057296"/>
+  </route>
+</routes>

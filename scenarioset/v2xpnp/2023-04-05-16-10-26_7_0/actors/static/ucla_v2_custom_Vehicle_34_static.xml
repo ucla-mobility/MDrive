@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-05-16-10-26_7_0" model="vehicle.ford.mustang" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-3.235596" roll="-0.011164" time="10.685208" x="-402.111374" y="-38.201867" yaw="179.644368" z="12.859520" />
+    <waypoint pitch="-3.235608" roll="-0.011159" time="11.300000" x="-402.111374" y="-38.201867" yaw="179.644368" z="12.843123" />
+    <waypoint pitch="-3.235576" roll="-0.011159" time="11.400000" x="-402.797181" y="-38.197794" yaw="179.643494" z="12.827347" />
+    <waypoint pitch="-3.235568" roll="-0.011178" time="11.500000" x="-403.500094" y="-38.193616" yaw="179.642838" z="12.816073" />
+    <waypoint pitch="-3.235556" roll="-0.011211" time="11.600000" x="-404.025397" y="-38.190490" yaw="179.642838" z="12.797283" />
+  </route>
+</routes>

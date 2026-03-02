@@ -1,0 +1,42 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "Lane_Change_Negotiation_d4_attempt1",
+      "speed": 10.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "Lane_Change_Negotiation_d4_attempt1",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "Lane_Change_Negotiation_d4_attempt1",
+      "speed": 6.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": [
+    {
+      "file": "actors/static/town05_entity_1_traffic_cones.xml",
+      "kind": "static",
+      "model": "static.prop.trafficcone01",
+      "name": "entity_1",
+      "route_id": "Lane_Change_Negotiation_d4_attempt1",
+      "speed": 0.0,
+      "town": "Town05"
+    }
+  ]
+}

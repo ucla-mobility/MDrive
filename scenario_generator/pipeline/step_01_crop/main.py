@@ -13,7 +13,7 @@ except Exception:
 from .candidates import build_candidate_crops_for_town
 from .csp import solve_assignment
 from .llm_extractor import LLMGeometryExtractor
-from .models import CropFeatures, CropKey, GeometrySpec, Scenario
+from .models import CropFeatures, CropKey, GeometrySpec
 from .scenario_io import load_scenarios
 from .viz import save_viz
 

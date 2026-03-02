@@ -89,6 +89,18 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
 
         # load agent config
         self.config = yaml.load(open(path_to_conf_file),Loader=yaml.Loader)
+        
+        # Override LLM/VLM ports from environment variables if set
+        import os
+        if 'COLMDRIVER_LLM_PORT' in os.environ:
+            llm_port = os.environ['COLMDRIVER_LLM_PORT']
+            self.config['comm_server']['comm_client'] = f'http://127.0.0.1:{llm_port}/v1'
+            print(f'[CoLMDriver] Using LLM port {llm_port} from environment')
+        if 'COLMDRIVER_VLM_PORT' in os.environ:
+            vlm_port = os.environ['COLMDRIVER_VLM_PORT']
+            self.config['comm_server']['vlm_client'] = f'http://127.0.0.1:{vlm_port}/v1'
+            print(f'[CoLMDriver] Using VLM port {vlm_port} from environment')
+        
         self.use_semantic = self.config['perception'].get('use_semantic', False)
         print('if use semantic?', self.use_semantic)
         control_cfg = self.config.get('control', {})

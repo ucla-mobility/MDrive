@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Unprotected_Left_Turn_d3_attempt1" town="Town05" role="static" model="static.prop.trafficcone01" speed="0.0">
+    <waypoint x="-93.644" y="93.034" z="0.000" yaw="0.066845"/>
+  </route>
+</routes>

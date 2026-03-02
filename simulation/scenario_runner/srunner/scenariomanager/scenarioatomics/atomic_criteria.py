@@ -1860,6 +1860,8 @@ class RunningRedLightTest(Criterion):
         ini_wps = []
         for pt in area:
             wpx = self._map.get_waypoint(pt)
+            if wpx is None:
+                continue
             # As x_values are arranged in order, only the last one has to be checked
             if not ini_wps or ini_wps[-1].road_id != wpx.road_id or ini_wps[-1].lane_id != wpx.lane_id:
                 ini_wps.append(wpx)
@@ -1867,13 +1869,20 @@ class RunningRedLightTest(Criterion):
         # Advance them until the intersection
         wps = []
         for wpx in ini_wps:
-            while not wpx.is_intersection:
-                next_wp = wpx.next(0.5)[0]
+            while wpx and not wpx.is_intersection:
+                next_wps = wpx.next(0.5)
+                if not next_wps:
+                    break
+                next_wp = next_wps[0]
                 if next_wp and not next_wp.is_intersection:
                     wpx = next_wp
                 else:
+                    # Keep the last valid waypoint (intersection or end of lane)
+                    if next_wp:
+                        wpx = next_wp
                     break
-            wps.append(wpx)
+            if wpx:
+                wps.append(wpx)
 
         return area_loc, wps
 

@@ -31,6 +31,13 @@ import time
 import json
 import yaml
 import numpy as np
+# Patch for numpy 1.24+ compatibility with older libraries (like networkx < 2.6)
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'bool'):
+    np.bool = bool
 import random
 import shutil
 
@@ -299,7 +306,11 @@ class LeaderboardEvaluator(object):
         else:
             self.world.wait_for_tick()
 
-        if CarlaDataProvider.get_map().name != town:
+        # CARLA 9.12 compatibility: map name might include full path like "/Game/Carla/Maps/Town05"
+        current_map_name = CarlaDataProvider.get_map().name
+        if town not in current_map_name:
+            if os.environ.get('DEBUG_FINISH', '').lower() in ('1', 'true', 'yes'):
+                print(f"[DEBUG FINISH] Current map: {current_map_name}, Required: {town}")
             raise Exception("The CARLA server uses the wrong map!"
                             "This scenario requires to use map {}".format(town))
 
@@ -317,7 +328,10 @@ class LeaderboardEvaluator(object):
                 config,
                 self.manager.scenario_duration_system,
                 self.manager.scenario_duration_game,
-                crash_message
+                crash_message,
+                pdm_trace=self.manager.pdm_traces[i] if hasattr(self.manager, "pdm_traces") else None,
+                pdm_world_trace=getattr(self.manager, "pdm_world_trace", None),
+                pdm_tl_polygons=getattr(self.manager, "pdm_tl_polygons", None),
             )
 
             print("\033[1m> Registering the route statistics\033[0m")
@@ -548,6 +562,12 @@ class LeaderboardEvaluator(object):
         # This handles nested scenario directories (e.g., routes/Scenario_Name/vehicle_*.xml)
         import glob
         xml_files = glob.glob(os.path.join(args.routes_dir, '**', '*.xml'), recursive=True)
+
+        # Ignore custom actor XMLs (they live under actors/); only keep ego route files
+        xml_files = [
+            x for x in xml_files
+            if "actors" not in os.path.normpath(x).split(os.sep)
+        ]
         
         for xml_path in xml_files:
             # Extract the ego_id from the filename (last part before .xml)
@@ -558,11 +578,37 @@ class LeaderboardEvaluator(object):
             # Only add if not already present (in case of duplicates across scenarios)
             if ego_id_str not in route_path_dict:
                 route_path_dict[ego_id_str] = xml_path
-        
-        for ego_id in range(args.ego_num):
-            route_indexer_dict[ego_id] = RouteIndexer(route_path_dict[str(ego_id)], args.scenarios, args.repetitions)
-            if ego_id==0:
-                route_indexer = route_indexer_dict[ego_id]
+
+        if not route_path_dict:
+            raise RuntimeError(
+                f"No route XML files found under {args.routes_dir}"
+            )
+
+        route_indexer = None
+        if args.ego_num > 0:
+            for ego_id in range(args.ego_num):
+                if str(ego_id) not in route_path_dict:
+                    raise RuntimeError(
+                        f"Missing ego route XML for ego_id={ego_id}. "
+                        f"Discovered keys: {sorted(route_path_dict.keys())}"
+                    )
+                route_indexer_dict[ego_id] = RouteIndexer(
+                    route_path_dict[str(ego_id)], args.scenarios, args.repetitions
+                )
+                if ego_id == 0:
+                    route_indexer = route_indexer_dict[ego_id]
+        else:
+            # No-ego mode still needs a primary route indexer to iterate scenario configs.
+            def _route_key_order(key: str):
+                try:
+                    return (0, int(key))
+                except (TypeError, ValueError):
+                    return (1, str(key))
+
+            first_key = sorted(route_path_dict.keys(), key=_route_key_order)[0]
+            route_indexer = RouteIndexer(
+                route_path_dict[first_key], args.scenarios, args.repetitions
+            )
 
         # if args.routes_0 is not None and args.routes_1 is not None and args.routes_2 is not None:
         #     route_indexer_0 = RouteIndexer(args.routes_0, args.scenarios, args.repetitions)
@@ -599,11 +645,19 @@ class LeaderboardEvaluator(object):
                 config = route_indexer.next()
                 if args.ego_num > 1:
                     config.multi_traj = [config.trajectory]
+                    config.multi_traj_yaws = [getattr(config, "trajectory_yaws", None)]
+                    config.multi_traj_pitches = [getattr(config, "trajectory_pitches", None)]
+                    config.multi_traj_rolls = [getattr(config, "trajectory_rolls", None)]
+                    config.multi_traj_times = [getattr(config, "trajectory_times", None)]
                     for i in range(1,args.ego_num):
                         route_indexer_other = route_indexer_dict[i]
                         route_indexer_dict[i].peek()
                         config_other = route_indexer_dict[i].next()
                         config.multi_traj.append(config_other.trajectory)
+                        config.multi_traj_yaws.append(getattr(config_other, "trajectory_yaws", None))
+                        config.multi_traj_pitches.append(getattr(config_other, "trajectory_pitches", None))
+                        config.multi_traj_rolls.append(getattr(config_other, "trajectory_rolls", None))
+                        config.multi_traj_times.append(getattr(config_other, "trajectory_times", None))
 
                 # if route_indexer_1 is not None:
                 #     route_indexer_1.peek()

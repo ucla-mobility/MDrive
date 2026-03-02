@@ -49,6 +49,27 @@ class LaneSegment:
         """Total arc length of the segment."""
         return float(cumulative_dist(self.points)[-1])
 
+    def is_straight(self, max_heading_change_deg: float = 30.0) -> bool:
+        """
+        Check if segment is approximately straight based on heading variation.
+        
+        A segment is considered straight if the total heading change from start
+        to end is less than max_heading_change_deg.
+        """
+        if len(self.yaws) < 2:
+            return True
+        
+        # Get heading at start and end
+        start_heading = float(self.yaws[0])
+        end_heading = float(self.yaws[-1])
+        
+        # Compute angular difference (handle wraparound)
+        diff = abs(end_heading - start_heading)
+        if diff > 180:
+            diff = 360 - diff
+        
+        return diff < max_heading_change_deg
+
 
 @dataclass
 class CropBox:

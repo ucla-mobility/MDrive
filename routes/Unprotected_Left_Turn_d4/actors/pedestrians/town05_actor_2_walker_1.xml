@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Unprotected_Left_Turn_d4_attempt1" town="Town05" role="pedestrian" model="walker.pedestrian.0001" speed="1.02">
+    <waypoint x="-123.688" y="91.425" z="0.000" yaw="-50.441856"/>
+    <waypoint x="-116.467" y="82.683" z="0.000" yaw="-50.441856"/>
+  </route>
+</routes>

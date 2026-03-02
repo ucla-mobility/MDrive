@@ -1,0 +1,95 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "004",
+      "speed": 9.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "004",
+      "speed": 7.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "004",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_4_3.xml",
+      "kind": "ego",
+      "name": "Vehicle 4",
+      "route_id": "004",
+      "speed": 8.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": [
+    {
+      "file": "actors/static/town05_entity_1_1_cones.xml",
+      "kind": "static",
+      "model": "static.prop.constructioncone",
+      "name": "entity_1_1",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_1_2_cones.xml",
+      "kind": "static",
+      "model": "static.prop.constructioncone",
+      "name": "entity_1_2",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_1_3_cones.xml",
+      "kind": "static",
+      "model": "static.prop.constructioncone",
+      "name": "entity_1_3",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_1_4_cones.xml",
+      "kind": "static",
+      "model": "static.prop.constructioncone",
+      "name": "entity_1_4",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_1_5_cones.xml",
+      "kind": "static",
+      "model": "static.prop.constructioncone",
+      "name": "entity_1_5",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    },
+    {
+      "file": "actors/static/town05_entity_2_parked_truck.xml",
+      "kind": "static",
+      "model": "vehicle.tesla.cybertruck",
+      "name": "entity_2",
+      "route_id": "004",
+      "speed": 0.0,
+      "town": "Town05"
+    }
+  ]
+}

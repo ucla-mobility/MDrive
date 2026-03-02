@@ -379,9 +379,12 @@ def generate_target_waypoint_list_multilane(waypoint, change='left',
     # check if lane change possible
     if check == 'true':
         lane_change_possibilities = ['Left', 'Right', 'Both']
-        if str(waypoint.lane_change) not in lane_change_possibilities:
+        lane_change_str = str(waypoint.lane_change)
+        print(f"[LANE_CHANGE_HELPER] waypoint.lane_change = {lane_change_str}, possibilities = {lane_change_possibilities}")
+        if lane_change_str not in lane_change_possibilities:
             # ERROR, lane change is not possible
-            return None
+            print(f"[LANE_CHANGE_HELPER] ERROR: Lane change NOT possible from this waypoint!")
+            return None, None
 
     # same lane
     distance = 0
@@ -394,18 +397,26 @@ def generate_target_waypoint_list_multilane(waypoint, change='left',
     if change == 'left':
         # go left
         wp_left = plan[-1][0].get_left_lane()
+        if wp_left is None:
+            print(f"[LANE_CHANGE_HELPER] ERROR: get_left_lane() returned None!")
+            return None, None
         target_lane_id = wp_left.lane_id
+        print(f"[LANE_CHANGE_HELPER] Changing LEFT to lane_id={target_lane_id}")
         next_wp = wp_left.next(total_lane_change_distance)
         plan.append((next_wp[0], RoadOption.LANEFOLLOW))
     elif change == 'right':
         # go right
         wp_right = plan[-1][0].get_right_lane()
+        if wp_right is None:
+            print(f"[LANE_CHANGE_HELPER] ERROR: get_right_lane() returned None!")
+            return None, None
         target_lane_id = wp_right.lane_id
+        print(f"[LANE_CHANGE_HELPER] Changing RIGHT to lane_id={target_lane_id}")
         next_wp = wp_right.next(total_lane_change_distance)
         plan.append((next_wp[0], RoadOption.LANEFOLLOW))
     else:
         # ERROR, input value for change must be 'left' or 'right'
-        return None
+        return None, None
 
     # other lane
     distance = 0

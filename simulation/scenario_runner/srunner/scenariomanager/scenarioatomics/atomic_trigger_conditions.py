@@ -600,8 +600,10 @@ class InTriggerDistanceToVehicle(AtomicCondition):
         if location is None or reference_location is None:
             return new_status
 
-        if self._comparison_operator(calculate_distance(location, reference_location), self._distance):
+        current_dist = calculate_distance(location, reference_location)
+        if self._comparison_operator(current_dist, self._distance):
             new_status = py_trees.common.Status.SUCCESS
+            print(f"[TRIGGER] Distance trigger FIRED! dist={current_dist:.1f}m <= trigger={self._distance}m")
 
         self.logger.debug("%s.update()[%s->%s]" % (self.__class__.__name__, self.status, new_status))
 

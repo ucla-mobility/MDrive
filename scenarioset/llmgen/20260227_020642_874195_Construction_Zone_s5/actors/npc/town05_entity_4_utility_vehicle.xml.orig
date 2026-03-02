@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="npc" model="vehicle.carlamotors.carlacola" speed="4.8">
+    <waypoint x="-129.681" y="85.293" z="0.000" yaw="-179.942704"/>
+    <waypoint x="-131.395" y="85.291" z="0.000" yaw="-179.942704"/>
+    <waypoint x="-133.109" y="85.290" z="0.000" yaw="-179.942704"/>
+    <waypoint x="-134.824" y="85.288" z="0.000" yaw="-179.928380"/>
+    <waypoint x="-136.538" y="85.285" z="0.000" yaw="-179.928380"/>
+    <waypoint x="-138.252" y="85.283" z="0.000" yaw="-179.942704"/>
+    <waypoint x="-139.967" y="85.282" z="0.000" yaw="-179.942704"/>
+    <waypoint x="-141.681" y="85.280" z="0.000" yaw="-179.942704"/>
+  </route>
+</routes>

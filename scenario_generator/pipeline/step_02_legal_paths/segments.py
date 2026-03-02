@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -120,3 +120,123 @@ def build_segments(data: Dict[str, Any], min_points: int = 6) -> List[LaneSegmen
 def crop_segments(segments: List[LaneSegment], crop: CropBox) -> List[LaneSegment]:
     """Filter segments that intersect with the crop box."""
     return [s for s in segments if crop.intersects_bbox(s.bbox())]
+
+
+def _clip_segment_to_crop(seg: LaneSegment, crop: CropBox, margin: float = 1.0) -> Optional[LaneSegment]:
+    """
+    Clip a segment's points to stay within the crop region (with a small margin).
+    
+    Returns a new LaneSegment with only points inside the expanded crop region,
+    or None if no points remain after clipping.
+    """
+    pts = seg.points
+    yaws = seg.yaws
+    
+    # Find indices of points inside the crop (with margin)
+    inside_mask = (
+        (pts[:, 0] >= crop.xmin - margin) & (pts[:, 0] <= crop.xmax + margin) &
+        (pts[:, 1] >= crop.ymin - margin) & (pts[:, 1] <= crop.ymax + margin)
+    )
+    
+    if not np.any(inside_mask):
+        return None
+    
+    # Find contiguous run of inside points (keep the longest contiguous section)
+    # For simplicity, just keep all inside points
+    inside_indices = np.where(inside_mask)[0]
+    
+    if len(inside_indices) < 2:
+        return None
+    
+    # Get the contiguous range from first to last inside point
+    first_inside = inside_indices[0]
+    last_inside = inside_indices[-1]
+    
+    clipped_pts = pts[first_inside:last_inside + 1]
+    clipped_yaws = yaws[first_inside:last_inside + 1]
+    
+    if len(clipped_pts) < 2:
+        return None
+    
+    return LaneSegment(
+        seg_id=seg.seg_id,
+        road_id=seg.road_id,
+        lane_id=seg.lane_id,
+        section_id=seg.section_id,
+        points=clipped_pts,
+        yaws=clipped_yaws,
+        orig_idx=seg.orig_idx[first_inside:last_inside + 1] if seg.orig_idx is not None else None,
+    )
+
+
+def crop_segments_t_junction(
+    segments: List[LaneSegment], 
+    crop: CropBox,
+    junction_center: Optional[Tuple[float, float]] = None,
+    max_heading_change_deg: float = 30.0,
+    clip_margin: float = 5.0,
+    junction_radius: float = 25.0,
+) -> List[LaneSegment]:
+    """
+    Filter and CLIP segments for T-junction scenarios.
+    
+    For T-junctions:
+    1. Segments must pass near the junction center (within junction_radius)
+    2. Segments fully inside the crop are included as-is
+    3. Segments partially outside are included ONLY if straight, AND they are 
+       clipped to the crop boundary (with margin) so they don't extend to other junctions
+    4. Curved segments that extend outside the crop are excluded (likely from other junctions)
+    
+    Args:
+        segments: List of lane segments to filter
+        crop: The crop box defining the region of interest
+        junction_center: (x, y) center of the junction. If provided, segments that
+                        don't pass near this point are excluded.
+        max_heading_change_deg: Maximum allowed heading change for "straight" segments
+        clip_margin: Margin beyond crop boundary to keep points (for connectivity)
+        junction_radius: Maximum distance from junction center for a segment to be included.
+                        A segment is included if ANY of its points are within this radius.
+        
+    Returns:
+        Filtered and clipped list of segments
+    """
+    
+    def segment_passes_near_junction(seg: LaneSegment) -> bool:
+        """Check if any point of the segment is within junction_radius of center."""
+        if junction_center is None:
+            return True
+        cx, cy = junction_center
+        for pt in seg.points:
+            dist = np.sqrt((pt[0] - cx)**2 + (pt[1] - cy)**2)
+            if dist <= junction_radius:
+                return True
+        return False
+    
+    result = []
+    for seg in segments:
+        if not crop.intersects_bbox(seg.bbox()):
+            # Segment doesn't intersect at all - skip
+            continue
+        
+        # Check if segment passes near the junction center
+        if not segment_passes_near_junction(seg):
+            # Segment is from another junction - skip
+            continue
+        
+        # Check if segment is fully inside crop
+        pts = seg.points
+        start_inside = crop.contains(pts[0])
+        end_inside = crop.contains(pts[-1])
+        
+        if start_inside and end_inside:
+            # Fully inside - always include as-is
+            result.append(seg)
+        else:
+            # Partially outside - only include if straight, and CLIP it
+            if seg.is_straight(max_heading_change_deg):
+                clipped = _clip_segment_to_crop(seg, crop, margin=clip_margin)
+                if clipped is not None:
+                    result.append(clipped)
+            # else: skip curved segments that extend outside crop
+    
+    return result

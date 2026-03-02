@@ -28,6 +28,7 @@ class CropFeatures:
     has_oncoming_pair: bool
     is_t_junction: bool
     is_four_way: bool
+    is_highway: bool
     has_merge_onto_same_road: bool
     has_on_ramp: bool
     lane_count_est: int
@@ -38,6 +39,11 @@ class CropFeatures:
     n_paths: int
     junction_count: int
     area: float
+
+    ramp_main_lanes: int = 0
+    ramp_entry_min_lanes: int = 0
+    ramp_entry_max_lanes: int = 0
+    ramp_candidate_paths: int = 0
 
     _segments_full: Optional[List[Any]] = None
     _junction_centers: Optional[List[np.ndarray]] = None

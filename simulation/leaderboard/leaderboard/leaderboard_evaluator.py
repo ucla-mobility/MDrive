@@ -288,7 +288,10 @@ class LeaderboardEvaluator(object):
                 config,
                 self.manager.scenario_duration_system,
                 self.manager.scenario_duration_game,
-                crash_message
+                crash_message,
+                pdm_trace=self.manager.pdm_traces[i] if hasattr(self.manager, "pdm_traces") else None,
+                pdm_world_trace=getattr(self.manager, "pdm_world_trace", None),
+                pdm_tl_polygons=getattr(self.manager, "pdm_tl_polygons", None),
             )
 
             print("\033[1m> Registering the route statistics\033[0m")

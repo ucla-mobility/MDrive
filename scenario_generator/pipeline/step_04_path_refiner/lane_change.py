@@ -1,3 +1,5 @@
+import random
+import hashlib
 from typing import Any, Dict, List, Tuple
 
 from .geometry import (
@@ -37,6 +39,11 @@ def apply_merge_into_lane_of(
     m_segs = m_sig.get("segments_detailed", []) if isinstance(m_sig.get("segments_detailed", []), list) else []
     t_segs = t_sig.get("segments_detailed", []) if isinstance(t_sig.get("segments_detailed", []), list) else []
 
+    # Stable deterministic jitter so each pair has distinct merge geometry across processes.
+    seed_key = f"{mover.get('vehicle', '')}::{target.get('vehicle', '')}".encode("utf-8")
+    seed = int.from_bytes(hashlib.blake2b(seed_key, digest_size=8).digest(), "big")
+    rng = random.Random(seed)
+
     m_pts, _ = _segments_to_polyline_with_map(m_segs)
     t_pts, _ = _segments_to_polyline_with_map(t_segs)
     if len(m_pts) < 4 or len(t_pts) < 4:
@@ -65,25 +72,30 @@ def apply_merge_into_lane_of(
 
     # gap (cut-off means tighter)
     gap_m = 5.0 if style == "cut_off" else 10.0
+    # Larger jitter so merges don't collapse to the same polyline sample
+    gap_m = max(2.0, gap_m + rng.uniform(-5.0, 5.0))
     # move forward along target by gap
     t_cum = _polyline_cumdist(t_pts)
-    desired_s = min(t_cum[-1], t_cum[merge_idx_t] + gap_m)
+    desired_s = min(t_cum[-1], t_cum[merge_idx_t] + gap_m + rng.uniform(-5.0, 5.0))
     # find idx at desired_s
     j = merge_idx_t
     while j + 1 < len(t_cum) and t_cum[j] < desired_s:
         j += 1
     merge_idx_t2 = j
+    # Small index jitter to avoid all merges snapping to the same vertex
+    merge_idx_t2 = max(0, min(len(t_pts) - 1, merge_idx_t2 + int(rng.choice([-2, -1, 0, 1, 2]))))
     merge_p2 = t_pts[merge_idx_t2]
 
     # choose cut start on mover some distance before reaching a point closest to merge
     m_idx_near = _find_closest_idx(m_pts, merge_p2)
     m_cum = _polyline_cumdist(m_pts)
-    back_m = 12.0  # start lane change ~12m before merge vicinity
+    back_m = max(6.0, 12.0 + rng.uniform(-8.0, 8.0))  # start lane change with stronger jitter
     desired_m_s = max(0.0, m_cum[m_idx_near] - back_m)
     i = m_idx_near
     while i - 1 >= 0 and m_cum[i] > desired_m_s:
         i -= 1
     cut_idx_m = i
+    cut_idx_m = max(0, min(len(m_pts) - 1, cut_idx_m + int(rng.choice([-2, -1, 0, 1, 2]))))
     cut_p = m_pts[cut_idx_m]
 
     # build synthetic transition polyline (simple cubic-like control)

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Lane_Change_Negotiation_d5_attempt1" town="Town05" role="npc" model="vehicle.carlamotors.carlacola" speed="8.0">
+    <waypoint x="-142.106" y="94.029" z="0.000" yaw="0.063926"/>
+    <waypoint x="-141.190" y="94.030" z="0.000" yaw="0.063926"/>
+    <waypoint x="-140.274" y="94.031" z="0.000" yaw="0.062517"/>
+    <waypoint x="-139.357" y="94.032" z="0.000" yaw="0.061101"/>
+    <waypoint x="-138.441" y="94.033" z="0.000" yaw="0.061101"/>
+    <waypoint x="-137.524" y="94.034" z="0.000" yaw="0.059659"/>
+    <waypoint x="-136.608" y="94.035" z="0.000" yaw="0.058147"/>
+    <waypoint x="-135.691" y="94.036" z="0.000" yaw="0.058147"/>
+  </route>
+</routes>

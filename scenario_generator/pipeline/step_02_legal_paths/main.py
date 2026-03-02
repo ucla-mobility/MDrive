@@ -1,5 +1,6 @@
 import argparse
 import os
+from typing import Dict
 
 import numpy as np
 
@@ -146,6 +147,16 @@ def main():
         sig["segments_detailed"] = build_segments_detailed_for_path(p, polyline_sample_n=10)
         candidates.append({"name": name, "signature": sig})
 
+    lane_ids_by_road: Dict[int, set] = {}
+    for s in cropped_segments:
+        try:
+            rid = int(s.road_id)
+            lid = int(s.lane_id)
+        except Exception:
+            continue
+        lane_ids_by_road.setdefault(rid, set()).add(lid)
+    lane_counts_by_road = {rid: len(lanes) for rid, lanes in lane_ids_by_road.items()}
+
     save_prompt_file(
         args.out_prompt,
         crop=crop,
@@ -161,6 +172,7 @@ def main():
             nodes_path=args.nodes,
             params=params,
             paths_named=candidates,
+            lane_counts_by_road=lane_counts_by_road,
         )
 
     if args.viz:

@@ -1,0 +1,14 @@
+{
+  "scale": 1,
+  "theta_rad": 0,
+  "theta_deg": 0,
+  "tx": 507,
+  "ty": -201,
+  "axis_variant": "xy",
+  "xodr_lane_mode": "reference",
+  "xodr_lane_types": "all",
+  "source_pkls": [
+    "v2v_corridors_vector_map.json"
+  ],
+  "source_xodr": "ucla_v2 (1).xodr"
+}

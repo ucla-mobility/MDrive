@@ -256,6 +256,7 @@ def _candidate_lane_inconsistency(cand: Dict[str, Any]) -> int:
     This applies to ALL maneuvers (straight, left, right) and penalizes paths where:
     1. Entry and exit are in different lanes (unexpected lane change)
     2. Intermediate segments deviate from expected lane progression
+    3. Any mid-path lane jump (e.g., [-2, -1, -2] jumps to different lane then back)
     
     Returns a penalty count (0 = clean, 1+ = has issues).
     """
@@ -265,8 +266,8 @@ def _candidate_lane_inconsistency(cand: Dict[str, Any]) -> int:
         return 0
 
     try:
-        entry_lane = int(lanes[0])
-        exit_lane = int(lanes[-1])
+        int(lanes[0])
+        int(lanes[-1])
     except Exception:
         return 0
 
@@ -288,21 +289,27 @@ def _candidate_lane_inconsistency(cand: Dict[str, Any]) -> int:
     if len(unique_lanes) > 2:
         return len(unique_lanes) - 1
     
-    # For straight paths, entry should equal exit
-    if man == "straight" and entry_lane != exit_lane:
-        return 1
-    
-    # For turns, check if the exit segment lane is consistent
-    # (i.e., doesn't change lanes AFTER completing the turn)
-    if man in ("left", "right") and len(lanes) >= 3:
-        # Check if the last two segments are in the same lane (no post-turn lane change)
+    # Check for mid-path lane jumps: any lane change within the path is suspicious
+    # e.g., [-2, -1, -2] has a jump even though entry == exit
+    # Count the number of lane transitions
+    lane_transitions = 0
+    for i in range(1, len(lanes)):
         try:
-            last_lane = int(lanes[-1])
-            second_last = int(lanes[-2])
-            if last_lane != second_last:
-                return 1  # Lane change after turn
+            prev_lane = int(lanes[i - 1])
+            curr_lane = int(lanes[i])
+            if curr_lane != prev_lane:
+                lane_transitions += 1
         except Exception:
             pass
+    
+    # For straight paths, any lane transition is bad
+    if man == "straight" and lane_transitions > 0:
+        return lane_transitions
+    
+    # For turns, we expect exactly 1 transition (at the turn itself where roads change)
+    # More than 1 transition means there's an unexpected lane jump
+    if man in ("left", "right") and lane_transitions > 1:
+        return lane_transitions - 1  # Subtract the expected turn transition
     
     return 0
 
@@ -402,11 +409,50 @@ def _candidate_geometric_discontinuity(cand: Dict[str, Any], threshold_m: float 
     return total_gap
 
 
+def _candidate_entry_in_crop(
+    cand: Dict[str, Any],
+    crop_region: Optional[Dict[str, Any]],
+    margin: float = 5.0,
+) -> bool:
+    """
+    Check if a candidate's entry point is within the crop region (with optional margin).
+    
+    Args:
+        cand: Candidate path dictionary with signature.entry.point
+        crop_region: Dict with xmin, xmax, ymin, ymax keys
+        margin: Extra margin (meters) to expand the crop bounds
+        
+    Returns:
+        True if entry point is inside crop (or if crop is not defined), False otherwise.
+    """
+    if not crop_region:
+        return True  # No crop region = accept all
+    
+    if not all(k in crop_region for k in ("xmin", "xmax", "ymin", "ymax")):
+        return True  # Invalid crop region = accept all
+    
+    entry_pt = _candidate_entry_point(cand)
+    if entry_pt is None:
+        return True  # Can't determine entry point = accept (don't over-constrain)
+    
+    x, y = entry_pt
+    try:
+        xmin = float(crop_region["xmin"]) - margin
+        xmax = float(crop_region["xmax"]) + margin
+        ymin = float(crop_region["ymin"]) - margin
+        ymax = float(crop_region["ymax"]) + margin
+    except (TypeError, ValueError):
+        return True  # Invalid crop values = accept all
+    
+    return xmin <= x <= xmax and ymin <= y <= ymax
+
+
 __all__ = [
     "_build_road_corridors",
     "_candidate_all_road_ids",
     "_candidate_entry_cardinal",
     "_candidate_entry_heading_rad",
+    "_candidate_entry_in_crop",
     "_candidate_entry_lane_id",
     "_candidate_entry_point",
     "_candidate_entry_road_id",

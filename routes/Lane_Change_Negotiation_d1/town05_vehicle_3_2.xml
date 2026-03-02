@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Lane_Change_Negotiation_d1_attempt1" town="Town05" role="ego" speed="10.0">
+    <waypoint x="-166.802" y="91.376" z="0.000" yaw="0.065552"/>
+    <waypoint x="-142.802" y="91.403" z="0.000" yaw="3.631728"/>
+    <waypoint x="-86.646" y="94.968" z="0.000" yaw="3.631728"/>
+  </route>
+</routes>

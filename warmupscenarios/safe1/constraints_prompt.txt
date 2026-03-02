@@ -1,0 +1,27 @@
+You will read a short driving scene description.
+Extract constraints about MOVING vehicles only (Vehicle 1, Vehicle 2, ...).
+Do NOT choose path names here; only list constraints.
+
+Return JSON ONLY with this schema:
+{
+  "vehicles": [
+    {
+      "vehicle": "Vehicle 1",
+      "maneuver": "left" | "right" | "straight" | "unknown",
+      "entry_road": "main" | "side" | "unknown",
+      "exit_road": "main" | "side" | "unknown"
+    }
+  ],
+  "constraints": [
+    { "type": "same_entry_as" | "opposite_entry_of" | "same_exit_as" | "opposite_exit_of", "a": "Vehicle X", "b": "Vehicle Y" }
+  ]
+}
+
+Guidance:
+- If the description says "coming from the same direction as Vehicle K", output type="same_entry_as".
+- If it says "coming from the opposite direction", output type="opposite_entry_of".
+- If it mentions "on the main road" or "on the side road", set entry_road accordingly.
+- If it mentions "onto the main road" or "onto the side road", set exit_road accordingly.
+- Only include constraints that are explicitly stated.
+
+DESCRIPTION:

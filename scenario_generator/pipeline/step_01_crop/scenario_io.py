@@ -47,7 +47,6 @@ def _read_json_scenarios(path: str, source: str) -> List[Scenario]:
                             txt = scenario_text.strip()
                             if not txt:
                                 continue
-                            # Format: category_difficulty if possible, else category_index
                             sid = f"{category}_{global_index:03d}"
                             out.append(Scenario(sid=sid, text=txt, source=source))
                             global_index += 1
@@ -55,11 +54,7 @@ def _read_json_scenarios(path: str, source: str) -> List[Scenario]:
                             txt = str(scenario_text.get("text") or scenario_text.get("description") or "").strip()
                             if not txt:
                                 continue
-                            difficulty = scenario_text.get("difficulty")
-                            if difficulty is not None and str(difficulty).strip():
-                                sid_default = f"{category}_{difficulty}"
-                            else:
-                                sid_default = f"{category}_{global_index:03d}"
+                            sid_default = f"{category}_{global_index:03d}"
                             sid = str(scenario_text.get("id", "")).strip() or sid_default
                             out.append(Scenario(sid=sid, text=txt, source=source))
                             global_index += 1

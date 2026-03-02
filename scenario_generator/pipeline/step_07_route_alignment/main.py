@@ -23,14 +23,12 @@ Usage:
 """
 
 import argparse
-import glob
-import json
 import math
-import os
 import sys
+import inspect
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from xml.dom import minidom
 
 import numpy as np
@@ -42,6 +40,7 @@ def _setup_carla_paths():
     project_root = Path(__file__).resolve().parent.parent.parent.parent
     carla_candidates = [
         project_root / 'carla' / 'PythonAPI' / 'carla',
+        project_root / 'carla912' / 'PythonAPI' / 'carla',
         project_root / 'external_paths' / 'carla_root' / 'PythonAPI' / 'carla',
         Path('/opt/carla/PythonAPI/carla'),
         Path.home() / 'carla' / 'PythonAPI' / 'carla',
@@ -51,15 +50,22 @@ def _setup_carla_paths():
     # the wrong 'carla' module (the project has a 'carla/' directory that shadows
     # the CARLA Python API egg).
     paths_to_remove = []
-    for p in sys.path:
-        path_obj = Path(p).resolve() if p else None
-        if path_obj:
-            # Check if this path contains a 'carla' directory that is NOT the PythonAPI
-            potential_shadow = path_obj / 'carla'
-            if potential_shadow.exists() and potential_shadow.is_dir():
-                # Check if it's the real PythonAPI carla (has dist/ with eggs)
-                if not (potential_shadow / 'dist').exists():
-                    paths_to_remove.append(p)
+    for p in list(sys.path):
+        if not p:
+            continue
+        try:
+            path_obj = Path(p).resolve()
+        except Exception:
+            continue
+        # Never drop global site-packages; we still need stdlib extras like pkg_resources
+        if "site-packages" in path_obj.as_posix().split("/"):
+            continue
+        # Only scrub paths that live inside the repository to avoid nuking the environment
+        if not (path_obj == project_root or project_root in path_obj.parents):
+            continue
+        potential_shadow = path_obj / 'carla'
+        if potential_shadow.exists() and potential_shadow.is_dir() and not (potential_shadow / 'dist').exists():
+            paths_to_remove.append(p)
     
     for p in paths_to_remove:
         if p in sys.path:
@@ -76,12 +82,12 @@ def _setup_carla_paths():
                     egg_files = list(dist_dir.glob('carla-*.egg'))
                 for egg in egg_files:
                     if str(egg) not in sys.path:
-                        sys.path.insert(0, str(egg))
+                        sys.path.append(str(egg))
                         break  # Only add one egg
             
             # Add the carla directory for agents module
             if str(carla_path) not in sys.path:
-                sys.path.insert(0, str(carla_path))
+                sys.path.append(str(carla_path))
             
             return True
     return False
@@ -612,9 +618,25 @@ def align_routes_in_directory(
     carla_map = world.get_map()
     print(f"Using map: {carla_map.name}")
     
-    # Create GlobalRoutePlanner
-    grp = GlobalRoutePlanner(GlobalRoutePlannerDAO(carla_map, sampling_resolution))
-    grp.setup()
+    # Create GlobalRoutePlanner (API changed in CARLA 0.9.12+)
+    # 0.9.10: GlobalRoutePlanner(dao)
+    # 0.9.12: GlobalRoutePlanner(world_map, sampling_resolution)
+    # Detect signature to stay compatible.
+    grp_init_params = list(inspect.signature(GlobalRoutePlanner.__init__).parameters.values())[1:]  # skip self
+    try:
+        if len(grp_init_params) >= 2 and grp_init_params[0].name != "dao":
+            grp = GlobalRoutePlanner(carla_map, sampling_resolution)
+        else:
+            grp = GlobalRoutePlanner(GlobalRoutePlannerDAO(carla_map, sampling_resolution))
+    except TypeError:
+        # Fallback: try both styles explicitly before bubbling up
+        try:
+            grp = GlobalRoutePlanner(carla_map, sampling_resolution)
+        except Exception:
+            grp = GlobalRoutePlanner(GlobalRoutePlannerDAO(carla_map, sampling_resolution))
+    # CARLA 0.9.10 expected an explicit setup(); 0.9.12 builds the graph in __init__.
+    if hasattr(grp, "setup"):
+        grp.setup()
     
     # Find all route XMLs
     xml_files = list(routes_dir.glob('*.xml'))

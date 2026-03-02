@@ -137,12 +137,13 @@ def _project_point_to_path_s_m(
 
 def right_normal_world(tangent: np.ndarray) -> np.ndarray:
     """
-    IMPORTANT: Your "WORLD_FRAME" is effectively left-handed due to mirrored X.
-    In your turn classifier, +delta heading is "right".
-    That corresponds to a +90° rotation being "right".
-    So:
-      right_normal = rot(+90°) = (-dy, dx)
-      left_normal  = rot(-90°) = (dy, -dx)
+    Get the right-side normal vector for a given tangent direction.
+    
+    In CARLA's coordinate system where +x is typically west and +y is north:
+    - If facing west (+x), RIGHT is north (+y)
+    - If facing north (+y), RIGHT is east (-x)
+    
+    So right_normal = rotate tangent by +90 degrees = (-dy, dx)
     """
     dx, dy = float(tangent[0]), float(tangent[1])
     n = np.array([-dy, dx], dtype=float)
@@ -151,6 +152,15 @@ def right_normal_world(tangent: np.ndarray) -> np.ndarray:
 
 
 def left_normal_world(tangent: np.ndarray) -> np.ndarray:
+    """
+    Get the left-side normal vector for a given tangent direction.
+    
+    In CARLA's coordinate system where +x is typically west and +y is north:
+    - If facing west (+x), LEFT is south (-y)
+    - If facing north (+y), LEFT is west (+x)
+    
+    So left_normal = rotate tangent by -90 degrees = (dy, -dx)
+    """
     dx, dy = float(tangent[0]), float(tangent[1])
     n = np.array([dy, -dx], dtype=float)
     nn = float(np.linalg.norm(n))

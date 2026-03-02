@@ -1,0 +1,48 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town06_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "07_placement",
+      "speed": 7.0,
+      "town": "Town06"
+    },
+    {
+      "file": "town06_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town06"
+    },
+    {
+      "file": "town06_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "07_placement",
+      "speed": 7.0,
+      "town": "Town06"
+    },
+    {
+      "file": "town06_vehicle_4_3.xml",
+      "kind": "ego",
+      "name": "Vehicle 4",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town06"
+    },
+    {
+      "file": "town06_vehicle_5_4.xml",
+      "kind": "ego",
+      "name": "Vehicle 5",
+      "route_id": "07_placement",
+      "speed": 8.0,
+      "town": "Town06"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": []
+}

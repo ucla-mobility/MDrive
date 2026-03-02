@@ -4,15 +4,22 @@ Bench2DriveZoo/
 ChatScene/log
 ChatScene/oldlog
 ChatScene/oldexamplescenarios
-
+v2xpnp/Sample_Dataset
+benchmark_runs
 scenario_generator/log
 scenario_generator/routes
+all_videos/
+all_videos.zip
+models/
+ucla_v2_0.9.12-dirty.tar.gz
+debug_runs_passed/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 reports/
+debug_runs/
 
 # C extensions
 *.so
@@ -284,3 +291,13 @@ ckpt/
 ckpt
 simulation/assets/LMDrive
 testscenarios/
+carla912/
+benchmarkfull/
+
+# scenario_generator generated artifacts
+scenario_generator/log/
+scenario_generator/routes/
+scenario_generator/debug_output/
+scenario_generator/legal_paths_test/
+scenario_generator/crop_map.json
+scenario_generator/crop_map_detailed.json

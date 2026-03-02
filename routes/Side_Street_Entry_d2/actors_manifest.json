@@ -1,0 +1,24 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "Side_Street_Entry_d2_attempt2",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "Side_Street_Entry_d2_attempt2",
+      "speed": 8.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [],
+  "pedestrian": [],
+  "static": []
+}

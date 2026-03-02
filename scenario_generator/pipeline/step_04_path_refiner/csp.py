@@ -1,5 +1,6 @@
+import math
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .geometry import (
     CropBox,
@@ -26,14 +27,30 @@ def _candidate_speeds(base: float) -> List[float]:
     return out
 
 
-def _default_start_end_in_crop(segments_detailed: List[Dict[str, Any]], crop: CropBox) -> Optional[Tuple[int, int, List[Tuple[float, float]]]]:
+def _default_start_end_in_crop(
+    segments_detailed: List[Dict[str, Any]],
+    crop: CropBox,
+    start_crop: Optional[CropBox] = None,
+) -> Optional[Tuple[int, int, List[Tuple[float, float]]]]:
     pts, _ = _segments_to_polyline_with_map(segments_detailed)
     if not pts:
         return None
-    se = _first_last_idx_in_crop(pts, crop)
+    scrop = start_crop or crop
+    se = _first_last_idx_in_crop(pts, scrop)
     if se is None:
         return None
     s, e = se
+    cum = _polyline_cumdist(pts)
+    inside_len = cum[e] - cum[s]
+    total_len = cum[-1] if cum else 0.0
+    crop_w = max(0.0, crop.xmax - crop.xmin)
+    crop_h = max(0.0, crop.ymax - crop.ymin)
+    crop_diag = math.hypot(crop_w, crop_h)
+    min_inside = max(40.0, 0.6 * crop_diag)
+    # If the crop only captures a tiny slice of a long corridor, keep the full tail
+    # so routes are not truncated to a few dozen meters.
+    if inside_len < min_inside and total_len > 2.0 * crop_diag:
+        e = len(pts) - 1
     return s, e, pts
 
 
@@ -87,11 +104,19 @@ def refine_spawn_and_speeds_soft_csp(
     """
     vehicles = list(per_vehicle.keys())
 
+    start_outside_margin_m = float((constraints.get("options", {}) or {}).get("start_outside_crop_margin_m", 0.0))
+    start_crop = CropBox(
+        xmin=crop.xmin - start_outside_margin_m,
+        xmax=crop.xmax + start_outside_margin_m,
+        ymin=crop.ymin - start_outside_margin_m,
+        ymax=crop.ymax + start_outside_margin_m,
+    )
+
     # Build base polylines and default start/end indices (in crop)
     base = {}
     for v in vehicles:
         segs = per_vehicle[v]["segments_detailed"]
-        d = _default_start_end_in_crop(segs, crop)
+        d = _default_start_end_in_crop(segs, crop, start_crop=start_crop)
         if d is None:
             # fallback: use entire polyline
             pts, _ = _segments_to_polyline_with_map(segs)
@@ -123,22 +148,28 @@ def refine_spawn_and_speeds_soft_csp(
 
     # Candidate start indices (bounded around default)
     candidates_start = {}
+    n_vehicles = len(vehicles)
+    # Expand the start window when many vehicles are present to improve feasibility
+    start_window_m = 25.0
+    if n_vehicles >= 5:
+        start_window_m = 60.0
+    elif n_vehicles >= 4:
+        start_window_m = 45.0
     for v in vehicles:
         pts = base[v]["pts"]
         s0 = base[v]["start"]
         e0 = base[v]["end"]
         # allowable starts: inside crop, and keep at least 2 points before end
-        inside = [i for i, (x, y) in enumerate(pts) if crop.contains(x, y)]
+        inside = [i for i, (x, y) in enumerate(pts) if start_crop.contains(x, y)]
         if not inside:
             inside = list(range(len(pts)))
-        # bound by window: within +/- 25m of default start in arc-length
+        # bound by window: within +/- start_window_m of default start in arc-length
         cum = _polyline_cumdist(pts)
-        window_m = 25.0
         good = []
         for i in inside:
             if i >= e0:
                 continue
-            if abs(cum[i] - cum[s0]) <= window_m:
+            if abs(cum[i] - cum[s0]) <= start_window_m:
                 good.append(i)
         if not good:
             good = [s0]
@@ -207,10 +238,9 @@ def refine_spawn_and_speeds_soft_csp(
 
     # Adaptively reduce candidate counts if there are many vehicles to avoid combinatorial explosion
     # Target: keep total search space under ~500k
-    n_vehicles = len(vehicles)
     if n_vehicles >= 4:
         # Reduce candidates for larger vehicle counts
-        max_starts = 4 if n_vehicles >= 5 else 6
+        max_starts = 8 if n_vehicles >= 5 else 6
         max_ends = 3 if n_vehicles >= 5 else 4
         max_speeds = 2 if n_vehicles >= 5 else 3
         print(f"[DEBUG] refiner CSP: Reducing candidates due to {n_vehicles} vehicles (max_starts={max_starts}, max_ends={max_ends}, max_speeds={max_speeds})", flush=True)
@@ -233,7 +263,6 @@ def refine_spawn_and_speeds_soft_csp(
     W_SPAWN_REL = 4.0
     W_START_SHIFT = 0.2
     W_SPEED_SHIFT = 0.2
-    W_SPAWN_SEP = 6.0  # soft penalty if spawns are too close
     MIN_SPAWN_SEP_M = 8.0  # Increased from 4.0 to account for vehicle length + CARLA safety margin
     if min_spawn_sep_m is not None and float(min_spawn_sep_m) > 0.0:
         MIN_SPAWN_SEP_M = float(min_spawn_sep_m)
@@ -272,7 +301,7 @@ def refine_spawn_and_speeds_soft_csp(
             if rel.get("a") in spawn_xy and rel.get("b") in spawn_xy:
                 total += W_SPAWN_REL * _eval_spawn_relation(rel, spawn_xy, fwd)
 
-        # discourage overlapping spawns (softly)
+        # discourage overlapping spawns (hard block now: any pair closer than MIN_SPAWN_SEP_M is infeasible)
         spawn_sep_debug = []
         for i in range(len(vehicles)):
             for j in range(i + 1, len(vehicles)):
@@ -280,8 +309,8 @@ def refine_spawn_and_speeds_soft_csp(
                 pa, pb = spawn_xy[va], spawn_xy[vb]
                 d = _dist(pa, pb)
                 if d < MIN_SPAWN_SEP_M:
-                    total += W_SPAWN_SEP * (MIN_SPAWN_SEP_M - d) ** 2
                     spawn_sep_debug.append({"a": va, "b": vb, "dist_m": d})
+                    total = float("inf")
 
         # conflict sync
         conflict_points = []
@@ -309,10 +338,34 @@ def refine_spawn_and_speeds_soft_csp(
             total += W_START_SHIFT * ds
             total += W_SPEED_SHIFT * (assign_speed[v] - base_speed[v]) ** 2
 
+        # Prefer keeping each refined path close to the original picked length.
+        # This avoids large truncations that can silently alter scenario semantics.
+        W_LENGTH_SHRINK = 200.0 if n_vehicles >= 4 else 80.0
+        MIN_KEEP_RATIO = 0.75 if n_vehicles >= 4 else 0.65
+        length_shrink_debug = []
+        for v in vehicles:
+            pts = base[v]["pts"]
+            cum = _polyline_cumdist(pts)
+            base_len = max(1e-3, float(cum[base[v]["end"]] - cum[base[v]["start"]]))
+            refined_len = max(0.0, float(cum[assign_end[v]] - cum[assign_start[v]]))
+            keep_ratio = refined_len / base_len
+            if keep_ratio < MIN_KEEP_RATIO:
+                total += W_LENGTH_SHRINK * ((MIN_KEEP_RATIO - keep_ratio) ** 2) * base_len
+                length_shrink_debug.append(
+                    {
+                        "vehicle": v,
+                        "keep_ratio": keep_ratio,
+                        "base_len_m": base_len,
+                        "refined_len_m": refined_len,
+                    }
+                )
+
         dbg = {
             "spawn_xy": {v: {"x": spawn_xy[v][0], "y": spawn_xy[v][1]} for v in vehicles},
             "conflicts": conflict_points,
         }
+        if length_shrink_debug:
+            dbg["length_shrink"] = length_shrink_debug
         if spawn_sep_debug:
             dbg["spawn_separation"] = spawn_sep_debug
         # Softly penalize choosing an end point outside the strict crop.
@@ -368,6 +421,8 @@ def refine_spawn_and_speeds_soft_csp(
         if i == len(vehs):
             iterations_count += 1
             sc, dbg = score(cur_start, cur_speed, cur_end)
+            if math.isinf(sc):
+                return False
             if best is None or sc < best:
                 best = sc
                 best_dbg = dbg

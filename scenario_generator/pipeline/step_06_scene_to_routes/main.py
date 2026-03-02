@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Any
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 
 def prettify_xml(elem: ET.Element) -> str:
@@ -357,6 +359,29 @@ def convert_scene_to_routes(
         json.dump(manifest, f, indent=2, sort_keys=True)
     
     print(f"\n[OK] Created actors_manifest.json")
+
+    # Write actors_behavior.json (optional)
+    behavior_entries = []
+    for actor in actors:
+        trigger = actor.get("trigger")
+        action = actor.get("action")
+        if trigger is None and action is None:
+            continue
+        actor_name = actor.get("id", "unknown")
+        behavior_entries.append(
+            {
+                "route_id": route_id_base,
+                "actor_name": actor_name,
+                "trigger": trigger,
+                "action": action,
+            }
+        )
+
+    if behavior_entries:
+        behavior_path = output_path / "actors_behavior.json"
+        with open(behavior_path, "w", encoding="utf-8") as f:
+            json.dump({"behaviors": behavior_entries}, f, indent=2)
+        print(f"[OK] Created actors_behavior.json ({len(behavior_entries)} entries)")
     
     # Align routes using CARLA GlobalRoutePlanner (if requested)
     if align_routes:
@@ -371,6 +396,10 @@ def convert_scene_to_routes(
                 backup=True,
             )
             print(f"[OK] Route alignment complete!")
+            try:
+                _plot_routes_after_alignment(output_path)
+            except Exception as viz_exc:
+                print(f"[WARN] Could not plot aligned routes: {viz_exc}")
         except ImportError as e:
             print(f"[WARN] Route alignment not available (CARLA Python API not found): {e}")
         except Exception as e:
@@ -381,6 +410,43 @@ def convert_scene_to_routes(
     print(f"[INFO] Generated {len(manifest['ego'])} ego, {len(manifest['npc'])} npc, "
           f"{len(manifest['static'])} static, {len(manifest['pedestrian'])} pedestrian, "
           f"{len(manifest['bicycle'])} bicycle actors")
+
+
+def _plot_routes_after_alignment(routes_dir: Path) -> None:
+    """
+    Save a quick visualization of all aligned route XMLs (ego + actors) to routes_dir/aligned_routes.png.
+    """
+    xml_files = list(routes_dir.glob("*.xml"))
+    actors_dir = routes_dir / "actors"
+    if actors_dir.exists():
+        xml_files.extend(list(actors_dir.rglob("*.xml")))
+    if not xml_files:
+        return
+
+    plt.figure(figsize=(8, 6))
+    for xf in xml_files:
+        try:
+            tree = ET.parse(str(xf))
+            root = tree.getroot()
+            for route in root.iter("route"):
+                xs, ys = [], []
+                for wp in route.iter("waypoint"):
+                    xs.append(float(wp.get("x", 0)))
+                    ys.append(float(wp.get("y", 0)))
+                if len(xs) >= 2:
+                    plt.plot(xs, ys, linewidth=1.0, alpha=0.7)
+        except Exception:
+            continue
+
+    plt.title("Aligned routes (post-CARLA alignment)")
+    plt.xlabel("x (m)")
+    plt.ylabel("y (m)")
+    plt.axis("equal")
+    plt.grid(True, alpha=0.3)
+    out_path = routes_dir / "aligned_routes.png"
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
 
 
 def main():

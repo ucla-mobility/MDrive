@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-05-16-24-26_21_1" model="walker.pedestrian.0002" role="walker" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="0.000000" roll="0.000000" time="0.000000" x="-446.212064" y="-43.084700" yaw="-135.099274" z="10.870845" />
+    <waypoint pitch="0.000000" roll="0.000000" time="7.100000" x="-446.212064" y="-43.084700" yaw="-135.099274" z="10.863234" />
+    <waypoint pitch="0.000000" roll="0.000000" time="7.200000" x="-445.451305" y="-42.375639" yaw="-134.583418" z="10.851070" />
+    <waypoint pitch="0.000000" roll="0.000000" time="7.300000" x="-444.677382" y="-41.875502" yaw="-134.019588" z="10.844634" />
+    <waypoint pitch="0.000000" roll="0.000000" time="7.400000" x="-443.706131" y="-41.290841" yaw="-133.458320" z="10.833906" />
+  </route>
+</routes>

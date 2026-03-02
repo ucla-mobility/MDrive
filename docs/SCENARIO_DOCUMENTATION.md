@@ -40,6 +40,7 @@ simulation/leaderboard/data/
 ├── CustomRoutes/                 # Custom route definitions
 │   ├── A/                       # Route collection A
 │   │   ├── actors_manifest.json # Actor definitions for routes
+│   │   ├── actors_behavior.json # Triggered actor behaviors (optional)
 │   │   ├── town05_custom_ego_vehicle_0.xml
 │   │   ├── town05_custom_ego_vehicle_1.xml
 │   │   └── actors/
@@ -473,6 +474,48 @@ The `actors_manifest.json` file connects actor XML files to specific routes.
 
 ---
 
+## Actor Behaviors (Optional)
+
+Use `actors_behavior.json` to define trigger-based behaviors for custom actors.
+
+### Behavior File Structure
+
+```json
+{
+  "behaviors": [
+    {
+      "route_id": "247",
+      "actor_name": "pedestrian_crossing",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "vehicle": "Vehicle 1",
+        "distance_m": 8.0,
+        "evidence": "when Vehicle 1 gets close"
+      },
+      "action": {
+        "type": "start_motion",
+        "direction": null,
+        "target_vehicle": null
+      }
+    }
+  ]
+}
+```
+
+### Trigger Types
+
+- `distance_to_vehicle`: Trigger when the actor is within `distance_m` of an ego vehicle.
+
+### Action Types
+
+- `start_motion`: Begin following the actor's waypoint plan (e.g., pedestrian starts crossing).
+- `hard_brake`: NPC vehicle brakes to a stop.
+- `lane_change`: NPC vehicle changes lane.
+  - Use `direction`: `"left"` or `"right"` when specified.
+  - Use `target_vehicle`: `"Vehicle 1"` to request a lane change into that ego vehicle's lane (best effort).
+
+---
+
 ## Weather Configuration
 
 Weather can be configured in three ways:
@@ -553,6 +596,7 @@ carla.WeatherParameters(sun_altitude_angle=70, cloudiness=30)
 | `ROUTES` | Specific route file path | `data/CustomRoutes/A/town05_custom_ego_vehicle_0.xml` |
 | `SCENARIOS` | Path to scenario JSON | `data/scenarios/town05_all_scenarios.json` |
 | `CUSTOM_ACTOR_MANIFEST` | Path to actor manifest | `data/CustomRoutes/A/actors_manifest.json` |
+| `CUSTOM_ACTOR_BEHAVIORS` | Path to actor behavior file | `data/CustomRoutes/A/actors_behavior.json` |
 | `CUSTOM_ACTOR_DEFAULT_SPEED` | Default actor speed (m/s) | `8.0` |
 
 ### Running a Scenario
@@ -566,6 +610,7 @@ export SCENARIO_RUNNER_ROOT=simulation/scenario_runner
 export ROUTES_DIR=${LEADERBOARD_ROOT}/data/CustomRoutes/A
 export SCENARIOS=${LEADERBOARD_ROOT}/data/scenarios/town05_all_scenarios.json
 export CUSTOM_ACTOR_MANIFEST=${ROUTES_DIR}/actors_manifest.json
+export CUSTOM_ACTOR_BEHAVIORS=${ROUTES_DIR}/actors_behavior.json
 
 # Run evaluation
 python ${LEADERBOARD_ROOT}/leaderboard/leaderboard_evaluator.py \

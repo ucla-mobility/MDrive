@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from .geometry import cumulative_dist, heading_deg_from_vec, sanitize, wrap180
+from .geometry import sanitize, wrap180
 from .models import LegalPath
 
 

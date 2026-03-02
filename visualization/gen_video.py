@@ -1,6 +1,5 @@
 import argparse
 import ast
-import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -17,7 +16,36 @@ STEP_TIME_PATTERN = re.compile(r"step infer time:\s*([0-9.]+)")
 FRAME_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LABEL_PADDING = 14
 VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle_|rgb_|meta_)(\d+)$")
-ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_", "meta_")
+ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_", "meta_", "1", "2")
+
+
+def _parse_suffix_filter(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    parts = [p.strip().lstrip("_") for p in re.split(r"[,\s]+", raw) if p.strip()]
+    return [p.lower() for p in parts if p]
+
+
+def _matches_suffix(name: str, suffixes: List[str]) -> bool:
+    if not suffixes:
+        return True
+    lowered = name.lower()
+    tokens = re.split(r"[_\-]+", lowered)
+    for suffix in suffixes:
+        if not suffix:
+            continue
+        if lowered.endswith(suffix) or lowered.endswith(f"_{suffix}") or suffix in tokens:
+            return True
+    return False
+
+
+def _is_frame_file(path: Path) -> bool:
+    """Return True for actual image frames; exclude hidden/metadata sidecars."""
+    if not path.is_file():
+        return False
+    if path.name.startswith("."):
+        return False
+    return path.suffix.lower() in FRAME_EXTENSIONS
 
 
 @dataclass
@@ -36,7 +64,7 @@ class NegotiationOverlay:
     color: Tuple[int, int, int]
 
 
-def list_vehicle_streams(root: Path) -> List[VehicleStream]:
+def list_vehicle_streams(root: Path, stream_suffixes: Optional[List[str]] = None) -> List[VehicleStream]:
     """Discover vehicle-specific image folders within the given root."""
     streams: List[VehicleStream] = []
     for entry in root.iterdir():
@@ -46,14 +74,15 @@ def list_vehicle_streams(root: Path) -> List[VehicleStream]:
         m = VEHICLE_DIR_PATTERN.match(entry.name)
         if not m:
             continue
+        if stream_suffixes and not _matches_suffix(entry.name, stream_suffixes):
+            continue
 
         index = int(m.group(1))   # the (\d+) capture
 
         image_paths = sorted(
-            (entry / fname for fname in os.listdir(entry)),
+            (path for path in entry.iterdir() if _is_frame_file(path)),
             key=lambda p: p.stem,
         )
-        image_paths = [p for p in image_paths if p.suffix.lower() in FRAME_EXTENSIONS]
         if not image_paths:
             continue
 
@@ -80,7 +109,7 @@ def _scenario_has_vehicle_images(scenario_dir: Path) -> bool:
         if not (child.is_dir() and VEHICLE_DIR_PATTERN.match(child.name)):
             continue
         for item in child.iterdir():
-            if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
+            if _is_frame_file(item):
                 return True
     return False
 
@@ -91,7 +120,7 @@ def _scenario_has_flat_images(scenario_dir: Path) -> bool:
         return False
     try:
         for item in scenario_dir.iterdir():
-            if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
+            if _is_frame_file(item):
                 return True
     except Exception:
         return False
@@ -552,25 +581,66 @@ def build_video(
     fps: float,
     resize_factor: int,
     negotiation_events: List[NegotiationOverlay],
+    side_stream: Optional[VehicleStream] = None,
+    stack_mode: str = "vertical",
 ) -> None:
+    def resize_with_aspect(image: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+        """Resize into a fixed canvas while preserving aspect ratio (letterbox)."""
+        target_w, target_h = size
+        src_h, src_w = image.shape[:2]
+        if src_h <= 0 or src_w <= 0:
+            return np.zeros((target_h, target_w, 3), dtype=np.uint8)
+
+        scale = min(float(target_w) / float(src_w), float(target_h) / float(src_h))
+        new_w = max(1, int(round(src_w * scale)))
+        new_h = max(1, int(round(src_h * scale)))
+        interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(image, (new_w, new_h), interpolation=interp)
+
+        canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        off_x = (target_w - new_w) // 2
+        off_y = (target_h - new_h) // 2
+        canvas[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+        return canvas
+
     first_frame = cv2.imread(str(streams[0].image_paths[0]))
     if first_frame is None:
         raise RuntimeError(f"Unable to read {streams[0].image_paths[0]}")
 
     base_height, base_width = first_frame.shape[:2]
     target_size = (max(1, base_width // resize_factor), max(1, base_height // resize_factor))
-    combined_height = target_size[1] * len(streams)
+    if stack_mode not in ("vertical", "horizontal"):
+        raise ValueError(f"Unsupported stack_mode: {stack_mode}")
+
+    if stack_mode == "horizontal":
+        combined_height = target_size[1]
+        combined_width = target_size[0] * len(streams)
+    else:
+        combined_height = target_size[1] * len(streams)
+        combined_width = target_size[0]
+
+    if side_stream:
+        combined_width += target_size[0]
+
     # If simple mode (no negotiation events), omit sidebar column entirely.
     simple_mode = (not negotiation_events)
     column_width = 0 if simple_mode else max(220, int(round(target_size[0] * 0.4)))
-    total_width = target_size[0] + column_width
+    total_width = combined_width + column_width
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(
         str(output_path), fourcc, fps, (total_width, combined_height)
     )
 
-    max_frames = max(len(stream.image_paths) for stream in streams)
+    main_frames = max(len(stream.image_paths) for stream in streams)
+    side_frames = len(side_stream.image_paths) if side_stream else 0
+    max_frames = max(main_frames, side_frames)
+    # Calculate frame mapping for each stream
+    def get_frame_index(total_frames, output_idx, output_total):
+        if total_frames <= 1:
+            return 0
+        return int(round(output_idx * (total_frames - 1) / (output_total - 1))) if output_total > 1 else 0
+
 
     event_map: Dict[int, List[NegotiationOverlay]] = defaultdict(list)
     for event in negotiation_events:
@@ -585,15 +655,27 @@ def build_video(
 
         frames: List[np.ndarray] = []
         for stream in streams:
-            image_index = min(frame_idx, len(stream.image_paths) - 1)
+            image_index = get_frame_index(len(stream.image_paths), frame_idx, max_frames)
             image = cv2.imread(str(stream.image_paths[image_index]))
             if image is None:
                 raise RuntimeError(f"Unable to read {stream.image_paths[image_index]}")
-            image = cv2.resize(image, target_size)
+            image = resize_with_aspect(image, target_size)
             image, _ = add_label(image, stream.label)
             frames.append(image)
 
-        combined = frames[0] if len(frames) == 1 else cv2.vconcat(frames)
+        if len(frames) == 1:
+            combined = frames[0]
+        else:
+            combined = cv2.hconcat(frames) if stack_mode == "horizontal" else cv2.vconcat(frames)
+
+        if side_stream:
+            side_index = get_frame_index(len(side_stream.image_paths), frame_idx, max_frames)
+            side_image = cv2.imread(str(side_stream.image_paths[side_index]))
+            if side_image is None:
+                raise RuntimeError(f"Unable to read {side_stream.image_paths[side_index]}")
+            side_image = resize_with_aspect(side_image, (target_size[0], combined_height))
+            side_image, _ = add_label(side_image, side_stream.label)
+            combined = cv2.hconcat([combined, side_image])
         if not simple_mode:
             column = np.zeros((combined_height, column_width, 3), dtype=np.uint8)
             column[:] = (24, 24, 24)
@@ -700,6 +782,24 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to a log file. If omitted, the script searches within the input directory.",
     )
+    parser.add_argument(
+        "--only-suffix",
+        default=None,
+        help=(
+            "Filter inputs by suffix token. In flat-image mode, only filenames whose stem matches "
+            "the suffix are kept (e.g., --only-suffix cam1 keeps *_cam1.*). In scenario mode, only "
+            "stream folders whose names match the suffix are included. Multiple suffixes can be "
+            "comma- or space-separated."
+        ),
+    )
+    parser.add_argument(
+        "--side-by-side-dir",
+        default=None,
+        help=(
+            "Optional directory of images to append as an extra side-by-side column. This folder is "
+            "not filtered by --only-suffix and should contain flat image files (no vehicle subfolders)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -746,8 +846,26 @@ def main() -> None:
             batch_output_dir = None
 
     print(f"Discovered {len(scenario_dirs)} scenario directory(ies) to process.")
+    suffixes = _parse_suffix_filter(args.only_suffix)
+    side_stream: Optional[VehicleStream] = None
+    if args.side_by_side_dir:
+        side_root = Path(args.side_by_side_dir).expanduser().resolve()
+        if not side_root.exists():
+            raise FileNotFoundError(f"Side-by-side directory {side_root} does not exist.")
+        if not _scenario_has_flat_images(side_root):
+            raise FileNotFoundError(
+                f"No flat images found in side-by-side directory {side_root}."
+            )
+        side_images = sorted(
+            [p for p in side_root.iterdir() if _is_frame_file(p)],
+            key=lambda p: p.stem,
+        )
+        if not side_images:
+            raise FileNotFoundError(f"No images found in side-by-side directory {side_root}.")
+        side_stream = VehicleStream(index=0, label=side_root.name, image_paths=side_images)
 
     for scenario_dir in scenario_dirs:
+        stack_mode = "vertical"
         if len(scenario_dirs) > 1:
             print(f"\nProcessing scenario: {scenario_dir}")
 
@@ -760,14 +878,42 @@ def main() -> None:
 
         # In flat mode, build a single stream from images directly in the folder.
         if _scenario_has_flat_images(scenario_dir):
-            image_paths = sorted(
-                [p for p in scenario_dir.iterdir() if p.is_file() and p.suffix.lower() in FRAME_EXTENSIONS],
+            all_images = sorted(
+                [p for p in scenario_dir.iterdir() if _is_frame_file(p)],
                 key=lambda p: p.stem,
             )
-            streams = [VehicleStream(index=0, label=f"{scenario_dir.name}", image_paths=image_paths)]
+            if not all_images:
+                raise FileNotFoundError(f"No images found in {scenario_dir}.")
+
+            if suffixes:
+                streams = []
+                for idx, suffix in enumerate(suffixes):
+                    suffix_images = [p for p in all_images if _matches_suffix(p.stem, [suffix])]
+                    if not suffix_images:
+                        print(f"[WARN] No images found for suffix '{suffix}' in {scenario_dir}.")
+                        continue
+                    streams.append(
+                        VehicleStream(index=idx, label=suffix, image_paths=suffix_images)
+                    )
+                if not streams:
+                    raise FileNotFoundError(
+                        f"No images found in {scenario_dir} matching suffix filter {suffixes}."
+                    )
+                if len(streams) > 1:
+                    stack_mode = "horizontal"
+            else:
+                streams = [VehicleStream(index=0, label=f"{scenario_dir.name}", image_paths=all_images)]
             negotiation_events: List[NegotiationOverlay] = []
         else:
-            streams = list_vehicle_streams(scenario_dir)
+            streams = list_vehicle_streams(scenario_dir, stream_suffixes=suffixes)
+            if not streams:
+                message = (
+                    f"No vehicle streams found in {scenario_dir} matching suffix filter {suffixes}."
+                )
+                if len(scenario_dirs) > 1:
+                    print(f"[WARN] {message} Skipping.")
+                    continue
+                raise FileNotFoundError(message)
 
             log_path = (
                 Path(args.log_path).expanduser().resolve()
@@ -795,6 +941,8 @@ def main() -> None:
             fps=args.fps,
             resize_factor=args.resize_factor,
             negotiation_events=negotiation_events,
+            side_stream=side_stream,
+            stack_mode=stack_mode,
         )
         print(f"Wrote video to {output_path}")
 

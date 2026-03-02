@@ -62,23 +62,30 @@ class BasicScenario(object):
         if debug_mode:
             py_trees.logging.level = py_trees.logging.Level.DEBUG
             
-        for ego_vehicle_id in range(len(self.ego_vehicles)):
+        has_ego = len(self.ego_vehicles) > 0
+        setup_count = len(self.ego_vehicles) if has_ego else 1
+        for ego_vehicle_id in range(setup_count):
             # print("------------basic_scenario-----------")
             # print(len(self.ego_vehicles))
             behavior = self._create_behavior()
             if isinstance(behavior,list):
-                behavior = behavior[ego_vehicle_id]
+                if ego_vehicle_id < len(behavior):
+                    behavior = behavior[ego_vehicle_id]
+                else:
+                    behavior = None
             # A list of criteria
             criteria = None
-            if criteria_enable:
+            if criteria_enable and has_ego:
                 criteria = self._create_test_criteria()
             if isinstance(criteria,list):
-                if isinstance(criteria[0],list):
+                if criteria and isinstance(criteria[0],list):
                     criteria = criteria[ego_vehicle_id]
 
             # Add a trigger condition for the behavior to ensure the behavior is only activated, when it is relevant
             behavior_seq = py_trees.composites.Sequence()
-            trigger_behavior = self._setup_scenario_trigger(config, ego_vehicle_id)
+            trigger_behavior = None
+            if has_ego:
+                trigger_behavior = self._setup_scenario_trigger(config, ego_vehicle_id)
             if trigger_behavior:
                 behavior_seq.add_child(trigger_behavior)
 
@@ -86,13 +93,15 @@ class BasicScenario(object):
                 behavior_seq.add_child(behavior)
                 behavior_seq.name = behavior.name
 
-            end_behavior = self._setup_scenario_end(config, ego_vehicle_id)
+            end_behavior = None
+            if has_ego:
+                end_behavior = self._setup_scenario_end(config, ego_vehicle_id)
             if end_behavior:
                 behavior_seq.add_child(end_behavior)
             # print("basic scenario")
             # print(self.ego_vehicles[0])
             # print(len(self.ego_vehicles))
-            if len(self.ego_vehicles) == 1:
+            if len(self.ego_vehicles) <= 1:
                 self.scenario = Scenario(behavior_seq, criteria, self.name, self.timeout, self.terminate_on_failure)
             else:
                 self.scenario.append(Scenario(behavior_seq, criteria, self.name, self.timeout, self.terminate_on_failure))

@@ -1,0 +1,42 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "Lane_Change_Negotiation_d5_attempt1",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "ego",
+      "name": "Vehicle 2",
+      "route_id": "Lane_Change_Negotiation_d5_attempt1",
+      "speed": 8.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "ego",
+      "name": "Vehicle 3",
+      "route_id": "Lane_Change_Negotiation_d5_attempt1",
+      "speed": 9.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [
+    {
+      "file": "actors/npc/town05_entity_1_npc_vehicle_01.xml",
+      "kind": "npc",
+      "model": "vehicle.carlamotors.carlacola",
+      "name": "entity_1",
+      "route_id": "Lane_Change_Negotiation_d5_attempt1",
+      "speed": 8.0,
+      "town": "Town05"
+    }
+  ],
+  "pedestrian": [],
+  "static": []
+}

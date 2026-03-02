@@ -23,15 +23,25 @@ TRIGGER_THRESHOLD = 2.0  # Threshold to say if a trigger position is new or repe
 TRIGGER_ANGLE_THRESHOLD = 10  # Threshold to say if two angles can be considering matching when matching transforms.
 
 _CUSTOM_ACTOR_MANIFEST_CACHE = None
+_CUSTOM_ACTOR_BEHAVIOR_CACHE = None
 _EGO_VEHICLE_MODELS_CACHE = None  # Cache for ego vehicle models from manifest
 ROLE_DEFAULTS: Dict[str, Dict[str, object]] = {
     "npc": {"model": "vehicle.tesla.model3", "speed": 8.0},
     "pedestrian": {"model": "walker.pedestrian.0001", "speed": 1.5},
+    "walker": {"model": "walker.pedestrian.0001", "speed": 1.5},  # Alias for pedestrian
     "bicycle": {"model": "vehicle.diamondback.century", "speed": 4.0},
     "bike": {"model": "vehicle.diamondback.century", "speed": 4.0},
+    "cyclist": {"model": "vehicle.diamondback.century", "speed": 4.0},  # Alias for bicycle
     "static": {"model": "static.prop.trafficcone01", "speed": 0.0},
     "static_prop": {"model": "static.prop.trafficcone01", "speed": 0.0},
 }
+
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_routes_dir(manifest_path: Path) -> Path:
@@ -115,11 +125,76 @@ def _load_custom_actor_manifest() -> Dict[str, List[Dict[str, object]]]:
                     "name": entry.get("name") or rel_path_obj.stem,
                     "speed": entry.get("speed"),
                     "model": entry.get("model"),
+                    "control_mode": entry.get("control_mode"),
                 }
             )
 
     _CUSTOM_ACTOR_MANIFEST_CACHE = actor_entries
     return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+
+def _load_custom_actor_behaviors() -> Dict[str, List[Dict[str, object]]]:
+    """
+    Load and cache optional behavior specs for custom actors.
+    Returns a mapping of route_id -> list of behavior entries.
+    """
+    global _CUSTOM_ACTOR_BEHAVIOR_CACHE  # pylint: disable=global-statement
+
+    if _CUSTOM_ACTOR_BEHAVIOR_CACHE is not None:
+        return _CUSTOM_ACTOR_BEHAVIOR_CACHE
+
+    behavior_path = None
+    env_path = os.environ.get("CUSTOM_ACTOR_BEHAVIORS")
+    if env_path:
+        behavior_path = Path(env_path).expanduser().resolve()
+
+    if not behavior_path or not behavior_path.exists():
+        manifest_env = os.environ.get("CUSTOM_ACTOR_MANIFEST")
+        if manifest_env:
+            cand = Path(manifest_env).expanduser().resolve().parent / "actors_behavior.json"
+            if cand.exists():
+                behavior_path = cand
+
+    if not behavior_path or not behavior_path.exists():
+        candidates = [
+            Path.cwd() / "routes" / "actors_behavior.json",
+            Path.cwd() / "scenario_builder_api" / "routes" / "actors_behavior.json",
+        ]
+        for routes_dir in [Path.cwd() / "routes", Path.cwd() / "scenario_builder_api" / "routes"]:
+            if routes_dir.exists():
+                for subdir_behavior in routes_dir.glob("*/actors_behavior.json"):
+                    candidates.append(subdir_behavior)
+        for candidate in candidates:
+            if candidate.exists():
+                behavior_path = candidate
+                break
+
+    if not behavior_path or not behavior_path.exists():
+        _CUSTOM_ACTOR_BEHAVIOR_CACHE = {}
+        return _CUSTOM_ACTOR_BEHAVIOR_CACHE
+
+    try:
+        data = json.loads(behavior_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _CUSTOM_ACTOR_BEHAVIOR_CACHE = {}
+        return _CUSTOM_ACTOR_BEHAVIOR_CACHE
+
+    if isinstance(data, dict) and isinstance(data.get("behaviors"), list):
+        entries = data["behaviors"]
+    elif isinstance(data, list):
+        entries = data
+    else:
+        entries = []
+
+    by_route: Dict[str, List[Dict[str, object]]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        route_id = entry.get("route_id") or entry.get("route") or "*"
+        by_route.setdefault(str(route_id), []).append(entry)
+
+    _CUSTOM_ACTOR_BEHAVIOR_CACHE = by_route
+    return _CUSTOM_ACTOR_BEHAVIOR_CACHE
 
 
 def _load_ego_vehicle_models() -> Dict[int, str]:
@@ -227,7 +302,20 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
             continue
 
         plan_locations: List[carla.Location] = []
+        plan_transforms: List[carla.Transform] = []
+        plan_time_candidates: List[float | None] = []
+        plan_speed_candidates: List[float | None] = []
         spawn_transform = None
+        # Optional opt-out: route attribute snap_to_road="false" disables road snapping for this actor
+        snap_attr = str(route_node.attrib.get("snap_to_road", "true")).lower()
+        snap_to_road = snap_attr not in ("false", "0", "no", "off")
+        # Optional spawn-only override: allows lane-snapped spawn while keeping authored plan handling.
+        snap_spawn_attr = route_node.attrib.get("snap_spawn_to_road")
+        if snap_spawn_attr is None:
+            snap_spawn_to_road = snap_to_road
+        else:
+            snap_spawn_to_road = str(snap_spawn_attr).lower() not in ("false", "0", "no", "off")
+
         for index, waypoint in enumerate(route_node.iter("waypoint")):
             try:
                 loc = carla.Location(
@@ -239,30 +327,40 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
                 continue
 
             plan_locations.append(loc)
+            yaw = _safe_float(waypoint.attrib.get("yaw")) or 0.0
+            pitch = _safe_float(waypoint.attrib.get("pitch")) or 0.0
+            roll = _safe_float(waypoint.attrib.get("roll")) or 0.0
+            plan_transforms.append(carla.Transform(loc, carla.Rotation(pitch=pitch, yaw=yaw, roll=roll)))
+            plan_time_candidates.append(_safe_float(waypoint.attrib.get("time") or waypoint.attrib.get("t")))
+            plan_speed_candidates.append(_safe_float(waypoint.attrib.get("speed")))
 
             if index == 0:
-                try:
-                    yaw = float(waypoint.attrib.get("yaw", 0.0))
-                except (TypeError, ValueError):
-                    yaw = 0.0
-                try:
-                    pitch = float(waypoint.attrib.get("pitch", 0.0))
-                except (TypeError, ValueError):
-                    pitch = 0.0
-                try:
-                    roll = float(waypoint.attrib.get("roll", 0.0))
-                except (TypeError, ValueError):
-                    roll = 0.0
-                spawn_transform = carla.Transform(
-                    loc,
-                    carla.Rotation(pitch=pitch, yaw=yaw, roll=roll),
-                )
+                spawn_transform = plan_transforms[-1]
 
         if not plan_locations or spawn_transform is None:
             continue
 
+        plan_times = None
+        if plan_time_candidates and all(t is not None for t in plan_time_candidates):
+            plan_times = [float(t) for t in plan_time_candidates]
+
+        plan_speeds = None
+        if plan_speed_candidates and all(s is not None for s in plan_speed_candidates):
+            plan_speeds = [float(s) for s in plan_speed_candidates]
+
         role = (entry.get("kind") or entry.get("role") or "npc").lower()
         role_defaults = ROLE_DEFAULTS.get(role, {})
+
+        route_control_mode = str(route_node.attrib.get("control_mode", "")).strip().lower()
+        manifest_control_mode = str(entry.get("control_mode", "")).strip().lower()
+        if route_control_mode in ("policy", "replay"):
+            control_mode = route_control_mode
+        elif manifest_control_mode in ("policy", "replay"):
+            control_mode = manifest_control_mode
+        elif role in ("static", "static_prop"):
+            control_mode = "replay"
+        else:
+            control_mode = "policy"
 
         default_model = entry.get("model") or role_defaults.get("model") or "vehicle.*"
         try:
@@ -278,8 +376,14 @@ def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, obje
                 "model": default_model,
                 "spawn_transform": spawn_transform,
                 "plan": plan_locations,
+                "plan_transforms": plan_transforms,
+                "plan_times": plan_times,
+                "plan_speeds": plan_speeds,
                 "target_speed": target_speed,
                 "avoid_collision": entry.get("avoid_collision", False),
+                "snap_to_road": snap_to_road,
+                "snap_spawn_to_road": snap_spawn_to_road,
+                "control_mode": control_mode,
             }
         )
 
@@ -351,13 +455,29 @@ class RouteParser(object):
             new_config.scenario_file = scenario_file
 
             waypoint_list = []  # the list of waypoints that can be found on this route
+            waypoint_yaws: List[float | None] = []
+            waypoint_pitches: List[float | None] = []
+            waypoint_rolls: List[float | None] = []
+            waypoint_times: List[float | None] = []
             for waypoint in route.iter('waypoint'):
                 waypoint_list.append(carla.Location(x=float(waypoint.attrib['x']),
                                                     y=float(waypoint.attrib['y']),
                                                     z=float(waypoint.attrib['z'])))
+                waypoint_yaws.append(_safe_float(waypoint.attrib.get('yaw')))
+                waypoint_pitches.append(_safe_float(waypoint.attrib.get('pitch')))
+                waypoint_rolls.append(_safe_float(waypoint.attrib.get('roll')))
+                waypoint_times.append(_safe_float(waypoint.attrib.get('time') or waypoint.attrib.get('t')))
 
             new_config.trajectory = waypoint_list
+            new_config.trajectory_yaws = waypoint_yaws
+            new_config.trajectory_pitches = waypoint_pitches
+            new_config.trajectory_rolls = waypoint_rolls
+            new_config.trajectory_times = waypoint_times
             new_config.custom_actors = _build_custom_actor_configs(route_id, new_config.town)
+            behaviors_map = _load_custom_actor_behaviors()
+            route_behaviors = list(behaviors_map.get(str(route_id), []))
+            route_behaviors += list(behaviors_map.get("*", []))
+            new_config.custom_actor_behaviors = route_behaviors
 
             list_route_descriptions.append(new_config)
 

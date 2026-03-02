@@ -45,12 +45,12 @@ class UniadAgent(autonomous_agent.AutonomousAgent):
 		self.last_steers = deque()
 		# Per-ego PID controllers to avoid cross-vehicle state sharing
 		self.pidcontrollers = [PIDController() for _ in range(ego_vehicles_num)]
-		self.config_path = path_to_conf_file.split('+')[0]
-		self.ckpt_path = path_to_conf_file.split('+')[1]
+		self.config_path = 'Bench2DriveZoo/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py'
+		self.ckpt_path = 'ckpt/UniAD/uniad_base_b2d.pth'
+		now = datetime.datetime.now()
 		if IS_BENCH2DRIVE:
-			self.save_name = path_to_conf_file.split('+')[-1]
+			self.save_name = path_to_conf_file.split('+')[-1] if '+' in path_to_conf_file else 'uniad_b2d'
 		else:
-			now = datetime.datetime.now()
 			self.save_name = '_'.join(map(lambda x: '%02d' % x, (now.month, now.day, now.hour, now.minute, now.second)))
 		self.step = -1
 		self.wall_start = time.time()

@@ -1,0 +1,1075 @@
+{
+  "source_candidates": "log/Vehicle_1_is_traveling_straight_/legal_paths_detailed.json",
+  "nodes": "town_nodes/Town02.json",
+  "crop_region": {
+    "xmin": 110.0,
+    "xmax": 170.0,
+    "ymin": 210.0,
+    "ymax": 250.0
+  },
+  "parameters": {
+    "max_yaw_diff_deg": 60.0,
+    "connect_radius_m": 6.0,
+    "min_path_length_m": 20.0,
+    "max_paths": 100,
+    "max_depth": 5,
+    "turn_frame": "WORLD_FRAME"
+  },
+  "picked": [
+    {
+      "vehicle": "Vehicle 1",
+      "name": "path_005__man=straight__entry=W(0deg)__exit=W(0deg)__len=126.0m__n=3segs",
+      "signature": {
+        "entry": {
+          "point": {
+            "x": 116.979,
+            "y": 240.915
+          },
+          "heading_deg": 0.03342253425819308,
+          "cardinal4": "W",
+          "bound": "westbound",
+          "road_id": 11,
+          "section_id": 0,
+          "lane_id": 1
+        },
+        "exit": {
+          "point": {
+            "x": 168.519,
+            "y": 240.946
+          },
+          "heading_deg": 0.03342253425833519,
+          "cardinal4": "W",
+          "bound": "westbound",
+          "road_id": 10,
+          "section_id": 0,
+          "lane_id": 1
+        },
+        "length_m": 48.000008624999026,
+        "num_segments": 3,
+        "segment_ids": [
+          66,
+          29,
+          64
+        ],
+        "roads": [
+          11,
+          178,
+          10
+        ],
+        "sections": [
+          0,
+          0,
+          0
+        ],
+        "lanes": [
+          1,
+          1,
+          1
+        ],
+        "maneuvers_between": [
+          "straight",
+          "straight"
+        ],
+        "entry_to_exit_turn": "straight",
+        "segments_detailed": [
+          {
+            "road_id": 11,
+            "section_id": 0,
+            "lane_id": 1,
+            "seg_id": 66,
+            "length_m": 8.000000999999937,
+            "bbox": {
+              "xmin": 116.979,
+              "xmax": 124.979,
+              "ymin": 240.915,
+              "ymax": 240.919
+            },
+            "start": {
+              "point": {
+                "x": 116.979,
+                "y": 240.915
+              },
+              "heading_deg": 0.02864788736935416
+            },
+            "end": {
+              "point": {
+                "x": 124.979,
+                "y": 240.919
+              },
+              "heading_deg": 0.02864788736935416
+            },
+            "polyline_sample": [
+              {
+                "x": 116.979,
+                "y": 240.915
+              },
+              {
+                "x": 124.979,
+                "y": 240.919
+              }
+            ]
+          },
+          {
+            "road_id": 178,
+            "section_id": 0,
+            "lane_id": 1,
+            "seg_id": 29,
+            "length_m": 16.000002749999656,
+            "bbox": {
+              "xmin": 126.979,
+              "xmax": 142.979,
+              "ymin": 240.921,
+              "ymax": 240.93
+            },
+            "start": {
+              "point": {
+                "x": 126.979,
+                "y": 240.921
+              },
+              "heading_deg": 0.02864788736935396
+            },
+            "end": {
+              "point": {
+                "x": 142.979,
+                "y": 240.93
+              },
+              "heading_deg": 0.02864788736935416
+            },
+            "polyline_sample": [
+              {
+                "x": 126.979,
+                "y": 240.921
+              },
+              {
+                "x": 128.979,
+                "y": 240.922
+              },
+              {
+                "x": 130.979,
+                "y": 240.923
+              },
+              {
+                "x": 132.979,
+                "y": 240.924
+              },
+              {
+                "x": 134.979,
+                "y": 240.926
+              },
+              {
+                "x": 136.979,
+                "y": 240.927
+              },
+              {
+                "x": 138.979,
+                "y": 240.928
+              },
+              {
+                "x": 140.979,
+                "y": 240.929
+              },
+              {
+                "x": 142.979,
+                "y": 240.93
+              }
+            ]
+          },
+          {
+            "road_id": 10,
+            "section_id": 0,
+            "lane_id": 1,
+            "seg_id": 64,
+            "length_m": 24.000004874999433,
+            "bbox": {
+              "xmin": 144.519,
+              "xmax": 168.519,
+              "ymin": 240.931,
+              "ymax": 240.946
+            },
+            "start": {
+              "point": {
+                "x": 144.519,
+                "y": 240.931
+              },
+              "heading_deg": 0.04297182657739354
+            },
+            "end": {
+              "point": {
+                "x": 168.519,
+                "y": 240.946
+              },
+              "heading_deg": 0.04297182657739354
+            },
+            "polyline_sample": [
+              {
+                "x": 144.519,
+                "y": 240.931
+              },
+              {
+                "x": 148.519,
+                "y": 240.934
+              },
+              {
+                "x": 152.519,
+                "y": 240.936
+              },
+              {
+                "x": 156.519,
+                "y": 240.939
+              },
+              {
+                "x": 160.519,
+                "y": 240.941
+              },
+              {
+                "x": 164.519,
+                "y": 240.943
+              },
+              {
+                "x": 168.519,
+                "y": 240.946
+              }
+            ]
+          }
+        ]
+      },
+      "confidence": 1.0,
+      "signature_original": {
+        "entry": {
+          "point": {
+            "x": 54.979,
+            "y": 240.877
+          },
+          "heading_deg": 0.03342253425819308,
+          "cardinal4": "W",
+          "bound": "westbound",
+          "road_id": 11,
+          "section_id": 0,
+          "lane_id": 1
+        },
+        "exit": {
+          "point": {
+            "x": 182.519,
+            "y": 240.954
+          },
+          "heading_deg": 0.03342253425833519,
+          "cardinal4": "W",
+          "bound": "westbound",
+          "road_id": 10,
+          "section_id": 0,
+          "lane_id": 1
+        },
+        "length_m": 126.00002549999599,
+        "num_segments": 3,
+        "segment_ids": [
+          66,
+          29,
+          64
+        ],
+        "roads": [
+          11,
+          178,
+          10
+        ],
+        "sections": [
+          0,
+          0,
+          0
+        ],
+        "lanes": [
+          1,
+          1,
+          1
+        ],
+        "maneuvers_between": [
+          "straight",
+          "straight"
+        ],
+        "entry_to_exit_turn": "straight",
+        "segments_detailed": [
+          {
+            "seg_id": 66,
+            "road_id": 11,
+            "section_id": 0,
+            "lane_id": 1,
+            "length_m": 70.00001399999782,
+            "bbox": {
+              "xmin": 54.979,
+              "xmax": 124.979,
+              "ymin": 240.877,
+              "ymax": 240.919
+            },
+            "start": {
+              "point": {
+                "x": 54.979,
+                "y": 240.877
+              },
+              "heading_deg": 0.03342253425819308,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 997
+            },
+            "end": {
+              "point": {
+                "x": 124.979,
+                "y": 240.919
+              },
+              "heading_deg": 0.03342253425833519,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 927
+            },
+            "polyline_sample": [
+              {
+                "x": 54.979,
+                "y": 240.877
+              },
+              {
+                "x": 60.979,
+                "y": 240.881
+              },
+              {
+                "x": 68.979,
+                "y": 240.885
+              },
+              {
+                "x": 76.979,
+                "y": 240.89
+              },
+              {
+                "x": 84.979,
+                "y": 240.895
+              },
+              {
+                "x": 92.979,
+                "y": 240.9
+              },
+              {
+                "x": 100.979,
+                "y": 240.905
+              },
+              {
+                "x": 108.979,
+                "y": 240.91
+              },
+              {
+                "x": 116.979,
+                "y": 240.915
+              },
+              {
+                "x": 124.979,
+                "y": 240.919
+              }
+            ]
+          },
+          {
+            "seg_id": 29,
+            "road_id": 178,
+            "section_id": 0,
+            "lane_id": 1,
+            "length_m": 18.000003749999408,
+            "bbox": {
+              "xmin": 124.979,
+              "xmax": 142.979,
+              "ymin": 240.919,
+              "ymax": 240.93
+            },
+            "start": {
+              "point": {
+                "x": 124.979,
+                "y": 240.919
+              },
+              "heading_deg": 0.038197180683113174,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 365
+            },
+            "end": {
+              "point": {
+                "x": 142.979,
+                "y": 240.93
+              },
+              "heading_deg": 0.03342253425833519,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 356
+            },
+            "polyline_sample": [
+              {
+                "x": 124.979,
+                "y": 240.919
+              },
+              {
+                "x": 126.979,
+                "y": 240.921
+              },
+              {
+                "x": 128.979,
+                "y": 240.922
+              },
+              {
+                "x": 130.979,
+                "y": 240.923
+              },
+              {
+                "x": 132.979,
+                "y": 240.924
+              },
+              {
+                "x": 134.979,
+                "y": 240.926
+              },
+              {
+                "x": 136.979,
+                "y": 240.927
+              },
+              {
+                "x": 138.979,
+                "y": 240.928
+              },
+              {
+                "x": 140.979,
+                "y": 240.929
+              },
+              {
+                "x": 142.979,
+                "y": 240.93
+              }
+            ]
+          },
+          {
+            "seg_id": 64,
+            "road_id": 10,
+            "section_id": 0,
+            "lane_id": 1,
+            "length_m": 38.000007749998765,
+            "bbox": {
+              "xmin": 144.519,
+              "xmax": 182.519,
+              "ymin": 240.931,
+              "ymax": 240.954
+            },
+            "start": {
+              "point": {
+                "x": 144.519,
+                "y": 240.931
+              },
+              "heading_deg": 0.038197180683113174,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 925
+            },
+            "end": {
+              "point": {
+                "x": 182.519,
+                "y": 240.954
+              },
+              "heading_deg": 0.03342253425833519,
+              "cardinal4": "W",
+              "bound": "westbound",
+              "orig_idx": 887
+            },
+            "polyline_sample": [
+              {
+                "x": 144.519,
+                "y": 240.931
+              },
+              {
+                "x": 148.519,
+                "y": 240.934
+              },
+              {
+                "x": 152.519,
+                "y": 240.936
+              },
+              {
+                "x": 156.519,
+                "y": 240.939
+              },
+              {
+                "x": 160.519,
+                "y": 240.941
+              },
+              {
+                "x": 164.519,
+                "y": 240.943
+              },
+              {
+                "x": 168.519,
+                "y": 240.946
+              },
+              {
+                "x": 172.519,
+                "y": 240.948
+              },
+              {
+                "x": 176.519,
+                "y": 240.951
+              },
+              {
+                "x": 182.519,
+                "y": 240.954
+              }
+            ]
+          }
+        ]
+      },
+      "refined": {
+        "start_idx_global": 8,
+        "end_idx_global": 25,
+        "speed_mps": 8.0
+      }
+    },
+    {
+      "vehicle": "Vehicle 2",
+      "name": "path_003__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=126.0m__n=3segs",
+      "signature": {
+        "entry": {
+          "point": {
+            "x": 166.521,
+            "y": 236.945
+          },
+          "heading_deg": -179.96657746574166,
+          "cardinal4": "E",
+          "bound": "eastbound",
+          "road_id": 10,
+          "section_id": 0,
+          "lane_id": -1
+        },
+        "exit": {
+          "point": {
+            "x": 110.981,
+            "y": 236.911
+          },
+          "heading_deg": -179.9665774657418,
+          "cardinal4": "E",
+          "bound": "eastbound",
+          "road_id": 11,
+          "section_id": 0,
+          "lane_id": -1
+        },
+        "length_m": 48.000009895832044,
+        "num_segments": 3,
+        "segment_ids": [
+          63,
+          25,
+          65
+        ],
+        "roads": [
+          10,
+          177,
+          11
+        ],
+        "sections": [
+          0,
+          0,
+          0
+        ],
+        "lanes": [
+          -1,
+          -1,
+          -1
+        ],
+        "maneuvers_between": [
+          "straight",
+          "straight"
+        ],
+        "entry_to_exit_turn": "straight",
+        "segments_detailed": [
+          {
+            "road_id": 10,
+            "section_id": 0,
+            "lane_id": -1,
+            "seg_id": 63,
+            "length_m": 22.000004583332807,
+            "bbox": {
+              "xmin": 144.521,
+              "xmax": 166.521,
+              "ymin": 236.931,
+              "ymax": 236.945
+            },
+            "start": {
+              "point": {
+                "x": 166.521,
+                "y": 236.945
+              },
+              "heading_deg": -179.95702817342263
+            },
+            "end": {
+              "point": {
+                "x": 144.521,
+                "y": 236.931
+              },
+              "heading_deg": -179.9618028193169
+            },
+            "polyline_sample": [
+              {
+                "x": 166.521,
+                "y": 236.945
+              },
+              {
+                "x": 162.521,
+                "y": 236.942
+              },
+              {
+                "x": 158.521,
+                "y": 236.94
+              },
+              {
+                "x": 154.521,
+                "y": 236.937
+              },
+              {
+                "x": 150.521,
+                "y": 236.935
+              },
+              {
+                "x": 144.521,
+                "y": 236.931
+              }
+            ]
+          },
+          {
+            "road_id": 177,
+            "section_id": 0,
+            "lane_id": -1,
+            "seg_id": 25,
+            "length_m": 18.00000374999939,
+            "bbox": {
+              "xmin": 124.981,
+              "xmax": 142.981,
+              "ymin": 236.919,
+              "ymax": 236.93
+            },
+            "start": {
+              "point": {
+                "x": 142.981,
+                "y": 236.93
+              },
+              "heading_deg": -179.97135211263065
+            },
+            "end": {
+              "point": {
+                "x": 124.981,
+                "y": 236.919
+              },
+              "heading_deg": -179.94270423958605
+            },
+            "polyline_sample": [
+              {
+                "x": 142.981,
+                "y": 236.93
+              },
+              {
+                "x": 140.981,
+                "y": 236.929
+              },
+              {
+                "x": 138.981,
+                "y": 236.928
+              },
+              {
+                "x": 136.981,
+                "y": 236.927
+              },
+              {
+                "x": 134.981,
+                "y": 236.926
+              },
+              {
+                "x": 132.981,
+                "y": 236.924
+              },
+              {
+                "x": 130.981,
+                "y": 236.923
+              },
+              {
+                "x": 128.981,
+                "y": 236.922
+              },
+              {
+                "x": 126.981,
+                "y": 236.921
+              },
+              {
+                "x": 124.981,
+                "y": 236.919
+              }
+            ]
+          },
+          {
+            "road_id": 11,
+            "section_id": 0,
+            "lane_id": -1,
+            "seg_id": 65,
+            "length_m": 8.000001562499847,
+            "bbox": {
+              "xmin": 110.981,
+              "xmax": 118.981,
+              "ymin": 236.911,
+              "ymax": 236.916
+            },
+            "start": {
+              "point": {
+                "x": 118.981,
+                "y": 236.916
+              },
+              "heading_deg": -179.9641901424671
+            },
+            "end": {
+              "point": {
+                "x": 110.981,
+                "y": 236.911
+              },
+              "heading_deg": -179.9641901424671
+            },
+            "polyline_sample": [
+              {
+                "x": 118.981,
+                "y": 236.916
+              },
+              {
+                "x": 110.981,
+                "y": 236.911
+              }
+            ]
+          }
+        ]
+      },
+      "confidence": 1.0,
+      "signature_original": {
+        "entry": {
+          "point": {
+            "x": 182.521,
+            "y": 236.954
+          },
+          "heading_deg": -179.96657746574166,
+          "cardinal4": "E",
+          "bound": "eastbound",
+          "road_id": 10,
+          "section_id": 0,
+          "lane_id": -1
+        },
+        "exit": {
+          "point": {
+            "x": 54.981,
+            "y": 236.877
+          },
+          "heading_deg": -179.9665774657418,
+          "cardinal4": "E",
+          "bound": "eastbound",
+          "road_id": 11,
+          "section_id": 0,
+          "lane_id": -1
+        },
+        "length_m": 126.00002549999597,
+        "num_segments": 3,
+        "segment_ids": [
+          63,
+          25,
+          65
+        ],
+        "roads": [
+          10,
+          177,
+          11
+        ],
+        "sections": [
+          0,
+          0,
+          0
+        ],
+        "lanes": [
+          -1,
+          -1,
+          -1
+        ],
+        "maneuvers_between": [
+          "straight",
+          "straight"
+        ],
+        "entry_to_exit_turn": "straight",
+        "segments_detailed": [
+          {
+            "seg_id": 63,
+            "road_id": 10,
+            "section_id": 0,
+            "lane_id": -1,
+            "length_m": 38.000007749998765,
+            "bbox": {
+              "xmin": 144.521,
+              "xmax": 182.521,
+              "ymin": 236.931,
+              "ymax": 236.954
+            },
+            "start": {
+              "point": {
+                "x": 182.521,
+                "y": 236.954
+              },
+              "heading_deg": -179.96657746574166,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 886
+            },
+            "end": {
+              "point": {
+                "x": 144.521,
+                "y": 236.931
+              },
+              "heading_deg": -179.9618028193169,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 924
+            },
+            "polyline_sample": [
+              {
+                "x": 182.521,
+                "y": 236.954
+              },
+              {
+                "x": 178.521,
+                "y": 236.952
+              },
+              {
+                "x": 174.521,
+                "y": 236.95
+              },
+              {
+                "x": 170.521,
+                "y": 236.947
+              },
+              {
+                "x": 166.521,
+                "y": 236.945
+              },
+              {
+                "x": 162.521,
+                "y": 236.942
+              },
+              {
+                "x": 158.521,
+                "y": 236.94
+              },
+              {
+                "x": 154.521,
+                "y": 236.937
+              },
+              {
+                "x": 150.521,
+                "y": 236.935
+              },
+              {
+                "x": 144.521,
+                "y": 236.931
+              }
+            ]
+          },
+          {
+            "seg_id": 25,
+            "road_id": 177,
+            "section_id": 0,
+            "lane_id": -1,
+            "length_m": 18.00000374999939,
+            "bbox": {
+              "xmin": 124.981,
+              "xmax": 142.981,
+              "ymin": 236.919,
+              "ymax": 236.93
+            },
+            "start": {
+              "point": {
+                "x": 142.981,
+                "y": 236.93
+              },
+              "heading_deg": -179.96657746574166,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 274
+            },
+            "end": {
+              "point": {
+                "x": 124.981,
+                "y": 236.919
+              },
+              "heading_deg": -179.9618028193169,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 283
+            },
+            "polyline_sample": [
+              {
+                "x": 142.981,
+                "y": 236.93
+              },
+              {
+                "x": 140.981,
+                "y": 236.929
+              },
+              {
+                "x": 138.981,
+                "y": 236.928
+              },
+              {
+                "x": 136.981,
+                "y": 236.927
+              },
+              {
+                "x": 134.981,
+                "y": 236.926
+              },
+              {
+                "x": 132.981,
+                "y": 236.924
+              },
+              {
+                "x": 130.981,
+                "y": 236.923
+              },
+              {
+                "x": 128.981,
+                "y": 236.922
+              },
+              {
+                "x": 126.981,
+                "y": 236.921
+              },
+              {
+                "x": 124.981,
+                "y": 236.919
+              }
+            ]
+          },
+          {
+            "seg_id": 65,
+            "road_id": 11,
+            "section_id": 0,
+            "lane_id": -1,
+            "length_m": 70.00001399999782,
+            "bbox": {
+              "xmin": 54.981,
+              "xmax": 124.981,
+              "ymin": 236.877,
+              "ymax": 236.919
+            },
+            "start": {
+              "point": {
+                "x": 124.981,
+                "y": 236.919
+              },
+              "heading_deg": -179.96657746574166,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 926
+            },
+            "end": {
+              "point": {
+                "x": 54.981,
+                "y": 236.877
+              },
+              "heading_deg": -179.9665774657418,
+              "cardinal4": "E",
+              "bound": "eastbound",
+              "orig_idx": 996
+            },
+            "polyline_sample": [
+              {
+                "x": 124.981,
+                "y": 236.919
+              },
+              {
+                "x": 118.981,
+                "y": 236.916
+              },
+              {
+                "x": 110.981,
+                "y": 236.911
+              },
+              {
+                "x": 102.981,
+                "y": 236.906
+              },
+              {
+                "x": 94.981,
+                "y": 236.901
+              },
+              {
+                "x": 86.981,
+                "y": 236.896
+              },
+              {
+                "x": 78.981,
+                "y": 236.892
+              },
+              {
+                "x": 70.981,
+                "y": 236.887
+              },
+              {
+                "x": 62.981,
+                "y": 236.882
+              },
+              {
+                "x": 54.981,
+                "y": 236.877
+              }
+            ]
+          }
+        ]
+      },
+      "refined": {
+        "start_idx_global": 4,
+        "end_idx_global": 21,
+        "speed_mps": 8.0
+      }
+    }
+  ],
+  "source_picked_paths": "log/Vehicle_1_is_traveling_straight_/picked_paths_detailed.json",
+  "refinement": {
+    "constraints": {
+      "vehicle_speeds": [],
+      "spawn_relations": [],
+      "lane_changes": [],
+      "options": {
+        "synchronize_conflicts": true
+      }
+    },
+    "lane_change_debug": [],
+    "solution": {
+      "score": 0.0,
+      "start_idx": {
+        "Vehicle 1": 8,
+        "Vehicle 2": 4
+      },
+      "end_idx": {
+        "Vehicle 1": 25,
+        "Vehicle 2": 21
+      },
+      "speed_mps": {
+        "Vehicle 1": 8.0,
+        "Vehicle 2": 8.0
+      },
+      "debug": {
+        "spawn_xy": {
+          "Vehicle 1": {
+            "x": 116.979,
+            "y": 240.915
+          },
+          "Vehicle 2": {
+            "x": 166.521,
+            "y": 236.945
+          }
+        },
+        "conflicts": [],
+        "min_spawn_sep_m": 4.901683330535889
+      },
+      "conflict_count": 0
+    },
+    "notes": {
+      "semantics": "All LLM constraints are treated as soft preferences; defaults used if infeasible.",
+      "kinematics": "Constant speed on polyline; time = distance/speed.",
+      "conflict_detection": "Closest approach between polylines with a distance threshold."
+    }
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Lane_Change_Negotiation_d4_attempt1" town="Town05" role="static" model="static.prop.trafficcone01" speed="0.0">
+    <waypoint x="-139.903" y="92.612" z="0.000" yaw="27.929020"/>
+  </route>
+</routes>

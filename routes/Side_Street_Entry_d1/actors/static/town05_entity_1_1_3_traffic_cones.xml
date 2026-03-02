@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Side_Street_Entry_d1_attempt1" town="Town05" role="static" model="static.prop.trafficcone01" speed="0.0">
+    <waypoint x="36.484" y="-14.093" z="0.000" yaw="-89.478880"/>
+  </route>
+</routes>

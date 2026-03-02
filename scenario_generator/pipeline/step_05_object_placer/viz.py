@@ -1,3 +1,4 @@
+import json
 import math
 import textwrap
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,7 +23,23 @@ def visualize(
     out_path: str,
     description: Optional[str] = None,
     show: bool = False,
+    scenario_spec: Optional[Dict[str, Any]] = None,
+    macro_plan: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
+    """
+    Visualize the scene with ego paths, actors, and input metadata.
+    
+    Args:
+        picked: List of picked paths for ego vehicles
+        seg_by_id: Segment geometry by ID
+        actors_world: List of placed actors with world coordinates
+        crop_region: Crop region bounds
+        out_path: Output path for the visualization
+        description: Scene description text
+        show: Whether to display the plot interactively
+        scenario_spec: The scenario specification used for generation (for metadata display)
+        macro_plan: The macro plan / Stage 1 entities (to show what was requested vs placed)
+    """
     if plt is None:
         print("[WARNING] matplotlib not installed; skipping visualization")
         return
@@ -95,6 +112,113 @@ def visualize(
             return fallback
         parts = asset_id.split(".")
         return ".".join(parts[-2:]) if len(parts) >= 2 else asset_id
+
+    def _format_distance_m(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            dist = float(value)
+        except Exception:
+            return None
+        if abs(dist - round(dist)) < 1e-6:
+            return f"{int(round(dist))}m"
+        return f"{dist:.1f}m"
+
+    def _format_trigger(trigger: Any) -> Optional[str]:
+        if not isinstance(trigger, dict):
+            return None
+        ttype = str(trigger.get("type", "")).strip()
+        if ttype != "distance_to_vehicle":
+            return None
+        vehicle = str(trigger.get("vehicle", "")).strip()
+        if not vehicle:
+            return None
+        dist_str = _format_distance_m(trigger.get("distance_m"))
+        if dist_str:
+            return f"trigger: {vehicle} <= {dist_str}"
+        return f"trigger: {vehicle} distance"
+
+    def _format_action(action: Any) -> Optional[str]:
+        if not isinstance(action, dict):
+            return None
+        atype = str(action.get("type", "")).strip()
+        if not atype:
+            return None
+        if atype == "hard_brake":
+            return "action: hard_brake"
+        if atype == "start_motion":
+            direction = str(action.get("direction") or "").strip()
+            if direction:
+                return f"action: start_motion {direction}"
+            return "action: start_motion"
+        if atype == "lane_change":
+            direction = str(action.get("direction") or "").strip()
+            target_vehicle = str(action.get("target_vehicle") or "").strip()
+            if direction:
+                return f"action: lane_change {direction}"
+            if target_vehicle:
+                return f"action: lane_change -> {target_vehicle} lane"
+            return "action: lane_change"
+        return f"action: {atype}"
+
+    def _format_behavior_label(a: Dict[str, Any]) -> Optional[str]:
+        lines = []
+        tline = _format_trigger(a.get("trigger"))
+        if tline:
+            lines.append(tline)
+        aline = _format_action(a.get("action"))
+        if aline:
+            lines.append(aline)
+        if not lines:
+            return None
+        return "\n".join(lines)
+
+    def _behavior_signature(a: Dict[str, Any]) -> str:
+        trigger = a.get("trigger")
+        action = a.get("action")
+        parts = []
+        if isinstance(trigger, dict):
+            ttype = str(trigger.get("type", "")).strip()
+            vehicle = str(trigger.get("vehicle", "")).strip()
+            dist_str = _format_distance_m(trigger.get("distance_m")) or ""
+            parts.append(f"t:{ttype}:{vehicle}:{dist_str}")
+        if isinstance(action, dict):
+            atype = str(action.get("type", "")).strip()
+            direction = str(action.get("direction") or "").strip()
+            target_vehicle = str(action.get("target_vehicle") or "").strip()
+            parts.append(f"a:{atype}:{direction}:{target_vehicle}")
+        return "|".join(parts) if parts else "none"
+
+    def _wrap_label(label: str, width: int = 32) -> str:
+        return "\n".join(textwrap.fill(line, width=width) for line in label.splitlines())
+
+    def _scene_summary_text(raw_description: Any) -> Optional[str]:
+        """
+        Prefer the `description` field when the provided description is a schema JSON.
+        Falls back to the raw string when parsing fails or no description exists.
+        """
+        if raw_description is None:
+            return None
+        if isinstance(raw_description, dict):
+            desc_val = raw_description.get("description")
+            if isinstance(desc_val, str) and desc_val.strip():
+                return desc_val.strip()
+            raw_str = str(raw_description).strip()
+            return raw_str or None
+
+        raw_str = str(raw_description).strip()
+        if not raw_str:
+            return None
+
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, dict):
+                desc_val = parsed.get("description")
+                if isinstance(desc_val, str) and desc_val.strip():
+                    return desc_val.strip()
+        except Exception:
+            pass
+        return raw_str
 
     def _actor_bbox_dims_from_actor_or_cache(a: Dict[str, Any]) -> Tuple[float, float]:
         """
@@ -383,7 +507,7 @@ def visualize(
 
         # Direction arrow
         if len(pts_off) >= 2:
-            arr = ax.annotate(
+            ax.annotate(
                 "",
                 xy=(pts_off[-1, 0], pts_off[-1, 1]),
                 xytext=(pts_off[-2, 0], pts_off[-2, 1]),
@@ -430,7 +554,7 @@ def visualize(
 
     # Cluster labels by approximate position + asset_short to avoid stacked cone labels.
     BUCKET_M = 1.2
-    clusters: Dict[Tuple[int, int, str], List[int]] = {}
+    clusters: Dict[Tuple[int, int, str, str], List[int]] = {}
 
     actor_pts = []
     for j, a in enumerate(actors_world):
@@ -442,7 +566,8 @@ def visualize(
         asset_short = _get_asset_short(str(a.get("asset_id", "")), str(a.get("category", "object")))
         bx = int(round(float(x) / BUCKET_M))
         by = int(round(float(y) / BUCKET_M))
-        key = (bx, by, asset_short)
+        behavior_sig = _behavior_signature(a)
+        key = (bx, by, asset_short, behavior_sig)
         clusters.setdefault(key, []).append(j)
         actor_pts.append((float(x), float(y), a))
 
@@ -463,7 +588,7 @@ def visualize(
                     ln, = ax.plot(xs, ys, linestyle=":", linewidth=1.6, alpha=0.75, zorder=4)
                     motion_line_artists.append(ln)
 
-                arr = ax.annotate(
+                ax.annotate(
                     "",
                     xy=(xs[-1], ys[-1]),
                     xytext=(xs[-2], ys[-2]),
@@ -517,7 +642,7 @@ def visualize(
     forbidden = _collect_forbidden_bboxes(fig, ax, forbidden_artists, pad_px=5.0)
 
     label_items = []
-    for (bx, by, asset_short), idxs in clusters.items():
+    for (bx, by, asset_short, behavior_sig), idxs in clusters.items():
         # centroid anchor (better than "first actor")
         xs = []
         ys = []
@@ -539,20 +664,82 @@ def visualize(
             actor_id = a0.get("id", "obj")
             label = f"{actor_id}: {asset_short}"
 
+        behavior_label = _format_behavior_label(a0)
+        if behavior_label:
+            label = f"{label}\n{behavior_label}"
+        label = _wrap_label(label, width=36)
+
         label_items.append({"x": x0, "y": y0, "label": label, "zorder": 10})
 
     _place_labels_repel(ax, fig, label_items, forbidden_bboxes=forbidden, fontsize=8, crop_region=crop_region)
 
     # ------------------------------------------------------------
-    # Title
+    # Title and metadata panel
     # ------------------------------------------------------------
+    def _format_constraint(c: Dict[str, Any]) -> str:
+        ctype = str(c.get("type", "unknown"))
+        a = str(c.get("a", "?"))
+        b = str(c.get("b", "?"))
+        return f"{ctype}({a}, {b})"
+    
+    def _format_vehicle_path(p: Dict[str, Any]) -> str:
+        veh = p.get("vehicle", "?")
+        sig = p.get("signature", {}) or {}
+        entry = sig.get("entry", {}) or {}
+        exit_pt = sig.get("exit", {}) or {}
+        entry_card = entry.get("cardinal4", "?")
+        exit_card = exit_pt.get("cardinal4", "?")
+        entry_bound = entry.get("bound", "")
+        maneuver = sig.get("entry_to_exit_turn", "?")
+        return f"{veh}: {entry_bound} ({entry_card}→{exit_card}, {maneuver})"
+    
     lines = []
-    if description:
-        desc_clean = " ".join(str(description).split())
-        scene_text = textwrap.fill(desc_clean, width=90)
-        lines.append(r"$\bf{Scene:}$ " + scene_text)
-    lines.append(rf"$\bf{{Placed\ actors\ (n={len(actors_world)})}}$")
-    ax.set_title("\n".join(lines), fontsize=12, loc="left")
+    
+    # Category and topology from scenario_spec
+    if scenario_spec:
+        cat = scenario_spec.get("category", "unknown")
+        topo = scenario_spec.get("topology", "unknown")
+        lines.append(rf"$\bf{{Category:}}$ {cat}  |  $\bf{{Topology:}}$ {topo}")
+        
+        # Capability flags
+        flags = []
+        if scenario_spec.get("needs_oncoming"):
+            flags.append("needs_oncoming")
+        if scenario_spec.get("needs_multi_lane"):
+            flags.append("needs_multi_lane")
+        if scenario_spec.get("needs_on_ramp"):
+            flags.append("needs_on_ramp")
+        if scenario_spec.get("needs_merge"):
+            flags.append("needs_merge")
+        if flags:
+            lines.append(rf"$\bf{{Flags:}}$ {', '.join(flags)}")
+        
+        # Vehicle constraints
+        constraints = scenario_spec.get("vehicle_constraints", [])
+        if constraints:
+            constraint_strs = [_format_constraint(c) for c in constraints[:4]]
+            if len(constraints) > 4:
+                constraint_strs.append(f"...+{len(constraints)-4} more")
+            lines.append(rf"$\bf{{Constraints:}}$ {', '.join(constraint_strs)}")
+    
+    # Vehicle paths resolved
+    if picked:
+        path_strs = [_format_vehicle_path(p) for p in picked[:3]]
+        if len(picked) > 3:
+            path_strs.append(f"...+{len(picked)-3} more")
+        lines.append(rf"$\bf{{Paths:}}$ " + " | ".join(path_strs))
+    
+    # Actors requested vs placed
+    requested_count = len(macro_plan) if macro_plan else 0
+    placed_count = len(actors_world)
+    if macro_plan:
+        requested_kinds = [str(e.get("actor_kind") or e.get("mention", "?")) for e in macro_plan]
+        lines.append(rf"$\bf{{Requested\ actors:}}$ {', '.join(requested_kinds)} (n={requested_count})")
+    
+    placed_status = "✓" if placed_count == requested_count else f"⚠ {placed_count}/{requested_count}"
+    lines.append(rf"$\bf{{Placed\ actors:}}$ {placed_status} (n={placed_count})")
+    
+    ax.set_title("\n".join(lines), fontsize=9, loc="left", linespacing=1.4)
 
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")

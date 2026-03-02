@@ -89,7 +89,15 @@ def prepare_routes_from_zip(
     extracted: List[Tuple[Path, str, str, str]] = []
     actors_manifest: Dict[str, List[Dict[str, str]]] = {}
 
+    behavior_bytes = None
     with zipfile.ZipFile(zip_path) as archive:
+        behavior_member = None
+        for member in archive.infolist():
+            if Path(member.filename).name == "actors_behavior.json" and not member.is_dir():
+                behavior_member = member
+                break
+        if behavior_member is not None:
+            behavior_bytes = archive.read(behavior_member.filename)
         members = [
             m
             for m in archive.infolist()
@@ -154,6 +162,11 @@ def prepare_routes_from_zip(
     if ego_count == 0:
         raise RuntimeError("No routes with role='ego' discovered.")
 
+    behavior_path = None
+    if behavior_bytes is not None:
+        behavior_path = dest_dir / "actors_behavior.json"
+        behavior_path.write_bytes(behavior_bytes)
+
     manifest_path = dest_dir / "actors_manifest.json"
     manifest_path.write_text(json.dumps(actors_manifest, indent=2), encoding="utf-8")
 
@@ -166,6 +179,7 @@ def prepare_routes_from_zip(
         "towns": sorted({town for _, _, _, town in extracted}),
         "manifest_path": manifest_path,
         "actors_manifest": actors_manifest,
+        "behavior_path": behavior_path,
     }
 
 

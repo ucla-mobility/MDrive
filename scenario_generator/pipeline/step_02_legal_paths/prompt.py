@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def save_prompt_file(
@@ -171,15 +171,18 @@ def save_aggregated_signatures_json(
     nodes_path: str,
     params: Dict[str, Any],
     paths_named: List[Dict[str, Any]],
+    lane_counts_by_road: Optional[Dict[int, int]] = None,
 ) -> None:
     """Optional: pure JSON version (no instructions), good for programmatic prompting."""
-    payload = {
+    payload: Dict[str, Any] = {
         "nodes": nodes_path,
         "crop_region": {"xmin": crop.xmin, "xmax": crop.xmax, "ymin": crop.ymin, "ymax": crop.ymax},
         "parameters": params,
         "num_candidates": len(paths_named),
         "candidates": paths_named,
     }
+    if lane_counts_by_road:
+        payload["lane_counts_by_road"] = lane_counts_by_road
     with open(out_path, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"[INFO] Aggregated signatures JSON saved: {out_path}")

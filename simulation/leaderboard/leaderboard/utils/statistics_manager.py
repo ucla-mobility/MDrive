@@ -14,6 +14,9 @@ from __future__ import print_function
 from dictor import dictor
 import math
 import sys
+import numpy as np
+
+from leaderboard.utils.pdm_metrics import compute_pdm_route_metrics
 
 from srunner.scenariomanager.traffic_events import TrafficEventType
 
@@ -48,6 +51,9 @@ class RouteRecord():
             'score_penalty': 0,
             'score_composed': 0
         }
+
+        # navsim-style PDM metrics (filled later)
+        self.pdm = None
 
         self.meta = {}
 
@@ -116,7 +122,16 @@ class StatisticsManager(object):
         """
         self._master_scenario = scenario
 
-    def compute_route_statistics(self, config, duration_time_system=-1, duration_time_game=-1, failure=""):
+    def compute_route_statistics(
+        self,
+        config,
+        duration_time_system=-1,
+        duration_time_game=-1,
+        failure="",
+        pdm_trace=None,
+        pdm_world_trace=None,
+        pdm_tl_polygons=None,
+    ):
         """
         Compute the current statistics by evaluating all relevant scenario criteria
         """
@@ -202,6 +217,16 @@ class StatisticsManager(object):
             if failure:
                 route_record.status += ' - ' + failure
 
+        # navsim-style PDM metrics derived from recorded trajectory and infractions
+        route_record.pdm = compute_pdm_route_metrics(
+            route_record,
+            pdm_trace,
+            pdm_world_trace=pdm_world_trace,
+            pdm_tl_polygons=pdm_tl_polygons,
+            config=config,
+            ego_id=self.ego_car_id,
+        )
+
         return route_record
 
     def compute_global_statistics(self, total_routes):
@@ -210,6 +235,23 @@ class StatisticsManager(object):
         global_record.index = -1
         global_record.status = 'Completed'
 
+        pdm_fields = [
+            "pdm_score",
+            "no_at_fault_collisions",
+            "drivable_area_compliance",
+            "driving_direction_compliance",
+            "traffic_light_compliance",
+            "ego_progress",
+            "time_to_collision_within_bound",
+            "lane_keeping",
+            "history_comfort",
+            "multiplicative_metrics_prod",
+        ]
+        pdm_accumulator = {key: 0.0 for key in pdm_fields}
+        pdm_count = 0
+        pdm_min_ttc = np.inf
+        pdm_min_ttc_dist = np.inf
+
         if self._registry_route_records:
             for route_record in self._registry_route_records:
                 global_record.scores['score_route'] += route_record.scores['score_route']
@@ -217,13 +259,14 @@ class StatisticsManager(object):
                 global_record.scores['score_composed'] += route_record.scores['score_composed']
 
                 for key in global_record.infractions.keys():
-                    route_length_kms = max(route_record.scores['score_route'] * route_record.meta['route_length'] / 1000.0, 0.001)
+                    route_length = route_record.meta.get('route_length', 0.0)
+                    route_length_kms = max(route_record.scores['score_route'] * route_length / 1000.0, 0.001)
                     if isinstance(global_record.infractions[key], list):
                         global_record.infractions[key] = len(route_record.infractions[key]) / route_length_kms
                     else:
                         global_record.infractions[key] += len(route_record.infractions[key]) / route_length_kms
 
-                if route_record.status is not 'Completed':
+                if route_record.status != 'Completed':
                     global_record.status = 'Failed'
                     if 'exceptions' not in global_record.meta:
                         global_record.meta['exceptions'] = []
@@ -231,9 +274,38 @@ class StatisticsManager(object):
                                                              route_record.index,
                                                              route_record.status))
 
+                if route_record.pdm and route_record.pdm.get("available"):
+                    pdm_count += 1
+                    pdm_accumulator["pdm_score"] += route_record.pdm.get("pdm_score", 0.0)
+                    pdm_accumulator["no_at_fault_collisions"] += route_record.pdm.get("no_at_fault_collisions", 0.0)
+                    pdm_accumulator["drivable_area_compliance"] += route_record.pdm.get("drivable_area_compliance", 0.0)
+                    pdm_accumulator["driving_direction_compliance"] += route_record.pdm.get("driving_direction_compliance", 0.0)
+                    pdm_accumulator["traffic_light_compliance"] += route_record.pdm.get("traffic_light_compliance", 0.0)
+                    pdm_accumulator["ego_progress"] += route_record.pdm.get("ego_progress", 0.0)
+                    pdm_accumulator["time_to_collision_within_bound"] += route_record.pdm.get("time_to_collision_within_bound", 0.0)
+                    pdm_accumulator["lane_keeping"] += route_record.pdm.get("lane_keeping", 0.0)
+                    pdm_accumulator["history_comfort"] += route_record.pdm.get("history_comfort", 0.0)
+                    pdm_accumulator["multiplicative_metrics_prod"] += route_record.pdm.get("multiplicative_metrics_prod", 0.0)
+                    ttc_min_time_s = route_record.pdm.get("ttc_min_time_s")
+                    if ttc_min_time_s is not None:
+                        pdm_min_ttc = min(pdm_min_ttc, ttc_min_time_s)
+                    ttc_min_distance_m = route_record.pdm.get("ttc_min_distance_m")
+                    if ttc_min_distance_m is not None:
+                        pdm_min_ttc_dist = min(pdm_min_ttc_dist, ttc_min_distance_m)
+
         global_record.scores['score_route'] /= float(total_routes)
         global_record.scores['score_penalty'] /= float(total_routes)
         global_record.scores['score_composed'] /= float(total_routes)
+
+        if pdm_count > 0:
+            global_record.pdm = {
+                key: pdm_accumulator[key] / pdm_count for key in pdm_fields
+            }
+            global_record.pdm["available"] = True
+            global_record.pdm["ttc_min_time_s"] = None if pdm_min_ttc == np.inf else float(pdm_min_ttc)
+            global_record.pdm["ttc_min_distance_m"] = None if pdm_min_ttc_dist == np.inf else float(pdm_min_ttc_dist)
+        else:
+            global_record.pdm = {"available": False}
 
         return global_record
 
@@ -291,6 +363,36 @@ class StatisticsManager(object):
                           'Route timeouts',
                           'Agent blocked'
                           ]
+
+        # Append navsim-style PDM metrics to summary
+        if stats_dict.get("pdm", {}).get("available"):
+            data['values'] += [
+                '{:.3f}'.format(stats_dict['pdm'].get('pdm_score', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('ego_progress', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('time_to_collision_within_bound', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('lane_keeping', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('history_comfort', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('no_at_fault_collisions', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('drivable_area_compliance', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('driving_direction_compliance', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('traffic_light_compliance', 0.0)),
+                '{:.3f}'.format(stats_dict['pdm'].get('ttc_min_time_s', 0.0) or 0.0),
+                '{:.3f}'.format(stats_dict['pdm'].get('ttc_min_distance_m', 0.0) or 0.0),
+            ]
+
+            data['labels'] += [
+                'PDM score',
+                'PDM ego progress',
+                'PDM TTC compliance',
+                'PDM lane keeping',
+                'PDM history comfort',
+                'PDM no-at-fault collision',
+                'PDM drivable area compliance',
+                'PDM driving direction compliance',
+                'PDM traffic light compliance',
+                'PDM TTC min time (s)',
+                'PDM TTC min distance (m)',
+            ]
 
         entry_status = "Finished"
         eligible = True

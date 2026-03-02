@@ -1,6 +1,6 @@
+import math
 import os
 import re
-from typing import Dict, Tuple
 
 import numpy as np
 
@@ -23,6 +23,35 @@ def _wrap_text(s: str, width: int = 120) -> str:
         return s
     import textwrap as _tw
     return "\n".join(_tw.wrap(s, width=width))
+
+
+def _draw_segment_arrow(ax, pts: np.ndarray, color: str, alpha: float) -> None:
+    if pts.shape[0] < 2:
+        return
+    mid = max(1, pts.shape[0] // 2)
+    x0, y0 = float(pts[mid - 1, 0]), float(pts[mid - 1, 1])
+    x1, y1 = float(pts[mid, 0]), float(pts[mid, 1])
+    dx = x1 - x0
+    dy = y1 - y0
+    seg_len = math.hypot(dx, dy)
+    if seg_len < 1e-3:
+        return
+    arrow_len = min(4.0, max(1.6, seg_len * 0.35))
+    scale = arrow_len / seg_len
+    ax.arrow(
+        x0,
+        y0,
+        dx * scale,
+        dy * scale,
+        width=0.002,
+        head_width=0.9,
+        head_length=1.2,
+        length_includes_head=True,
+        color=color,
+        alpha=alpha,
+        linewidth=0,
+        zorder=2,
+    )
 
 
 def save_viz(
@@ -52,6 +81,7 @@ def save_viz(
         pts = np.asarray(seg.points, dtype=float)
         ax.plot(pts[:, 0], pts[:, 1], linewidth=1.0, alpha=0.55)
         ax.scatter([pts[0, 0], pts[-1, 0]], [pts[0, 1], pts[-1, 1]], s=8, alpha=0.75)
+        _draw_segment_arrow(ax, pts, color="black", alpha=0.4)
 
     rect = mpatches.Rectangle((crop.xmin, crop.ymin), crop.xmax - crop.xmin, crop.ymax - crop.ymin,
                               fill=False, linewidth=2.0)

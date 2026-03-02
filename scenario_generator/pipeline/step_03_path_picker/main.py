@@ -29,6 +29,9 @@ def pick_paths_with_model(
     viz_show: bool = False,
     model_id: Optional[str] = None,
     require_straight: bool = False,
+    require_on_ramp: bool = False,
+    schema_constraints: Optional[Dict[str, Any]] = None,
+    required_relations: Optional[List[Dict[str, Any]]] = None,
 ):
     """
     Run the path picker using a provided model/tokenizer if given.
@@ -99,12 +102,34 @@ def pick_paths_with_model(
 
     # -------------------------
     # Stage A: constraint extraction (LLM) + deterministic CSP solve
+    # If schema_constraints is provided, try deterministic CSP first.
     # -------------------------
     import time as time_module
     parsed: Optional[Dict[str, Any]] = None
     description = _extract_description_from_prompt(prompt)
 
-    if description:
+    if schema_constraints:
+        try:
+            t0_csp_stage = time_module.time()
+            csp_items = _solve_paths_csp(
+                schema_constraints,
+                candidates,
+                description=description,
+                require_straight=require_straight,
+                require_on_ramp=require_on_ramp,
+                lane_counts_by_road=agg.get("lane_counts_by_road") if isinstance(agg, dict) else None,
+                skip_evidence_filter=True,
+                crop_region=agg.get("crop_region") if isinstance(agg, dict) else None,
+                required_relations=required_relations,
+            )
+            parsed = {"vehicles": csp_items}
+            print(f"[TIMING] path_picker schema CSP solve: {time_module.time() - t0_csp_stage:.2f}s", flush=True)
+        except Exception as e:
+            if required_relations:
+                raise
+            print(f"[WARNING] Schema constraints CSP solve failed; falling back to LLM. Reason: {e}")
+
+    if parsed is None and description:
         t0_csp_stage = time_module.time()
         constraints_prompt = _build_constraints_prompt(description)
         constraints_text = _generate_text(constraints_prompt)
@@ -127,7 +152,16 @@ def pick_paths_with_model(
 
             try:
                 t0_csp_solve = time_module.time()
-                csp_items = _solve_paths_csp(constraints_obj, candidates, description=description, require_straight=require_straight)
+                csp_items = _solve_paths_csp(
+                    constraints_obj,
+                    candidates,
+                    description=description,
+                    require_straight=require_straight,
+                    require_on_ramp=require_on_ramp,
+                    lane_counts_by_road=agg.get("lane_counts_by_road") if isinstance(agg, dict) else None,
+                    crop_region=agg.get("crop_region") if isinstance(agg, dict) else None,
+                    required_relations=required_relations,
+                )
                 print(f"[TIMING] path_picker CSP solve: {time_module.time() - t0_csp_solve:.2f}s", flush=True)
                 parsed = {"vehicles": csp_items}
             except Exception as e:
@@ -224,8 +258,9 @@ def main():
 
     ap.add_argument("--max-new-tokens", type=int, default=256)
 
-    ap.add_argument("--do-sample", action="store_true", help="Enable sampling")
-    ap.add_argument("--temperature", type=float, default=0.2)
+    ap.add_argument("--do-sample", action="store_true", default=True, help="Enable sampling (default: True)")
+    ap.add_argument("--no-sample", dest="do_sample", action="store_false", help="Disable sampling")
+    ap.add_argument("--temperature", type=float, default=0.5)
     ap.add_argument("--top-p", type=float, default=0.95)
 
     ap.add_argument("--aggregated-json", required=True, help="legal_paths_detailed.json")

@@ -96,6 +96,22 @@ def _infer_constraints_from_description(
                     }
                 )
 
+    # Infer unary adjacent-lane requirements from phrases like
+    # "in the lane to the right of Vehicle 1".
+    desc_l = (description or "").lower()
+    for v in vehicles:
+        name = str(v.get("vehicle", "")).strip()
+        if not name:
+            continue
+        name_l = name.lower()
+        # Only match explicit "lane to/on the left/right of Vehicle X" phrases.
+        right_pat = rf"(?:adjacent\\s+)?lane\\s+(?:to|on)\\s+the\\s+right\\s+of\\s+{re.escape(name_l)}"
+        left_pat = rf"(?:adjacent\\s+)?lane\\s+(?:to|on)\\s+the\\s+left\\s+of\\s+{re.escape(name_l)}"
+        if re.search(right_pat, desc_l):
+            v["adjacent_lane_req"] = "right"
+        elif re.search(left_pat, desc_l):
+            v["adjacent_lane_req"] = "left"
+
     norm["constraints"] = constraints
     return norm
 
@@ -154,6 +170,7 @@ def _build_constraints_prompt(description: str) -> str:
         "- Do NOT output duplicate constraints: each (type,a,b) may appear at most once.\n"
         "- Do NOT infer entry_road or exit_road from the maneuver alone.\n"
         "- If the text does not literally say \"main road\" or \"side road\" for that vehicle, use \"unknown\".\n"
+        "- If the text explicitly says \"on-ramp\", set entry_road=\"side\" for that vehicle.\n"
         "- Do NOT infer same_road_as from maneuvers. Only emit same_road_as if the description explicitly says\n"
         "  they are on the same road or one turns onto the road of the other.\n"
         "- Constraints without clear evidence will be discarded, so when unsure, omit it.\n"
@@ -475,15 +492,20 @@ def _filter_constraints_with_evidence(description: str, norm: Dict[str, Any]) ->
     return out
 
 
-def _infer_road_role_sets(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _infer_road_role_sets(
+    candidates: List[Dict[str, Any]], 
+    ramp_candidate_names: Optional[set] = None
+) -> Dict[str, Any]:
     """
     Infer which cardinal directions correspond to the 'main road' vs 'side road' using candidates:
     - Main road directions are the entry cardinals that have straight-through paths (entry==exit, maneuver==straight).
     - Side road directions are the remaining entry cardinals.
+    - For on-ramp scenarios (when ramp_candidate_names is provided), use those to identify side entries.
     """
     entry_set = set()
     exit_set = set()
     main_cardinals = set()
+    ramp_entry_cardinals = set()
 
     for c in candidates:
         sig = (c or {}).get("signature", {})
@@ -498,6 +520,11 @@ def _infer_road_role_sets(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         if str((sig or {}).get("entry_to_exit_turn", "")).strip().lower() == "straight" and ent_c and ent_c == ex_c:
             main_cardinals.add(ent_c)
+        
+        # For on-ramp scenarios, identify ramp entry cardinals
+        if ramp_candidate_names and c.get("name") in ramp_candidate_names:
+            if ent_c:
+                ramp_entry_cardinals.add(ent_c)
 
     side_entry = set([c for c in entry_set if c not in main_cardinals])
 
@@ -512,14 +539,23 @@ def _infer_road_role_sets(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
     main_exit = expand_with_opposites(main_cardinals, exit_set)
     side_exit = expand_with_opposites(side_entry, exit_set)
 
-    # Road-role (main/side) is only meaningful when the intersection behaves like a T-junction.
-    # In 4-way (or otherwise ambiguous) intersections, we intentionally disable this distinction.
+    # Road-role (main/side) is only meaningful when the intersection behaves like a T-junction
+    # OR when we have explicit on-ramp candidates (highway on-ramp scenarios)
     is_t_junction = (len(entry_set) == 3 and len(main_cardinals) >= 1 and len(side_entry) >= 1)
-    if not is_t_junction:
+    is_on_ramp_scenario = (ramp_candidate_names is not None and len(ramp_entry_cardinals) > 0)
+    
+    if not is_t_junction and not is_on_ramp_scenario:
+        # In 4-way (or otherwise ambiguous) intersections without on-ramps,
+        # we intentionally disable this distinction.
         main_cardinals = set()
         side_entry = set()
         main_exit = set()
         side_exit = set()
+    elif is_on_ramp_scenario:
+        # For on-ramp scenarios, use the ramp entry cardinals as side entries
+        side_entry = ramp_entry_cardinals
+        side_exit = expand_with_opposites(side_entry, exit_set)
+        print(f"[INFO] On-ramp role sets: main_entry={main_cardinals}, side_entry={side_entry}")
 
     return {
         "entry_set": entry_set,

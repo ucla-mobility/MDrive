@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-05-15-11-13_2_0" model="vehicle.audi.tt" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-0.434287" roll="0.008012" time="6.000000" x="-554.404828" y="-40.733364" yaw="-171.354042" z="9.560055" />
+  </route>
+</routes>

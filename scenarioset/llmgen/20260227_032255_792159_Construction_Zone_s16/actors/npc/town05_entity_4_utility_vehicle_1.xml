@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="07_placement" town="Town05" role="npc" model="vehicle.audi.a2" speed="0.0">
+    <waypoint x="-122.353" y="89.186" z="0.000" yaw="-90.515648"/>
+    <waypoint x="-122.368" y="87.472" z="0.000" yaw="-90.515648"/>
+    <waypoint x="-122.384" y="85.758" z="0.000" yaw="-90.501325"/>
+    <waypoint x="-122.399" y="84.043" z="0.000" yaw="-90.501325"/>
+    <waypoint x="-122.414" y="82.329" z="0.000" yaw="-90.515648"/>
+    <waypoint x="-122.429" y="80.614" z="0.000" yaw="-90.515648"/>
+    <waypoint x="-122.445" y="78.900" z="0.000" yaw="-90.515648"/>
+    <waypoint x="-122.460" y="77.186" z="0.000" yaw="-90.515648"/>
+  </route>
+</routes>

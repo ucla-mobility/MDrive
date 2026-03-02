@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
     AutoModelForCausalLM = None
 
 from .csp import refine_spawn_and_speeds_soft_csp
-from .geometry import CropBox, _segments_to_polyline_with_map, _slice_segments_detailed, find_conflict_between_polylines
+from .geometry import CropBox, _segments_to_polyline_with_map, _slice_segments_detailed, find_conflict_between_polylines, split_corridor_path_segments
 from .lane_change import apply_merge_into_lane_of
 from .llm import extract_refinement_constraints
 from .viz import visualize_refinement
@@ -89,6 +89,7 @@ def refine_picked_paths_with_model(
     prompt_out: Optional[str] = None,
     nodes_root: Optional[str] = None,
     carla_assets: Optional[str] = None,
+    schema_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     t_refiner_start = time.time()
     t0 = time.time()
@@ -133,8 +134,60 @@ def refine_picked_paths_with_model(
         model=model,
         tokenizer=tokenizer,
         max_new_tokens=max_new_tokens,
+        schema_payload=schema_payload,
     )
     print(f"[TIMING] refiner LLM constraint extraction: {time.time() - t0:.2f}s", flush=True)
+
+    # If many vehicles share a corridor, allow starts slightly outside the crop
+    # to improve feasible spawn separation without changing semantics.
+    try:
+        if len(vehicles) >= 4:
+            opts = constraints.setdefault("options", {})
+            current = float(opts.get("start_outside_crop_margin_m", 0.0) or 0.0)
+            opts["start_outside_crop_margin_m"] = max(current, 20.0)
+    except Exception as e:
+        print(f"[WARN] refiner could not set start_outside_crop_margin_m: {e}", flush=True)
+
+    # For t-junctions with perpendicular relations, allow spawns a bit outside the crop
+    # so the side-road vehicle can start before merging onto the main road.
+    try:
+        topo = str((schema_payload or {}).get("topology", "")).lower()
+        vehicle_constraints = (schema_payload or {}).get("vehicle_constraints", [])
+        has_perp = any(str(c.get("type", "")).lower() in ("perpendicular_left_of", "perpendicular_right_of") for c in vehicle_constraints)
+        if topo == "t_junction" and has_perp:
+            opts = constraints.setdefault("options", {})
+            current = float(opts.get("start_outside_crop_margin_m", 0.0) or 0.0)
+            # 12m covers the clipped side-road entry in Town02 without impacting other crops
+            opts["start_outside_crop_margin_m"] = max(current, 12.0)
+            # If any ego explicitly enters from the side road, widen further to pull spawn points outside the crop.
+            ego_entries = {
+                str(v.get("vehicle_id")): str(v.get("entry_road", "")).lower()
+                for v in (schema_payload or {}).get("ego_vehicles", [])
+                if isinstance(v, dict) and v.get("vehicle_id")
+            }
+            if any(val == "side" for val in ego_entries.values()):
+                opts["start_outside_crop_margin_m"] = max(opts["start_outside_crop_margin_m"], 50.0)
+            # Remove lane-change macros for vehicles on the side road so their perpendicular approach is preserved.
+            side_road_vehicles = {
+                str(v.get("vehicle_id"))
+                for v in (schema_payload or {}).get("ego_vehicles", [])
+                if str(v.get("entry_road", "")).lower() == "side"
+            }
+            if side_road_vehicles:
+                before = len(constraints.get("lane_changes", []) or [])
+                constraints["lane_changes"] = [
+                    lc
+                    for lc in (constraints.get("lane_changes", []) or [])
+                    if lc.get("vehicle") not in side_road_vehicles and lc.get("target") not in side_road_vehicles
+                ]
+                after = len(constraints.get("lane_changes", []) or [])
+                if before != after:
+                    print(
+                        f"[INFO] refiner: dropped {before - after} lane_change macros for side-road vehicles (t-junction perpendicular)",
+                        flush=True,
+                    )
+    except Exception as e:
+        print(f"[WARN] refiner could not set t-junction spawn margin: {e}", flush=True)
 
     if prompt_out:
         try:
@@ -231,6 +284,23 @@ def refine_picked_paths_with_model(
         }
         refined_picked.append(p2)
     print(f"[TIMING] refiner apply slicing: {time.time() - t0:.2f}s", flush=True)
+
+    # Apply corridor segment splitting for TWO_LANE_CORRIDOR topologies
+    # This splits long single-segment paths into multiple virtual sub-segments
+    # so that the object placer has multiple segment_index values to work with.
+    t0 = time.time()
+    topo = str((schema_payload or {}).get("topology", "")).lower()
+    if topo in ("two_lane_corridor", "corridor"):
+        print(f"[INFO] Applying corridor segment splitting for topology: {topo}")
+        split_picked = []
+        for p in refined_picked:
+            split_p = split_corridor_path_segments(p, target_length_m=25.0, min_splits=3)
+            split_picked.append(split_p)
+            if split_p.get("corridor_split_applied"):
+                n_segs = len((split_p.get("signature") or {}).get("segments_detailed", []))
+                print(f"  {p.get('vehicle')}: split into {n_segs} sub-segments")
+        refined_picked = split_picked
+        print(f"[TIMING] refiner corridor splitting: {time.time() - t0:.2f}s", flush=True)
 
     out_payload = dict(data)
     out_payload["source_picked_paths"] = picked_paths_json

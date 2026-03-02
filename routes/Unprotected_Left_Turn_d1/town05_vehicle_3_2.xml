@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="Unprotected_Left_Turn_d1_attempt1" town="Town05" role="ego" speed="6.0">
+    <waypoint x="-127.680" y="60.924" z="0.000" yaw="89.488611"/>
+    <waypoint x="-127.555" y="74.923" z="0.000" yaw="41.133836"/>
+    <waypoint x="-108.642" y="91.442" z="0.000" yaw="0.065550"/>
+    <waypoint x="-86.642" y="91.468" z="0.000" yaw="0.065550"/>
+  </route>
+</routes>
