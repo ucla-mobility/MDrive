@@ -32,11 +32,11 @@ import json
 import yaml
 import numpy as np
 # Patch for numpy 1.24+ compatibility with older libraries (like networkx < 2.6)
-if not hasattr(np, 'int'):
+if "int" not in np.__dict__:
     np.int = int
-if not hasattr(np, 'float'):
+if "float" not in np.__dict__:
     np.float = float
-if not hasattr(np, 'bool'):
+if "bool" not in np.__dict__:
     np.bool = bool
 import random
 import shutil

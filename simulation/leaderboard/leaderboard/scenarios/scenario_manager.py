@@ -31,7 +31,10 @@ from leaderboard.scenarios.scenarioatomics.atomic_criteria import ActorSpeedAbov
 from leaderboard.autoagents.agent_wrapper import AgentWrapper, AgentError
 from leaderboard.envs.sensor_interface import SensorReceivedNoData
 from leaderboard.utils.result_writer import ResultOutputProvider
-from leaderboard.utils.veer_audit import VeerAuditor
+try:
+    from leaderboard.utils.veer_audit import VeerAuditor
+except Exception:
+    VeerAuditor = None
 
 
 class ScenarioManager(object):
@@ -175,6 +178,9 @@ class ScenarioManager(object):
         self._veer_auditor = None
         enabled = os.environ.get("CUSTOM_VEER_AUDIT", "").lower() in ("1", "true", "yes")
         if not enabled:
+            return
+        if VeerAuditor is None:
+            print("[VEER_AUDIT] disabled: missing module leaderboard.utils.veer_audit")
             return
         try:
             result_root = os.environ.get("RESULT_ROOT", "").strip()
