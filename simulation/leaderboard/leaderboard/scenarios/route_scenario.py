@@ -15,6 +15,7 @@ import math
 import os
 import re
 import queue
+import bisect
 import xml.etree.ElementTree as ET
 import numpy.random as random
 import torch
@@ -2146,6 +2147,9 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         animate_walkers: Optional[bool] = None,
         walker_max_speed: Optional[float] = None,
         walker_teleport_distance: Optional[float] = None,
+        intelligent_guard: bool = False,
+        ego_actors: Optional[List[carla.Actor]] = None,
+        actor_role: Optional[str] = None,
     ):
         super().__init__(name)
         self._actor = actor
@@ -2345,6 +2349,128 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         self._last_debug_time = None
         self._last_sim_time = None
         self._last_index_dbg = None
+        self._actor_role = str(actor_role or "").strip().lower()
+        self._ego_actors = [a for a in list(ego_actors or []) if a is not None]
+
+        self._guard_requested = bool(intelligent_guard)
+        self._guard_enabled = False
+        if self._guard_requested:
+            self._guard_enabled = os.environ.get(
+                "CUSTOM_LOG_REPLAY_INTELLIGENT_GUARD",
+                "1",
+            ).lower() in ("1", "true", "yes")
+        try:
+            self._guard_horizon_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_HORIZON_S", "1.5")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_horizon_s = 1.5
+        try:
+            self._guard_dt_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_DT_S", "0.1")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_dt_s = 0.1
+        try:
+            self._guard_margin_m = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_MARGIN_M", "0.6")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_margin_m = 0.6
+        try:
+            self._guard_ttc_caution_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_TTC_CAUTION_S", "1.2")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_ttc_caution_s = 1.2
+        try:
+            self._guard_ttc_yield_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_TTC_YIELD_S", "0.5")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_ttc_yield_s = 0.5
+        try:
+            self._guard_max_rate = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_MAX_RATE", "1.3")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_max_rate = 1.3
+        try:
+            self._guard_min_rate = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_MIN_RATE", "0.0")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_min_rate = 0.0
+        try:
+            self._guard_rate_slew_per_tick = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_RATE_SLEW_PER_TICK", "0.15")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_rate_slew_per_tick = 0.15
+        try:
+            self._guard_hysteresis_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_HYSTERESIS_S", "0.3")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_hysteresis_s = 0.3
+        self._guard_vru_priority = os.environ.get(
+            "CUSTOM_LOG_REPLAY_VRU_PRIORITY",
+            "1",
+        ).lower() in ("1", "true", "yes")
+        try:
+            self._guard_priority_tie_margin_s = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_PRIORITY_TIE_MARGIN_S", "0.2")
+            )
+        except Exception:  # pylint: disable=broad-except
+            self._guard_priority_tie_margin_s = 0.2
+
+        self._guard_horizon_s = max(0.3, min(6.0, float(self._guard_horizon_s)))
+        self._guard_dt_s = max(0.02, min(float(self._guard_dt_s), float(self._guard_horizon_s)))
+        self._guard_margin_m = max(0.0, float(self._guard_margin_m))
+        self._guard_ttc_yield_s = max(0.05, float(self._guard_ttc_yield_s))
+        self._guard_ttc_caution_s = max(float(self._guard_ttc_yield_s), float(self._guard_ttc_caution_s))
+        self._guard_max_rate = max(1.0, float(self._guard_max_rate))
+        self._guard_min_rate = max(0.0, min(float(self._guard_min_rate), float(self._guard_max_rate)))
+        self._guard_rate_slew_per_tick = max(0.01, float(self._guard_rate_slew_per_tick))
+        self._guard_hysteresis_s = max(0.0, float(self._guard_hysteresis_s))
+        self._guard_priority_tie_margin_s = max(0.0, float(self._guard_priority_tie_margin_s))
+
+        base_rates = [0.0, 0.25, 0.5, 0.75, 1.0, 1.15, 1.3]
+        rates = [min(self._guard_max_rate, max(self._guard_min_rate, float(r))) for r in base_rates]
+        rates.extend([self._guard_min_rate, self._guard_max_rate, 1.0])
+        self._guard_candidate_rates = sorted(set(round(r, 3) for r in rates))
+        if not self._guard_candidate_rates:
+            self._guard_candidate_rates = [1.0]
+
+        self._tau_nominal: Optional[float] = None
+        self._tau_actual: Optional[float] = None
+        self._phase_error: float = 0.0
+        self._replay_rate: float = 1.0
+        self._risk_state: str = "clear"
+        self._risk_hold_until: float = 0.0
+        self._priority_state: str = "ego"
+        self._guard_target_ego_id: Optional[int] = None
+        self._guard_target_hold_until: float = 0.0
+        self._guard_prev_update_time: Optional[float] = None
+        self._guard_prev_intervention_active: bool = False
+        self._guard_min_ttc_pred: float = float("inf")
+        self._guard_last_reason: str = "off"
+        self._guard_summary_emitted: bool = False
+        self._guard_time_by_state: Dict[str, float] = {
+            "clear": 0.0,
+            "caution": 0.0,
+            "yield": 0.0,
+        }
+        self._guard_entries_by_state: Dict[str, int] = {
+            "clear": 1,
+            "caution": 0,
+            "yield": 0,
+        }
+        self._guard_intervention_count: int = 0
+        self._guard_max_phase_lag: float = 0.0
+        self._guard_rate_time_accum: float = 0.0
+        self._guard_rate_integral: float = 0.0
+        self._guard_min_pred_ttc_observed: float = float("inf")
 
     def _should_animate_walker(self) -> bool:
         return self._animate_walkers and _is_walker_actor(self._actor)
@@ -2479,6 +2605,22 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         except Exception:  # pylint: disable=broad-except
             return False
 
+        # While animating walkers with WalkerControl, physics can occasionally drift
+        # them below the intended ground-aligned replay target. Apply a gentle
+        # upward-only correction to prevent visible sink/pop artifacts.
+        try:
+            desired_z = float(target.location.z)
+        except Exception:  # pylint: disable=broad-except
+            desired_z = None
+        if desired_z is not None and float(loc.z) + 0.05 < float(desired_z):
+            try:
+                corr_tf = self._actor.get_transform()
+                corr_tf.location.z = float(desired_z)
+                self._actor.set_transform(corr_tf)
+                loc = carla.Location(x=float(loc.x), y=float(loc.y), z=float(desired_z))
+            except Exception:  # pylint: disable=broad-except
+                pass
+
         dx = float(target.location.x) - float(loc.x)
         dy = float(target.location.y) - float(loc.y)
         dist_xy = math.hypot(dx, dy)
@@ -2591,6 +2733,511 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         except Exception:  # pylint: disable=broad-except
             return False
 
+    def _is_vru_replay_actor(self) -> bool:
+        role = str(self._actor_role or "").strip().lower()
+        if role in ("pedestrian", "walker", "bicycle", "bike", "cyclist", "vru"):
+            return True
+        if _is_walker_actor(self._actor):
+            return True
+        try:
+            type_id = str(self._actor.type_id).lower()
+        except Exception:  # pylint: disable=broad-except
+            type_id = ""
+        for token in ("walker.", "pedestrian", "bicycle", "bike", "cyclist"):
+            if token in type_id:
+                return True
+        return False
+
+    def _actor_radius_xy(
+        self,
+        actor: Optional[carla.Actor],
+        fallback_vehicle: float = 1.35,
+        fallback_walker: float = 0.45,
+    ) -> float:
+        if actor is None:
+            return float(fallback_vehicle)
+        fallback = float(fallback_walker) if _is_walker_actor(actor) else float(fallback_vehicle)
+        try:
+            bbox = actor.bounding_box
+            ex = max(0.05, float(bbox.extent.x))
+            ey = max(0.05, float(bbox.extent.y))
+            return max(0.20, math.hypot(ex, ey))
+        except Exception:  # pylint: disable=broad-except
+            return max(0.20, float(fallback))
+
+    def _collect_ego_actors(self) -> List[carla.Actor]:
+        seen = set()
+        actors: List[carla.Actor] = []
+        self_actor_id = None
+        try:
+            if self._actor is not None:
+                self_actor_id = int(self._actor.id)
+        except Exception:  # pylint: disable=broad-except
+            self_actor_id = None
+
+        for ego in list(self._ego_actors or []):
+            if ego is None:
+                continue
+            try:
+                ego_id = int(ego.id)
+            except Exception:  # pylint: disable=broad-except
+                continue
+            if self_actor_id is not None and ego_id == self_actor_id:
+                continue
+            try:
+                if hasattr(ego, "is_alive") and not bool(ego.is_alive):
+                    continue
+            except Exception:  # pylint: disable=broad-except
+                pass
+            if ego_id in seen:
+                continue
+            seen.add(ego_id)
+            actors.append(ego)
+
+        if actors:
+            return actors
+
+        world = None
+        try:
+            world = CarlaDataProvider.get_world()
+        except Exception:  # pylint: disable=broad-except
+            world = None
+        if world is None:
+            return actors
+        try:
+            for candidate in world.get_actors():
+                try:
+                    role_name = str(candidate.attributes.get("role_name", "")).lower()
+                except Exception:  # pylint: disable=broad-except
+                    role_name = ""
+                if not role_name.startswith("hero"):
+                    continue
+                try:
+                    ego_id = int(candidate.id)
+                except Exception:  # pylint: disable=broad-except
+                    continue
+                if self_actor_id is not None and ego_id == self_actor_id:
+                    continue
+                if ego_id in seen:
+                    continue
+                seen.add(ego_id)
+                actors.append(candidate)
+        except Exception:  # pylint: disable=broad-except
+            pass
+        return actors
+
+    def _ego_prediction_state(self, ego_actor: carla.Actor) -> Optional[Dict[str, float]]:
+        try:
+            tf = ego_actor.get_transform()
+            loc = tf.location
+            yaw_rad = math.radians(float(tf.rotation.yaw))
+            vel = ego_actor.get_velocity()
+            speed_xy = math.hypot(float(vel.x), float(vel.y))
+            dir_x = math.cos(yaw_rad)
+            dir_y = math.sin(yaw_rad)
+            radius = self._actor_radius_xy(ego_actor, fallback_vehicle=1.45, fallback_walker=0.50)
+            return {
+                "id": int(getattr(ego_actor, "id", -1)),
+                "x": float(loc.x),
+                "y": float(loc.y),
+                "vx": float(speed_xy) * float(dir_x),
+                "vy": float(speed_xy) * float(dir_y),
+                "radius": float(radius),
+            }
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    def _compute_target_at_time(self, replay_time: float) -> carla.Transform:
+        if replay_time <= self._times[0]:
+            return self._plan[0]
+        if replay_time >= self._times[-1]:
+            return self._plan[-1]
+        idx = bisect.bisect_right(self._times, replay_time) - 1
+        idx = max(0, min(len(self._times) - 2, int(idx)))
+        t0 = float(self._times[idx])
+        t1 = float(self._times[idx + 1])
+        alpha = 0.0 if t1 <= t0 else (float(replay_time) - t0) / (t1 - t0)
+        alpha = max(0.0, min(1.0, float(alpha)))
+        return _interp_transform(self._plan[idx], self._plan[idx + 1], alpha)
+
+    def _evaluate_rate_vs_ego(
+        self,
+        ego_state: Dict[str, float],
+        tau_start: float,
+        replay_rate: float,
+        actor_radius: float,
+    ) -> Dict[str, float]:
+        steps = max(1, int(math.ceil(float(self._guard_horizon_s) / max(1e-3, float(self._guard_dt_s)))))
+        min_sep = float("inf")
+        min_ttc = float("inf")
+        prev_sep = None
+        prev_t = 0.0
+        ego_radius = float(ego_state["radius"])
+        for idx in range(steps + 1):
+            t = min(float(self._guard_horizon_s), float(idx) * float(self._guard_dt_s))
+            tau = float(tau_start) + float(replay_rate) * t
+            tau = max(float(self._times[0]), min(float(self._times[-1]), tau))
+            actor_tf = self._compute_target_at_time(tau)
+            ax = float(actor_tf.location.x)
+            ay = float(actor_tf.location.y)
+            ex = float(ego_state["x"]) + float(ego_state["vx"]) * t
+            ey = float(ego_state["y"]) + float(ego_state["vy"]) * t
+            dist_xy = math.hypot(ax - ex, ay - ey)
+            sep = dist_xy - (float(actor_radius) + float(ego_radius) + float(self._guard_margin_m))
+            if sep < min_sep:
+                min_sep = float(sep)
+            if sep <= 0.0 and not math.isfinite(min_ttc):
+                min_ttc = float(t)
+            if prev_sep is not None and sep < prev_sep - 1e-4 and prev_sep > 0.0:
+                dt = max(1e-3, float(t) - float(prev_t))
+                closing = (float(prev_sep) - float(sep)) / dt
+                if closing > 1e-4:
+                    ttc_est = float(prev_t) + float(prev_sep) / closing
+                    if ttc_est >= 0.0:
+                        min_ttc = min(float(min_ttc), float(ttc_est))
+            prev_sep = float(sep)
+            prev_t = float(t)
+        return {
+            "min_sep": float(min_sep),
+            "min_ttc": float(min_ttc),
+        }
+
+    def _priority_arrival_times(self, ego_state: Dict[str, float], tau_start: float) -> Tuple[float, float, float]:
+        steps = max(1, int(math.ceil(float(self._guard_horizon_s) / max(1e-3, float(self._guard_dt_s)))))
+        actor_samples: List[Tuple[float, float, float]] = []
+        ego_samples: List[Tuple[float, float, float]] = []
+        for idx in range(steps + 1):
+            t = min(float(self._guard_horizon_s), float(idx) * float(self._guard_dt_s))
+            tau = float(tau_start) + t
+            tau = max(float(self._times[0]), min(float(self._times[-1]), tau))
+            actor_tf = self._compute_target_at_time(tau)
+            actor_samples.append((float(t), float(actor_tf.location.x), float(actor_tf.location.y)))
+            ego_samples.append(
+                (
+                    float(t),
+                    float(ego_state["x"]) + float(ego_state["vx"]) * t,
+                    float(ego_state["y"]) + float(ego_state["vy"]) * t,
+                )
+            )
+
+        best_dist = float("inf")
+        best_actor_t = 0.0
+        best_ego_t = 0.0
+        for actor_t, ax, ay in actor_samples:
+            for ego_t, ex, ey in ego_samples:
+                d = math.hypot(ax - ex, ay - ey)
+                if d < best_dist:
+                    best_dist = float(d)
+                    best_actor_t = float(actor_t)
+                    best_ego_t = float(ego_t)
+        return float(best_actor_t), float(best_ego_t), float(best_dist)
+
+    @staticmethod
+    def _risk_state_order(state: str) -> int:
+        if state == "yield":
+            return 2
+        if state == "caution":
+            return 1
+        return 0
+
+    def _risk_state_from_metrics(self, min_sep: float, min_ttc: float) -> str:
+        if float(min_sep) <= 0.0:
+            return "yield"
+        if math.isfinite(float(min_ttc)) and float(min_ttc) <= float(self._guard_ttc_yield_s):
+            return "yield"
+        if float(min_sep) <= float(self._guard_margin_m):
+            return "caution"
+        if math.isfinite(float(min_ttc)) and float(min_ttc) <= float(self._guard_ttc_caution_s):
+            return "caution"
+        return "clear"
+
+    def _update_guard_risk_state(self, desired_state: str, sim_time: float) -> None:
+        current = str(self._risk_state)
+        if desired_state == current:
+            return
+        cur_ord = self._risk_state_order(current)
+        des_ord = self._risk_state_order(desired_state)
+        if des_ord > cur_ord:
+            self._risk_state = desired_state
+            self._risk_hold_until = float(sim_time) + float(self._guard_hysteresis_s)
+            self._guard_entries_by_state[desired_state] = int(self._guard_entries_by_state.get(desired_state, 0)) + 1
+            return
+        if float(sim_time) >= float(self._risk_hold_until):
+            self._risk_state = desired_state
+            self._risk_hold_until = float(sim_time) + float(self._guard_hysteresis_s)
+            self._guard_entries_by_state[desired_state] = int(self._guard_entries_by_state.get(desired_state, 0)) + 1
+
+    @staticmethod
+    def _risk_key(metrics: Dict[str, float]) -> Tuple[int, float, float]:
+        min_sep = float(metrics.get("min_sep", float("inf")))
+        min_ttc = float(metrics.get("min_ttc", float("inf")))
+        overlap_rank = 0 if min_sep <= 0.0 else 1
+        ttc_rank = min_ttc if math.isfinite(min_ttc) else 1e6
+        return (overlap_rank, ttc_rank, min_sep)
+
+    def _target_phase_rate(self, phase_error: float) -> float:
+        if phase_error >= 0.05:
+            boost = min(0.30, max(0.0, 0.6 * float(phase_error)))
+            return min(float(self._guard_max_rate), 1.0 + boost)
+        if phase_error <= -0.05:
+            slow = max(-0.5, 0.5 * float(phase_error))
+            return max(float(self._guard_min_rate), 1.0 + slow)
+        return 1.0
+
+    def _select_guard_rate(
+        self,
+        *,
+        actor_has_priority: bool,
+        desired_rate: float,
+        metrics_by_rate: Dict[float, Dict[str, float]],
+    ) -> float:
+        rates = list(self._guard_candidate_rates or [1.0])
+        if actor_has_priority:
+            return min(
+                rates,
+                key=lambda r: (
+                    abs(float(r) - float(desired_rate)),
+                    max(0.0, -float(metrics_by_rate[float(r)]["min_sep"])),
+                    float(r),
+                ),
+            )
+
+        if self._risk_state == "yield":
+            desired_rate = min(float(desired_rate), 0.25)
+        elif self._risk_state == "caution":
+            desired_rate = min(float(desired_rate), 0.75)
+
+        best_rate = rates[0]
+        best_score = float("inf")
+        for rate in rates:
+            m = metrics_by_rate[float(rate)]
+            min_sep = float(m.get("min_sep", float("inf")))
+            min_ttc = float(m.get("min_ttc", float("inf")))
+            score = abs(float(rate) - float(desired_rate)) * 5.0
+            if self._risk_state in ("yield", "caution"):
+                score += float(rate) * 2.0
+            if min_sep <= 0.0:
+                score += 120.0 + abs(min_sep) * 30.0
+            elif min_sep <= float(self._guard_margin_m):
+                score += (float(self._guard_margin_m) - min_sep) * 8.0
+            if math.isfinite(min_ttc):
+                if min_ttc <= float(self._guard_ttc_yield_s):
+                    score += 80.0 + (float(self._guard_ttc_yield_s) - min_ttc) * 35.0
+                elif min_ttc <= float(self._guard_ttc_caution_s):
+                    score += 16.0 + (float(self._guard_ttc_caution_s) - min_ttc) * 10.0
+            if score < best_score:
+                best_score = float(score)
+                best_rate = float(rate)
+        return float(best_rate)
+
+    def _emit_guard_summary(self) -> None:
+        if not self._guard_enabled or self._guard_summary_emitted:
+            return
+        self._guard_summary_emitted = True
+        avg_rate = (
+            float(self._guard_rate_integral) / float(self._guard_rate_time_accum)
+            if self._guard_rate_time_accum > 1e-4
+            else float(self._replay_rate)
+        )
+        min_ttc = float(self._guard_min_pred_ttc_observed)
+        min_ttc_str = "inf" if not math.isfinite(min_ttc) else f"{min_ttc:.2f}"
+        print(
+            "[LOG_REPLAY_GUARD_SUMMARY] {} "
+            "clear_s={:.2f} caution_s={:.2f} yield_s={:.2f} "
+            "clear_n={} caution_n={} yield_n={} "
+            "max_phase_lag={:.2f} avg_rate={:.2f} interventions={} min_pred_ttc={}".format(
+                self.name,
+                float(self._guard_time_by_state.get("clear", 0.0)),
+                float(self._guard_time_by_state.get("caution", 0.0)),
+                float(self._guard_time_by_state.get("yield", 0.0)),
+                int(self._guard_entries_by_state.get("clear", 0)),
+                int(self._guard_entries_by_state.get("caution", 0)),
+                int(self._guard_entries_by_state.get("yield", 0)),
+                float(self._guard_max_phase_lag),
+                float(avg_rate),
+                int(self._guard_intervention_count),
+                min_ttc_str,
+            )
+        )
+
+    def _compute_guarded_replay_time(self, sim_time: float, tau_nominal: float) -> float:
+        if not self._guard_enabled:
+            return float(tau_nominal)
+        tau_nominal = float(tau_nominal)
+        plan_start = float(self._times[0])
+        plan_end = float(self._times[-1])
+        if self._tau_actual is None:
+            self._tau_actual = max(plan_start, min(plan_end, tau_nominal))
+            self._tau_nominal = tau_nominal
+            self._phase_error = float(tau_nominal) - float(self._tau_actual)
+            self._guard_prev_update_time = float(sim_time)
+            return float(self._tau_actual)
+
+        if self._guard_prev_update_time is None:
+            self._guard_prev_update_time = float(sim_time)
+            self._tau_nominal = tau_nominal
+            self._phase_error = float(tau_nominal) - float(self._tau_actual)
+            return float(self._tau_actual)
+
+        raw_dt = float(sim_time) - float(self._guard_prev_update_time)
+        if raw_dt <= 1e-4:
+            if raw_dt < -1e-3:
+                self._guard_prev_update_time = float(sim_time)
+            self._tau_nominal = tau_nominal
+            self._phase_error = float(tau_nominal) - float(self._tau_actual)
+            return float(self._tau_actual)
+        dt = max(1e-3, min(0.25, float(raw_dt)))
+        self._guard_prev_update_time = float(sim_time)
+        self._guard_time_by_state[self._risk_state] = (
+            float(self._guard_time_by_state.get(self._risk_state, 0.0)) + float(dt)
+        )
+        self._guard_rate_integral += float(self._replay_rate) * float(dt)
+        self._guard_rate_time_accum += float(dt)
+
+        phase_error = float(tau_nominal) - float(self._tau_actual)
+        if phase_error > self._guard_max_phase_lag:
+            self._guard_max_phase_lag = float(phase_error)
+
+        ego_states: List[Dict[str, float]] = []
+        for ego_actor in self._collect_ego_actors():
+            state = self._ego_prediction_state(ego_actor)
+            if state is not None:
+                ego_states.append(state)
+
+        nominal_by_ego: Dict[int, Tuple[Dict[str, float], Dict[str, float]]] = {}
+        actor_radius = self._actor_radius_xy(self._actor, fallback_vehicle=1.35, fallback_walker=0.45)
+        for state in ego_states:
+            ego_id = int(state.get("id", -1))
+            nominal_metrics = self._evaluate_rate_vs_ego(
+                state,
+                float(self._tau_actual),
+                1.0,
+                actor_radius,
+            )
+            nominal_by_ego[ego_id] = (state, nominal_metrics)
+
+        target_ego_state = None
+        target_nominal_metrics = {"min_sep": float("inf"), "min_ttc": float("inf")}
+        if nominal_by_ego:
+            if (
+                self._guard_target_ego_id in nominal_by_ego
+                and float(sim_time) < float(self._guard_target_hold_until)
+            ):
+                target_ego_state, target_nominal_metrics = nominal_by_ego[self._guard_target_ego_id]
+            else:
+                selected_id = min(
+                    nominal_by_ego.keys(),
+                    key=lambda ego_id: self._risk_key(nominal_by_ego[ego_id][1]),
+                )
+                if selected_id != self._guard_target_ego_id:
+                    self._guard_target_hold_until = float(sim_time) + float(self._guard_hysteresis_s)
+                self._guard_target_ego_id = int(selected_id)
+                target_ego_state, target_nominal_metrics = nominal_by_ego[selected_id]
+        else:
+            self._guard_target_ego_id = None
+            self._guard_target_hold_until = 0.0
+
+        actor_has_priority = True
+        if target_ego_state is None:
+            self._priority_state = "none"
+        elif self._guard_vru_priority and self._is_vru_replay_actor():
+            actor_has_priority = True
+            self._priority_state = "actor_vru"
+        else:
+            actor_arrival, ego_arrival, _ = self._priority_arrival_times(
+                target_ego_state,
+                float(self._tau_actual),
+            )
+            tie = float(self._guard_priority_tie_margin_s)
+            if float(actor_arrival) + tie < float(ego_arrival):
+                actor_has_priority = True
+            elif float(ego_arrival) + tie < float(actor_arrival):
+                actor_has_priority = False
+            else:
+                actor_has_priority = str(self._priority_state).startswith("actor")
+            self._priority_state = "actor" if actor_has_priority else "ego"
+
+        desired_risk = self._risk_state_from_metrics(
+            float(target_nominal_metrics.get("min_sep", float("inf"))),
+            float(target_nominal_metrics.get("min_ttc", float("inf"))),
+        )
+        self._update_guard_risk_state(desired_risk, float(sim_time))
+
+        metrics_by_rate: Dict[float, Dict[str, float]] = {}
+        for rate in self._guard_candidate_rates:
+            if not ego_states:
+                metrics_by_rate[float(rate)] = {
+                    "min_sep": float("inf"),
+                    "min_ttc": float("inf"),
+                }
+                continue
+            agg_sep = float("inf")
+            agg_ttc = float("inf")
+            for ego_state in ego_states:
+                m = self._evaluate_rate_vs_ego(
+                    ego_state,
+                    float(self._tau_actual),
+                    float(rate),
+                    actor_radius,
+                )
+                agg_sep = min(float(agg_sep), float(m["min_sep"]))
+                agg_ttc = min(float(agg_ttc), float(m["min_ttc"]))
+            metrics_by_rate[float(rate)] = {
+                "min_sep": float(agg_sep),
+                "min_ttc": float(agg_ttc),
+            }
+
+        desired_rate = self._target_phase_rate(float(phase_error))
+        if not actor_has_priority:
+            if self._risk_state == "yield":
+                desired_rate = min(float(desired_rate), 0.2)
+            elif self._risk_state == "caution":
+                desired_rate = min(float(desired_rate), 0.75)
+        desired_rate = max(float(self._guard_min_rate), min(float(self._guard_max_rate), float(desired_rate)))
+
+        selected_rate = self._select_guard_rate(
+            actor_has_priority=bool(actor_has_priority),
+            desired_rate=float(desired_rate),
+            metrics_by_rate=metrics_by_rate,
+        )
+        selected_metrics = metrics_by_rate.get(float(selected_rate), {"min_sep": float("inf"), "min_ttc": float("inf")})
+
+        max_step = float(self._guard_rate_slew_per_tick)
+        delta = float(selected_rate) - float(self._replay_rate)
+        if delta > max_step:
+            selected_rate = float(self._replay_rate) + max_step
+        elif delta < -max_step:
+            selected_rate = float(self._replay_rate) - max_step
+        self._replay_rate = max(float(self._guard_min_rate), min(float(self._guard_max_rate), float(selected_rate)))
+
+        intervention_active = (
+            (not actor_has_priority)
+            and (self._risk_state in ("yield", "caution") or self._replay_rate < 0.95)
+        )
+        if intervention_active and not self._guard_prev_intervention_active:
+            self._guard_intervention_count += 1
+        self._guard_prev_intervention_active = bool(intervention_active)
+
+        self._guard_min_ttc_pred = float(selected_metrics.get("min_ttc", float("inf")))
+        if math.isfinite(self._guard_min_ttc_pred):
+            self._guard_min_pred_ttc_observed = min(
+                float(self._guard_min_pred_ttc_observed),
+                float(self._guard_min_ttc_pred),
+            )
+
+        self._tau_actual = float(self._tau_actual) + float(self._replay_rate) * float(dt)
+        self._tau_actual = max(plan_start, min(plan_end, float(self._tau_actual)))
+        self._tau_nominal = float(tau_nominal)
+        self._phase_error = float(self._tau_nominal) - float(self._tau_actual)
+        target_id_txt = (
+            "none" if self._guard_target_ego_id is None else str(int(self._guard_target_ego_id))
+        )
+        self._guard_last_reason = (
+            f"risk={self._risk_state} priority={self._priority_state} "
+            f"ego={target_id_txt} sep={float(selected_metrics.get('min_sep', float('inf'))):.2f}"
+        )
+        return float(self._tau_actual)
+
     def _maybe_capture(self, stage: str):
         if self._capture_cb is None:
             return
@@ -2600,6 +3247,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             pass
 
     def _maybe_finalize(self):
+        self._emit_guard_summary()
         if self._finalized or self._finalize_cb is None:
             return
         try:
@@ -2622,6 +3270,18 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         if abs_time is not None:
             msg += f" abs={abs_time:.3f}"
         msg += f" idx={self._last_index}/{max(0, len(self._times)-1)}"
+        if self._guard_enabled:
+            tau_nom = self._tau_nominal
+            tau_act = self._tau_actual
+            tau_nom_txt = "na" if tau_nom is None else f"{float(tau_nom):.3f}"
+            tau_act_txt = "na" if tau_act is None else f"{float(tau_act):.3f}"
+            min_ttc_txt = (
+                "inf" if not math.isfinite(float(self._guard_min_ttc_pred)) else f"{float(self._guard_min_ttc_pred):.2f}"
+            )
+            msg += (
+                f" tau_nom={tau_nom_txt} tau_act={tau_act_txt} rate={float(self._replay_rate):.2f}"
+                f" prio={self._priority_state} risk={self._risk_state} min_ttc={min_ttc_txt}"
+            )
         if note:
             msg += f" {note}"
         if target is not None:
@@ -2678,6 +3338,27 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         self._last_ground_vehicle_z = None
         self._last_ground_vehicle_pitch = None
         self._last_ground_vehicle_roll = None
+        self._tau_nominal = None
+        self._tau_actual = None
+        self._phase_error = 0.0
+        self._replay_rate = 1.0
+        self._risk_state = "clear"
+        self._risk_hold_until = 0.0
+        self._priority_state = "ego"
+        self._guard_target_ego_id = None
+        self._guard_target_hold_until = 0.0
+        self._guard_prev_update_time = None
+        self._guard_prev_intervention_active = False
+        self._guard_min_ttc_pred = float("inf")
+        self._guard_last_reason = "init"
+        self._guard_summary_emitted = False
+        self._guard_time_by_state = {"clear": 0.0, "caution": 0.0, "yield": 0.0}
+        self._guard_entries_by_state = {"clear": 1, "caution": 0, "yield": 0}
+        self._guard_intervention_count = 0
+        self._guard_max_phase_lag = 0.0
+        self._guard_rate_time_accum = 0.0
+        self._guard_rate_integral = 0.0
+        self._guard_min_pred_ttc_observed = float("inf")
 
     def _compute_target(self, sim_time: float) -> carla.Transform:
         if sim_time <= self._times[0]:
@@ -2705,7 +3386,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._start_time = GameTime.get_time()
 
         sim_time = GameTime.get_time() - self._start_time
-        replay_time = sim_time + self._replay_time_lead
+        tau_nominal = sim_time + self._replay_time_lead
 
         if self._debug and self._last_sim_time is not None and sim_time + 1e-3 < self._last_sim_time:
             print(f"[LOG_REPLAY_DEBUG] {self.name}: sim_time went backwards ({self._last_sim_time:.3f} -> {sim_time:.3f})")
@@ -2714,7 +3395,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
 
         if self._actor is None and self._spawn_cb is not None:
             spawn_time = self._spawn_time if self._spawn_time is not None else 0.0
-            if replay_time < spawn_time:
+            if tau_nominal < spawn_time:
                 self._debug_log(sim_time, note=f"waiting_spawn t0={spawn_time:.2f}")
                 return py_trees.common.Status.RUNNING
             try:
@@ -2730,7 +3411,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
                         self._maybe_capture("spawn")
                         self._captured_spawn = True
                 else:
-                    if self._spawn_grace is not None and replay_time > (spawn_time + self._spawn_grace):
+                    if self._spawn_grace is not None and tau_nominal > (spawn_time + self._spawn_grace):
                         self._completed = True
                         self._disabled = True
                         self._maybe_finalize()
@@ -2753,7 +3434,7 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             self._debug_log(sim_time, note="actor_missing")
             return py_trees.common.Status.RUNNING
 
-        if self._stage_before and replay_time < self._times[0]:
+        if self._stage_before and tau_nominal < self._times[0]:
             if not self._staged_before:
                 try:
                     self._actor.set_transform(self._stage_tf)
@@ -2768,6 +3449,19 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
                 self._staged_before = True
             self._debug_log(sim_time, note="staged_before")
             return py_trees.common.Status.RUNNING
+
+        if self._guard_enabled:
+            replay_time = self._compute_guarded_replay_time(sim_time, tau_nominal)
+        else:
+            replay_time = float(tau_nominal)
+            self._tau_nominal = float(tau_nominal)
+            self._tau_actual = float(replay_time)
+            self._phase_error = 0.0
+            self._replay_rate = 1.0
+            self._priority_state = "none"
+            self._risk_state = "clear"
+            self._guard_min_ttc_pred = float("inf")
+            self._guard_last_reason = "off"
 
         raw_target = self._compute_target(replay_time)
         target = _copy_transform(raw_target)
@@ -2804,6 +3498,29 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
                     )
                 if self._ground_smooth_vehicle_pose:
                     target = self._smooth_vehicle_ground_pose(target, sim_time)
+        elif self._actor is not None and _is_walker_actor(self._actor):
+            # If runtime ground rewrites are disabled, still derive a stable grounded
+            # Z target for walkers so replay control never drives them below terrain.
+            if self._ground_world is None:
+                try:
+                    self._ground_world = CarlaDataProvider.get_world()
+                except Exception:  # pylint: disable=broad-except
+                    self._ground_world = None
+            if self._ground_world_map is None:
+                try:
+                    self._ground_world_map = CarlaDataProvider.get_map()
+                except Exception:  # pylint: disable=broad-except
+                    self._ground_world_map = None
+            grounded_target = _ground_actor_transform(
+                self._actor,
+                target,
+                self._ground_world_map,
+                self._ground_world,
+                self._ground_lane_type,
+                z_extra=float(self._ground_z_extra),
+            )
+            if grounded_target is not None:
+                target.location.z = float(grounded_target.location.z)
         if _is_vehicle_actor(self._actor):
             min_allowed_z = float(raw_target.location.z) - float(self._ground_max_below_plan_z)
             if float(target.location.z) < float(min_allowed_z):
@@ -2814,7 +3531,10 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             )
         if self._debug:
             self._last_index_dbg = self._last_index
-        self._debug_log(sim_time, note="replay", target=target)
+        replay_note = "replay"
+        if self._guard_enabled:
+            replay_note = f"replay_guard {self._guard_last_reason}"
+        self._debug_log(sim_time, note=replay_note, target=target)
 
         # Debug: Log position periodically for each actor
         if not hasattr(self, '_debug_log_count'):
@@ -2822,8 +3542,8 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         self._debug_log_count += 1
         if self._debug_log_count % 50 == 1:  # Log every 50 frames
             try:
-                actor_loc = self._actor.get_location() if self._actor else None
-                print(f"[LogReplayFollower] {self.name}: t={replay_time:.2f}s, "
+                print(f"[LogReplayFollower] {self.name}: tau={replay_time:.2f}s nom={tau_nominal:.2f}s "
+                      f"rate={self._replay_rate:.2f} risk={self._risk_state} prio={self._priority_state}, "
                       f"target=({target.location.x:.2f},{target.location.y:.2f},{target.location.z:.2f}), "
                       f"actor_id={self._actor.id if self._actor else 'None'}")
             except Exception:
@@ -3806,15 +4526,38 @@ class RouteScenario(BasicScenario):
                 print(f"[RouteScenario] NPC-only mode timeout: {timeout}s (max_actor_time={max_actor_time:.1f}s)")
                 return timeout
 
-        # Fallback: estimate from route length if available
-        if self.route and len(self.route) > 0 and len(self.route[0]) > 0:
-            route_length = 0.0  # in meters
-            prev_point = self.route[0][0][0]
-            for current_point, _ in self.route[0][1:]:
-                dist = current_point.location.distance(prev_point.location)
-                route_length += dist
-                prev_point = current_point
-            return int(SECONDS_GIVEN_PER_METERS * route_length + INITIAL_SECONDS_DELAY)
+        # Fallback: estimate from route length if available.
+        # For multi-ego scenarios, use the longest ego route so one short route
+        # does not prematurely time out the whole scenario.
+        if self.route and len(self.route) > 0:
+            max_route_length = 0.0
+            has_valid_route = False
+            for ego_idx, ego_route in enumerate(self.route):
+                if not ego_route or len(ego_route) <= 1:
+                    continue
+                route_length = 0.0  # in meters
+                prev_point = ego_route[0][0]
+                for current_point, _ in ego_route[1:]:
+                    try:
+                        dist = current_point.location.distance(prev_point.location)
+                    except Exception:  # pylint: disable=broad-except
+                        dist = 0.0
+                    route_length += float(dist)
+                    prev_point = current_point
+                has_valid_route = True
+                if route_length > max_route_length:
+                    max_route_length = float(route_length)
+            if has_valid_route:
+                timeout = int(SECONDS_GIVEN_PER_METERS * max_route_length + INITIAL_SECONDS_DELAY)
+                if self.ego_vehicles_num > 1:
+                    print(
+                        "[RouteScenario] Multi-ego timeout: {}s (max route length={:.2f}m across {} egos)".format(
+                            timeout,
+                            float(max_route_length),
+                            int(self.ego_vehicles_num),
+                        )
+                    )
+                return timeout
 
         # Last resort fallback for empty routes
         print("[RouteScenario] WARNING: Cannot estimate route timeout - using default 60s")
@@ -4330,7 +5073,7 @@ class RouteScenario(BasicScenario):
             # but can optionally ground-normalize the Z values to match CARLA terrain.
             # Full X/Y snapping would break the logged trajectory.
             should_ground_plan_transforms = (
-                normalize_actor_z
+                (normalize_actor_z or is_walker_like)
                 and not follow_exact
                 and world_map is not None
             )
@@ -5490,9 +6233,8 @@ class RouteScenario(BasicScenario):
                         _plan_times = actor_plan.get("plan_times") or []
                         _role = str(actor_plan.get("role", "npc")).lower()
                         _is_walker_like = _role in ("pedestrian", "walker", "bicycle", "cyclist")
-                        _disable_runtime_ground_pose = (
-                            bool(disable_actor_replay_runtime_ground_pose)
-                            and (not _is_walker_like)
+                        _disable_runtime_ground_pose = bool(
+                            disable_actor_replay_runtime_ground_pose
                         )
                         # Debug: Log replay setup for each actor
                         _actor_name = actor_plan.get("name", f"actor_{actor_idx}")
@@ -5540,6 +6282,9 @@ class RouteScenario(BasicScenario):
                                         bool(ego_ground_smooth_pose)
                                         and (not _disable_runtime_ground_pose)
                                     ),
+                                    intelligent_guard=True,
+                                    ego_actors=self.ego_vehicles,
+                                    actor_role=actor_plan.get("role"),
                                 )
                             )
                             continue

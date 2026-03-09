@@ -1,4 +1,9 @@
-# MDriveBench: MDriveBench: Multi-Agent Multi-Granular Driving Benchmark
+# MDrive: A Cooperative Driving Benchmark for End-to-End Closed-loop Multi-Agent System
+A benchmark for multi-agent, multi-granular cooperative driving. Focus on end-to-end closed-loop systems to improve safety and coordination in complex urban environments.
+
+For information on our challenge, please visit: 
+https://mdrive-challenge.github.io/
+
 ## Repository Structure and Scope
 
 This repository implements **MDriveBench**, a multi-agent driving benchmark.  
@@ -52,11 +57,11 @@ $CARLA_ROOT/CarlaUE4.sh --world-port=2014 -RenderOffScreen
 ```
 
 ### 4) Run benchmark scenarios with your custom planner
-Run LLM-Generated Scenarios:
+Run LLM-Generated and OpenCDA and Interdrive Scenarios:
 ```bash
 # terminal B
 python tools/run_custom_eval.py \
-  --routes-dir scenarioset/llmgen \
+  --routes-dir scenarioset/nonreplay \
   --agent /abs/path/to/agents.py \
   --agent-config /abs/path/to/agent_config.yaml
 ```
