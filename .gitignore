@@ -5,6 +5,10 @@ ChatScene/log
 ChatScene/oldlog
 ChatScene/oldexamplescenarios
 v2xpnp/Sample_Dataset
+v2xpnp/oldroutes
+v2xpnp/out_trajectory_database.bak_owned_by_guest_zhihao
+v2xpnp/short
+
 benchmark_runs
 scenario_generator/log
 scenario_generator/routes
@@ -13,6 +17,20 @@ all_videos.zip
 models/
 ucla_v2_0.9.12-dirty.tar.gz
 debug_runs_passed/
+eval/
+carlalogs/
+runattempt/
+repro_logs/
+rootcause_*/
+test/
+test2/
+test4/
+core.*
+nohup.out
+log.txt
+lmdrivelog.txt
+*.bak
+*.tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -199,6 +217,17 @@ simulation/data_collection/scripts/
 simulation/data_collection/batch_run/
 birdview_v2_cache
 # simulation/leaderboard/team_code/pnp_config/
+
+# local cleanup artifacts
+/.codex
+/1
+/tmpcr2lg1ir
+/codex_snapshot_*/
+/openloop/runresults/
+/openloop/tools/testopen/
+/RiskM/
+/carla_crash_repro_0912.py
+/test_adapter_fixes.py
 
 # visualization
 visualization/results

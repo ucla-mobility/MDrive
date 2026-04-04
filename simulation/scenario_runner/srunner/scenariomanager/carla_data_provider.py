@@ -20,6 +20,12 @@ import time
 
 import carla
 
+try:
+    from common.carla_connection_events import log_actor_event as _log_actor_event
+except Exception:  # pragma: no cover - keep runnable without repo root on PYTHONPATH
+    def _log_actor_event(event, **kwargs):  # type: ignore[misc]
+        pass
+
 
 def calculate_velocity(actor):
     """
@@ -430,9 +436,13 @@ class CarlaActorPool(object):
         Remove an actor from the pool using its ID
         """
         if actor_id in CarlaActorPool._carla_actor_pool:
-            CarlaActorPool._carla_actor_pool[actor_id].destroy()
-            CarlaActorPool._carla_actor_pool[actor_id] = None
-            CarlaActorPool._carla_actor_pool.pop(actor_id)
+            actor = CarlaActorPool._carla_actor_pool.get(actor_id)
+            try:
+                if actor is not None and actor.is_alive:
+                    actor.destroy()
+            except Exception:
+                pass
+            CarlaActorPool._carla_actor_pool.pop(actor_id, None)
         else:
             print("Trying to remove a non-existing actor id {}".format(actor_id))
 
@@ -443,19 +453,34 @@ class CarlaActorPool(object):
         """
 
         DestroyActor = carla.command.DestroyActor       # pylint: disable=invalid-name
-        batch = []
-
-        for actor_id in CarlaActorPool._carla_actor_pool.copy():
-            batch.append(DestroyActor(CarlaActorPool._carla_actor_pool[actor_id]))
-
-        if CarlaActorPool._client:
-            try:
-                CarlaActorPool._client.apply_batch_sync(batch)
-            except RuntimeError as e:
-                if "time-out" in str(e):
-                    pass
-                else:
-                    raise e
+        actor_items = list(CarlaActorPool._carla_actor_pool.items())
+        if CarlaActorPool._client and actor_items:
+            destroy_items = [
+                (actor_id, actor)
+                for actor_id, actor in actor_items
+                if actor is not None and actor.is_alive
+            ]
+            batch = [DestroyActor(actor) for _, actor in destroy_items]
+            if batch:
+                try:
+                    responses = CarlaActorPool._client.apply_batch_sync(batch)
+                    for (_, actor), response in zip(destroy_items, responses or []):
+                        if getattr(response, "error", None):
+                            try:
+                                if actor is not None and actor.is_alive:
+                                    actor.destroy()
+                            except Exception:
+                                pass
+                except RuntimeError as e:
+                    if "time-out" in str(e).lower() or "timeout" in str(e).lower():
+                        for _, actor in actor_items:
+                            try:
+                                if actor is not None and actor.is_alive:
+                                    actor.destroy()
+                            except Exception:
+                                pass
+                    else:
+                        raise e
 
         CarlaActorPool._carla_actor_pool = dict()
         CarlaActorPool._world = None
@@ -1017,6 +1042,10 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
 
         CarlaDataProvider._carla_actor_pool[actor.id] = actor
         CarlaDataProvider.register_actor(actor)
+        try:
+            _log_actor_event("ACTOR_SPAWN", actor=actor, rolename=rolename)
+        except Exception:
+            pass
         return actor
 
     @staticmethod
@@ -1422,16 +1451,301 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
         return None
 
     @staticmethod
-    def remove_actor_by_id(actor_id):
+    def _purge_actor_cache_entries_by_id(actor_id):
+        """
+        Remove stale references to actor_id from per-actor cache maps.
+        """
+        for cache in (
+            CarlaDataProvider._actor_velocity_map,
+            CarlaDataProvider._actor_location_map,
+            CarlaDataProvider._actor_transform_map,
+        ):
+            for cached_actor in list(cache.keys()):
+                if cached_actor is None or getattr(cached_actor, "id", None) == actor_id:
+                    cache.pop(cached_actor, None)
+
+    @staticmethod
+    def _purge_actor_cache_entries_by_ids(actor_ids):
+        actor_ids = set(actor_ids)
+        if not actor_ids:
+            return
+        for cache in (
+            CarlaDataProvider._actor_velocity_map,
+            CarlaDataProvider._actor_location_map,
+            CarlaDataProvider._actor_transform_map,
+        ):
+            for cached_actor in list(cache.keys()):
+                if cached_actor is None:
+                    cache.pop(cached_actor, None)
+                    continue
+                if getattr(cached_actor, "id", None) in actor_ids:
+                    cache.pop(cached_actor, None)
+
+    @staticmethod
+    def _is_actor_already_gone_error(error_text):
+        text = str(error_text or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "not found",
+            "already destroyed",
+            "unable to destroy actor",
+            "does not exist",
+            "invalid actor",
+            "unknown actor",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _actor_is_sensor(actor):
+        if actor is None:
+            return False
+        try:
+            return str(getattr(actor, "type_id", "")).startswith("sensor.")
+        except Exception:
+            return False
+
+    @staticmethod
+    def _alive_actor_ids(actor_ids):
+        ids = {int(actor_id) for actor_id in actor_ids if actor_id is not None}
+        if not ids:
+            return set()
+        world = CarlaDataProvider._world
+        if world is None:
+            return set(ids)
+        try:
+            actors = world.get_actors(list(ids))
+        except Exception:
+            return set(ids)
+        return {
+            int(actor.id)
+            for actor in actors
+            if actor is not None and getattr(actor, "is_alive", False)
+        }
+
+    @staticmethod
+    def _wait_for_actor_ids_gone(actor_ids, timeout_s=5.0, poll_s=0.1):
+        remaining = {int(actor_id) for actor_id in actor_ids if actor_id is not None}
+        if not remaining:
+            return set()
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        while remaining and time.monotonic() < deadline:
+            alive_now = CarlaDataProvider._alive_actor_ids(remaining)
+            if not alive_now:
+                return set()
+            remaining = alive_now
+            time.sleep(max(0.01, float(poll_s)))
+        return CarlaDataProvider._alive_actor_ids(remaining)
+
+    @staticmethod
+    def destroy_actor_ids(
+        actor_ids,
+        *,
+        actor_lookup=None,
+        stop_sensors=False,
+        reason="cleanup",
+        phase="",
+        max_retries=2,
+        timeout_s=5.0,
+        poll_s=0.1,
+        direct_fallback=True,
+    ):
+        """
+        Destroy actor ids via synchronous batch RPC and verify completion.
+        Returns a summary dictionary for teardown logging.
+        """
+        DestroyActor = carla.command.DestroyActor  # pylint: disable=invalid-name
+        requested_ids = sorted({int(actor_id) for actor_id in actor_ids if actor_id is not None})
+        summary = {
+            "requested_ids": requested_ids,
+            "destroyed_ids": [],
+            "already_gone_ids": [],
+            "failed_ids": [],
+            "remaining_alive_ids": [],
+            "passes": 0,
+        }
+        if not requested_ids:
+            return summary
+
+        try:
+            _log_actor_event(
+                "ACTOR_DESTROY_BATCH_BEGIN",
+                reason=reason,
+                phase=phase,
+                stop_sensors=int(bool(stop_sensors)),
+                direct_fallback=int(bool(direct_fallback)),
+                actor_count=len(requested_ids),
+                actor_ids=",".join(str(actor_id) for actor_id in requested_ids[:30]),
+            )
+        except Exception:
+            pass
+
+        client = CarlaDataProvider._client
+        actor_handles = dict(actor_lookup or {})
+        actor_handles.update({
+            actor_id: CarlaDataProvider._carla_actor_pool.get(actor_id)
+            for actor_id in requested_ids
+        })
+
+        if bool(stop_sensors):
+            for actor_id in requested_ids:
+                actor = actor_handles.get(actor_id)
+                if actor is None or not CarlaDataProvider._actor_is_sensor(actor):
+                    continue
+                try:
+                    actor.stop()
+                    _log_actor_event(
+                        "SENSOR_STOP",
+                        actor=actor,
+                        reason=reason,
+                        phase=phase,
+                    )
+                except Exception:
+                    pass
+
+        failed_ids = set()
+        remaining_ids = set(requested_ids)
+        max_passes = max(1, int(max_retries) + 1)
+        for pass_idx in range(max_passes):
+            if not remaining_ids:
+                break
+            summary["passes"] = pass_idx + 1
+            pending_ids = sorted(remaining_ids)
+            failed_ids.clear()
+
+            if client is not None:
+                try:
+                    sync_mode = False
+                    if CarlaDataProvider._world is not None:
+                        try:
+                            sync_mode = bool(CarlaDataProvider._world.get_settings().synchronous_mode)
+                        except Exception:
+                            sync_mode = False
+                    responses = client.apply_batch_sync(
+                        [DestroyActor(int(actor_id)) for actor_id in pending_ids],
+                        sync_mode,
+                    )
+                    for actor_id, response in zip(pending_ids, responses or []):
+                        error_text = str(getattr(response, "error", "") or "")
+                        if not error_text:
+                            summary["destroyed_ids"].append(actor_id)
+                            continue
+                        if CarlaDataProvider._is_actor_already_gone_error(error_text):
+                            summary["already_gone_ids"].append(actor_id)
+                            continue
+                        failed_ids.add(actor_id)
+                    if responses is None:
+                        failed_ids.update(pending_ids)
+                    elif len(responses) < len(pending_ids):
+                        failed_ids.update(pending_ids[len(responses):])
+                except Exception:
+                    failed_ids.update(pending_ids)
+            else:
+                failed_ids.update(pending_ids)
+
+            if bool(direct_fallback):
+                # Fallback pass: direct actor.destroy() where we still hold a Python handle.
+                for actor_id in list(failed_ids):
+                    actor = actor_handles.get(actor_id)
+                    if actor is None:
+                        continue
+                    try:
+                        if bool(stop_sensors) and CarlaDataProvider._actor_is_sensor(actor):
+                            actor.stop()
+                    except Exception:
+                        pass
+                    try:
+                        if getattr(actor, "is_alive", False):
+                            actor.destroy()
+                    except Exception:
+                        continue
+
+            remaining_ids = CarlaDataProvider._wait_for_actor_ids_gone(
+                pending_ids,
+                timeout_s=timeout_s,
+                poll_s=poll_s,
+            )
+
+        alive_after_rpc = CarlaDataProvider._wait_for_actor_ids_gone(
+            requested_ids,
+            timeout_s=timeout_s,
+            poll_s=poll_s,
+        )
+        remaining_alive_ids = sorted(alive_after_rpc)
+        failed_ids.update(remaining_alive_ids)
+
+        destroyed_ids = sorted(set(summary["destroyed_ids"]) - set(remaining_alive_ids))
+        already_gone_ids = sorted(set(summary["already_gone_ids"]) - set(remaining_alive_ids))
+        failed_ids_sorted = sorted(set(int(actor_id) for actor_id in failed_ids))
+
+        summary["destroyed_ids"] = destroyed_ids
+        summary["already_gone_ids"] = already_gone_ids
+        summary["failed_ids"] = failed_ids_sorted
+        summary["remaining_alive_ids"] = remaining_alive_ids
+
+        try:
+            _log_actor_event(
+                "ACTOR_DESTROY_BATCH_RESULT",
+                reason=reason,
+                phase=phase,
+                stop_sensors=int(bool(stop_sensors)),
+                direct_fallback=int(bool(direct_fallback)),
+                actor_count=len(requested_ids),
+                destroyed_count=len(destroyed_ids),
+                already_gone_count=len(already_gone_ids),
+                failed_count=len(failed_ids_sorted),
+                remaining_count=len(remaining_alive_ids),
+                passes=summary["passes"],
+                failed_ids=",".join(str(actor_id) for actor_id in failed_ids_sorted[:30]),
+                remaining_ids=",".join(str(actor_id) for actor_id in remaining_alive_ids[:30]),
+            )
+        except Exception:
+            pass
+        return summary
+
+    @staticmethod
+    def remove_actor_by_id(
+        actor_id,
+        *,
+        max_retries=1,
+        timeout_s=3.0,
+        poll_s=0.05,
+        direct_fallback=True,
+        reason="remove_actor_by_id",
+        phase="remove_actor_by_id",
+    ):
         """
         Remove an actor from the pool using its ID
         """
         if actor_id in CarlaDataProvider._carla_actor_pool:
-            CarlaDataProvider._carla_actor_pool[actor_id].destroy()
-            CarlaDataProvider._carla_actor_pool[actor_id] = None
-            CarlaDataProvider._carla_actor_pool.pop(actor_id)
+            actor = CarlaDataProvider._carla_actor_pool.get(actor_id)
+            try:
+                _log_actor_event("ACTOR_DESTROY", actor=actor, reason=reason, phase=phase)
+            except Exception:
+                pass
+            destroy_summary = CarlaDataProvider.destroy_actor_ids(
+                [int(actor_id)],
+                actor_lookup={int(actor_id): actor} if actor is not None else None,
+                stop_sensors=True,
+                reason=reason,
+                phase=phase,
+                max_retries=max_retries,
+                timeout_s=timeout_s,
+                poll_s=poll_s,
+                direct_fallback=direct_fallback,
+            )
+            remaining = set(destroy_summary.get("remaining_alive_ids", []))
+            if int(actor_id) in remaining:
+                print(
+                    "WARNING: Actor {} is still alive after remove_actor_by_id; "
+                    "keeping it in CarlaDataProvider pool for retry.".format(actor_id)
+                )
+            else:
+                CarlaDataProvider._carla_actor_pool.pop(actor_id, None)
+                CarlaDataProvider._purge_actor_cache_entries_by_id(actor_id)
         else:
             print("Trying to remove a non-existing actor id {}".format(actor_id))
+            CarlaDataProvider._purge_actor_cache_entries_by_id(actor_id)
 
     @staticmethod
     def remove_actors_in_surrounding(location, distance):
@@ -1439,10 +1753,33 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
         Remove all actors from the pool that are closer than distance to the
         provided location
         """
+        candidate_ids = []
         for actor_id in CarlaDataProvider._carla_actor_pool.copy():
-            if CarlaDataProvider._carla_actor_pool[actor_id].get_location().distance(location) < distance:
-                CarlaDataProvider._carla_actor_pool[actor_id].destroy()
-                CarlaDataProvider._carla_actor_pool.pop(actor_id)
+            actor = CarlaDataProvider._carla_actor_pool.get(actor_id)
+            if actor is None:
+                continue
+            try:
+                if actor.get_location().distance(location) < distance:
+                    candidate_ids.append(int(actor_id))
+            except Exception:
+                continue
+
+        if candidate_ids:
+            destroy_summary = CarlaDataProvider.destroy_actor_ids(
+                candidate_ids,
+                stop_sensors=True,
+                reason="remove_actors_in_surrounding",
+                phase="remove_actors_in_surrounding",
+                max_retries=1,
+                timeout_s=3.0,
+                poll_s=0.05,
+            )
+            surviving_ids = set(destroy_summary.get("remaining_alive_ids", []))
+            for actor_id in candidate_ids:
+                if int(actor_id) in surviving_ids:
+                    continue
+                CarlaDataProvider._carla_actor_pool.pop(actor_id, None)
+                CarlaDataProvider._purge_actor_cache_entries_by_id(actor_id)
 
         # Remove all keys with None values
         CarlaDataProvider._carla_actor_pool = dict({k: v for k, v in CarlaDataProvider._carla_actor_pool.items() if v})
@@ -1473,22 +1810,73 @@ class CarlaDataProvider(object):  # pylint: disable=too-many-public-methods
         """
         Cleanup and remove all entries from all dictionaries
         """
-        DestroyActor = carla.command.DestroyActor       # pylint: disable=invalid-name
-        batch = []
-
-        for actor_id in CarlaDataProvider._carla_actor_pool:
-            actor = CarlaDataProvider._carla_actor_pool[actor_id]
-            if actor.is_alive:
-                batch.append(DestroyActor(actor))
-
-        if CarlaDataProvider._client:
+        actors_to_destroy = {
+            int(actor_id): actor
+            for actor_id, actor in CarlaDataProvider._carla_actor_pool.items()
+            if actor is not None and getattr(actor, "is_alive", False)
+        }
+        sensor_ids = [
+            actor_id
+            for actor_id, actor in actors_to_destroy.items()
+            if CarlaDataProvider._actor_is_sensor(actor)
+        ]
+        actor_ids = [
+            actor_id
+            for actor_id, actor in actors_to_destroy.items()
+            if not CarlaDataProvider._actor_is_sensor(actor)
+        ]
+        destroy_summary_sensor = CarlaDataProvider.destroy_actor_ids(
+            sensor_ids,
+            actor_lookup=actors_to_destroy,
+            stop_sensors=True,
+            reason="carla_data_provider_cleanup_sensors",
+            phase="carla_data_provider_cleanup",
+            max_retries=2,
+            timeout_s=6.0,
+            poll_s=0.1,
+        )
+        destroy_summary_actors = CarlaDataProvider.destroy_actor_ids(
+            actor_ids,
+            actor_lookup=actors_to_destroy,
+            stop_sensors=False,
+            reason="carla_data_provider_cleanup_actors",
+            phase="carla_data_provider_cleanup",
+            max_retries=2,
+            timeout_s=6.0,
+            poll_s=0.1,
+        )
+        destroy_summary = {
+            "requested_ids": sorted(
+                set(destroy_summary_sensor.get("requested_ids", []))
+                | set(destroy_summary_actors.get("requested_ids", []))
+            )
+        }
+        remaining_alive_ids = sorted(
+            set(destroy_summary_sensor.get("remaining_alive_ids", []))
+            | set(destroy_summary_actors.get("remaining_alive_ids", []))
+        )
+        if remaining_alive_ids:
             try:
-                CarlaDataProvider._client.apply_batch_sync(batch)
-            except RuntimeError as e:
-                if "time-out" in str(e):
-                    pass
-                else:
-                    raise e
+                _log_actor_event(
+                    "ACTOR_DESTROY_BATCH_RESULT",
+                    reason="carla_data_provider_cleanup_final",
+                    phase="carla_data_provider_cleanup",
+                    actor_count=len(destroy_summary.get("requested_ids", [])),
+                    remaining_count=len(remaining_alive_ids),
+                    remaining_ids=",".join(str(actor_id) for actor_id in remaining_alive_ids[:30]),
+                )
+            except Exception:
+                pass
+            print(
+                "WARNING: CarlaDataProvider.cleanup() finished with {} actors still alive "
+                "(ids={}).".format(
+                    len(remaining_alive_ids),
+                    ",".join(str(actor_id) for actor_id in remaining_alive_ids[:30]),
+                )
+            )
+        CarlaDataProvider._purge_actor_cache_entries_by_ids(
+            destroy_summary.get("requested_ids", actor_ids)
+        )
 
         CarlaDataProvider._actor_velocity_map.clear()
         CarlaDataProvider._actor_location_map.clear()

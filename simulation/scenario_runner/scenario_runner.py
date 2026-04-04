@@ -20,15 +20,20 @@ import traceback
 import argparse
 from argparse import RawTextHelpFormatter
 from datetime import datetime
-from distutils.version import LooseVersion
 import importlib
 import inspect
 import os
+import re
 import signal
 import sys
 import time
 import json
-import pkg_resources
+
+try:
+    from importlib.metadata import PackageNotFoundError, version as package_version
+except Exception:  # pragma: no cover - Python <3.8 compatibility fallback
+    PackageNotFoundError = Exception
+    package_version = None
 
 import carla
 
@@ -40,8 +45,63 @@ from srunner.scenarios.route_scenario import RouteScenario
 from srunner.tools.scenario_parser import ScenarioConfigurationParser
 from srunner.tools.route_parser import RouteParser
 
+try:
+    from common.carla_connection_events import (
+        create_logged_client,
+        install_process_lifecycle_logging,
+        log_carla_event,
+        log_process_exception,
+    )
+except Exception:  # pragma: no cover - keep script runnable outside launcher
+    def create_logged_client(carla_module, host, port, *, timeout_s=None, context="", attempt=None, process_name=None):
+        del context, attempt, process_name
+        client = carla_module.Client(host, int(port))
+        if timeout_s is not None:
+            client.set_timeout(float(timeout_s))
+        return client
+
+    def install_process_lifecycle_logging(process_name, *, env_keys=None):
+        del process_name, env_keys
+
+    def log_carla_event(event_type, *, process_name=None, **fields):
+        del event_type, process_name, fields
+
+    def log_process_exception(exc, *, process_name, where=""):
+        del exc, process_name, where
+
 # Version of scenario_runner
 VERSION = '0.9.9'
+SCENARIO_RUNNER_PROCESS_NAME = "scenario_runner"
+
+
+def _parse_version_tuple(raw_version):
+    numeric_parts = [int(token) for token in re.split(r"[^0-9]+", str(raw_version)) if token]
+    if not numeric_parts:
+        return (0,)
+    return tuple(numeric_parts)
+
+
+def _version_less_than(lhs, rhs):
+    left = _parse_version_tuple(lhs)
+    right = _parse_version_tuple(rhs)
+    width = max(len(left), len(right))
+    left += (0,) * (width - len(left))
+    right += (0,) * (width - len(right))
+    return left < right
+
+
+def _detect_carla_distribution_version():
+    if package_version is not None:
+        try:
+            return str(package_version("carla"))
+        except PackageNotFoundError:
+            pass
+        except Exception:
+            pass
+    module_version = getattr(carla, "__version__", None)
+    if module_version:
+        return str(module_version)
+    return None
 
 
 class ScenarioRunner(object):
@@ -85,12 +145,29 @@ class ScenarioRunner(object):
         # First of all, we need to create the client that will send the requests
         # to the simulator. Here we'll assume the simulator is accepting
         # requests in the localhost at port 2000.
-        self.client = carla.Client(args.host, int(args.port))
-        self.client.set_timeout(self.client_timeout)
+        self.client = create_logged_client(
+            carla,
+            args.host,
+            int(args.port),
+            timeout_s=self.client_timeout,
+            context="scenario_runner_init",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+        )
+        log_carla_event(
+            "SCENARIO_RUNNER_INIT",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+            host=args.host,
+            port=int(args.port),
+            timeout_s=float(self.client_timeout),
+            sync_mode=int(bool(args.sync)),
+            traffic_manager_port=int(args.trafficManagerPort),
+        )
 
-        dist = pkg_resources.get_distribution("carla")
-        if LooseVersion(dist.version) < LooseVersion('0.9.8'):
-            raise ImportError("CARLA version 0.9.8 or newer required. CARLA version found: {}".format(dist))
+        detected_version = _detect_carla_distribution_version()
+        if detected_version is not None and _version_less_than(detected_version, "0.9.8"):
+            raise ImportError(
+                "CARLA version 0.9.8 or newer required. CARLA version found: {}".format(detected_version)
+            )
 
         # Load agent if requested via command line args
         # If something goes wrong an exception will be thrown by importlib (ok here)
@@ -282,6 +359,13 @@ class ScenarioRunner(object):
                             pass
 
         os.remove('temp.json')
+        log_carla_event(
+            "SCENARIO_WORLD_LOAD_BEGIN",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+            requested_town=town,
+            reload_world=int(bool(self._args.reloadWorld)),
+            wait_for_ego=int(bool(self._args.waitForEgo)),
+        )
 
         # Save the criteria dictionary into a .json file
         with open(file_name, 'w') as fp:
@@ -328,17 +412,38 @@ class ScenarioRunner(object):
             self.world.tick()
         else:
             self.world.wait_for_tick()
-        if CarlaDataProvider.get_map().name != town and CarlaDataProvider.get_map().name != "OpenDriveMap":
-            print("The CARLA server uses the wrong map: {}".format(CarlaDataProvider.get_map().name))
+        loaded_map = CarlaDataProvider.get_map().name
+        if loaded_map != town and loaded_map != "OpenDriveMap":
+            print("The CARLA server uses the wrong map: {}".format(loaded_map))
             print("This scenario requires to use map: {}".format(town))
+            log_carla_event(
+                "SCENARIO_WORLD_LOAD_FAIL",
+                process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                requested_town=town,
+                loaded_map=loaded_map,
+            )
             return False
 
+        log_carla_event(
+            "SCENARIO_WORLD_LOAD_READY",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+            requested_town=town,
+            loaded_map=loaded_map,
+            sync_mode=int(bool(self._args.sync)),
+        )
         return True
 
     def _load_and_run_scenario(self, config):
         """
         Load and run the scenario given by config
         """
+        log_carla_event(
+            "SCENARIO_RUN_BEGIN",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+            scenario_name=getattr(config, "name", ""),
+            scenario_type=getattr(config, "type", ""),
+            town=getattr(config, "town", ""),
+        )
         result = False
         if not self._load_and_wait_for_world(config.town, config.ego_vehicles):
             self._cleanup()
@@ -352,6 +457,14 @@ class ScenarioRunner(object):
             except Exception as e:          # pylint: disable=broad-except
                 traceback.print_exc()
                 print("Could not setup required agent due to {}".format(e))
+                log_carla_event(
+                    "SCENARIO_AGENT_SETUP_FAIL",
+                    process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                    scenario_name=getattr(config, "name", ""),
+                    scenario_type=getattr(config, "type", ""),
+                    error_type=type(e).__name__,
+                    error=str(e),
+                )
                 self._cleanup()
                 return False
 
@@ -360,38 +473,68 @@ class ScenarioRunner(object):
         try:
             self._prepare_ego_vehicles(config.ego_vehicles)
             if self._args.openscenario:
-                scenario = OpenScenario(world=self.world,
-                                        ego_vehicles=self.ego_vehicles,
-                                        config=config,
-                                        config_file=self._args.openscenario,
-                                        timeout=100000)
+                scenario = OpenScenario(
+                    world=self.world,
+                    ego_vehicles=self.ego_vehicles,
+                    config=config,
+                    config_file=self._args.openscenario,
+                    timeout=100000,
+                )
             elif self._args.route:
-                scenario = RouteScenario(world=self.world,
-                                         config=config,
-                                         debug_mode=self._args.debug)
+                scenario = RouteScenario(
+                    world=self.world,
+                    config=config,
+                    debug_mode=self._args.debug,
+                )
             else:
                 scenario_class = self._get_scenario_class_or_fail(config.type)
-                scenario = scenario_class(self.world,
-                                          self.ego_vehicles,
-                                          config,
-                                          self._args.randomize,
-                                          self._args.debug)
-        except Exception as exception:                  # pylint: disable=broad-except
+                scenario = scenario_class(
+                    self.world,
+                    self.ego_vehicles,
+                    config,
+                    self._args.randomize,
+                    self._args.debug,
+                )
+        except Exception as exception:  # pylint: disable=broad-except
             print("The scenario cannot be loaded")
             traceback.print_exc()
             print(exception)
+            log_carla_event(
+                "SCENARIO_LOAD_FAIL",
+                process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                scenario_name=getattr(config, "name", ""),
+                scenario_type=getattr(config, "type", ""),
+                town=getattr(config, "town", ""),
+                error_type=type(exception).__name__,
+                error=str(exception),
+            )
             self._cleanup()
             return False
 
         try:
             if self._args.record:
                 recorder_name = "{}/{}/{}.log".format(
-                    os.getenv('SCENARIO_RUNNER_ROOT', "./"), self._args.record, config.name)
+                    os.getenv('SCENARIO_RUNNER_ROOT', "./"), self._args.record, config.name
+                )
                 self.client.start_recorder(recorder_name, True)
 
             # Load scenario and run it
             self.manager.load_scenario(scenario, self.agent_instance)
+            log_carla_event(
+                "SCENARIO_LOADED",
+                process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                scenario_name=getattr(config, "name", ""),
+                scenario_type=getattr(config, "type", ""),
+                town=getattr(config, "town", ""),
+            )
             self.manager.run_scenario()
+            log_carla_event(
+                "SCENARIO_RUN_END",
+                process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                scenario_name=getattr(config, "name", ""),
+                scenario_type=getattr(config, "type", ""),
+                status="ok",
+            )
 
             # Provide outputs if required
             self._analyze_scenario(config)
@@ -404,12 +547,28 @@ class ScenarioRunner(object):
 
             result = True
 
-        except Exception as e:              # pylint: disable=broad-except
+        except Exception as e:  # pylint: disable=broad-except
             traceback.print_exc()
             print(e)
+            log_carla_event(
+                "SCENARIO_RUN_FAIL",
+                process_name=SCENARIO_RUNNER_PROCESS_NAME,
+                scenario_name=getattr(config, "name", ""),
+                scenario_type=getattr(config, "type", ""),
+                town=getattr(config, "town", ""),
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             result = False
 
         self._cleanup()
+        log_carla_event(
+            "SCENARIO_RUN_COMPLETE",
+            process_name=SCENARIO_RUNNER_PROCESS_NAME,
+            scenario_name=getattr(config, "name", ""),
+            scenario_type=getattr(config, "type", ""),
+            result=int(bool(result)),
+        )
         return result
 
     def _run_scenarios(self):
@@ -541,6 +700,14 @@ def main():
     parser.add_argument('--waitForEgo', action="store_true", help='Connect the scenario to an existing ego vehicle')
 
     arguments = parser.parse_args()
+    install_process_lifecycle_logging(
+        SCENARIO_RUNNER_PROCESS_NAME,
+        env_keys=(
+            "CARLA_ROOTCAUSE_LOGDIR",
+            "CARLA_CONNECTION_EVENTS_LOG",
+            "SCENARIO_RUNNER_ROOT",
+        ),
+    )
     # pylint: enable=line-too-long
 
     if arguments.list:
@@ -574,6 +741,9 @@ def main():
     try:
         scenario_runner = ScenarioRunner(arguments)
         result = scenario_runner.run()
+    except Exception as exc:
+        log_process_exception(exc, process_name=SCENARIO_RUNNER_PROCESS_NAME, where="main")
+        raise
 
     finally:
         if scenario_runner is not None:

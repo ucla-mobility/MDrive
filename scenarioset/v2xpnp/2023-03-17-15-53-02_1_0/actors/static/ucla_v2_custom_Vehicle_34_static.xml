@@ -1,6 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-03-17-15-53-02_1_0" model="vehicle.carlamotors.carlacola" role="static" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="0.000000" roll="0.000000" time="8.300000" x="-452.102759" y="-176.574774" yaw="97.014487" z="0.020000" />
-  </route>
-</routes>

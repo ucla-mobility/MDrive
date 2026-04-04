@@ -69,12 +69,17 @@ class RoutePlanner(object):
 
     #         self.route.append((pos, cmd))
 
-    def set_route(self, global_plan, gps=False):
+    def set_route(self, global_plan, gps=False, global_plan_world=None):
         self.route.clear()
         route_num = len(global_plan)
         for route_id in range(route_num):
             route_tmp = deque()
-            for pos, cmd in global_plan[route_id]:
+            for point_id, (pos, cmd) in enumerate(global_plan[route_id]):
+                transform = None
+                if global_plan_world is not None and route_id < len(global_plan_world):
+                    world_route = global_plan_world[route_id]
+                    if point_id < len(world_route):
+                        transform = world_route[point_id][0]
                 if gps:
                     pos = np.array([pos["lat"], pos["lon"]])
                     pos -= self.mean
@@ -82,9 +87,10 @@ class RoutePlanner(object):
                 else:
                     pos = np.array([pos.location.x, pos.location.y])
                     pos -= self.mean
-                route_tmp.append((pos, cmd))
+                route_tmp.append((pos, cmd, transform))
             self.route.append(route_tmp)
-        print(self.route)
+        route_lengths = [len(route) for route in self.route]
+        print(f"[DEBUG LMDRIVE] [ROUTE_INIT] planner_route_lengths={route_lengths}", flush=True)
 
     def run_step(self, gps, vehicle_num=0):
         self.debug.clear()
@@ -124,6 +130,88 @@ class RoutePlanner(object):
         self.debug.show()
 
         return self.route[vehicle_num][1]
+
+    def get_route_tracking_state(self, gps, vehicle_num=0):
+        route_entries = list(self.route[vehicle_num])
+        if not route_entries:
+            return {
+                "nearest_route_point_index": None,
+                "nearest_route_point_distance": None,
+                "nearest_route_centerline_distance": None,
+                "nearest_route_centerline_projection": None,
+                "nearest_route_segment_index": None,
+                "nearest_route_segment_t": None,
+                "nearest_route_heading_deg": None,
+                "nearest_route_command": None,
+                "nearest_route_world": None,
+            }
+
+        gps_np = np.asarray(gps, dtype=np.float64)
+        nearest_point_distance = float("inf")
+        nearest_point_index = 0
+        nearest_point_world = None
+        nearest_point_command = None
+
+        for idx, entry in enumerate(route_entries):
+            point = np.asarray(entry[0], dtype=np.float64)
+            distance = float(np.linalg.norm(point - gps_np))
+            if distance < nearest_point_distance:
+                nearest_point_distance = distance
+                nearest_point_index = idx
+                nearest_point_command = entry[1] if len(entry) > 1 else None
+                nearest_point_world = entry[2] if len(entry) > 2 else None
+
+        nearest_centerline_distance = nearest_point_distance
+        nearest_segment_index = nearest_point_index
+        nearest_segment_t = 0.0
+        nearest_projection = route_entries[nearest_point_index][0]
+        nearest_heading_deg = None
+
+        if len(route_entries) > 1:
+            nearest_centerline_distance = float("inf")
+            for idx in range(len(route_entries) - 1):
+                start = np.asarray(route_entries[idx][0], dtype=np.float64)
+                end = np.asarray(route_entries[idx + 1][0], dtype=np.float64)
+                segment = end - start
+                segment_len_sq = float(np.dot(segment, segment))
+                if segment_len_sq <= 1e-9:
+                    projection = start
+                    t = 0.0
+                else:
+                    t = float(np.clip(np.dot(gps_np - start, segment) / segment_len_sq, 0.0, 1.0))
+                    projection = start + segment * t
+                distance = float(np.linalg.norm(gps_np - projection))
+                if distance < nearest_centerline_distance:
+                    nearest_centerline_distance = distance
+                    nearest_segment_index = idx
+                    nearest_segment_t = t
+                    nearest_projection = projection
+                    world_transform = route_entries[idx][2] if len(route_entries[idx]) > 2 else None
+                    if world_transform is not None:
+                        nearest_heading_deg = float(world_transform.rotation.yaw)
+                    else:
+                        nearest_heading_deg = float(math.degrees(math.atan2(segment[1], segment[0])))
+
+        world_dict = None
+        if nearest_point_world is not None:
+            world_dict = {
+                "x": float(nearest_point_world.location.x),
+                "y": float(nearest_point_world.location.y),
+                "z": float(nearest_point_world.location.z),
+                "yaw": float(nearest_point_world.rotation.yaw),
+            }
+
+        return {
+            "nearest_route_point_index": int(nearest_point_index),
+            "nearest_route_point_distance": float(nearest_point_distance),
+            "nearest_route_centerline_distance": float(nearest_centerline_distance),
+            "nearest_route_centerline_projection": [float(nearest_projection[0]), float(nearest_projection[1])],
+            "nearest_route_segment_index": int(nearest_segment_index),
+            "nearest_route_segment_t": float(nearest_segment_t),
+            "nearest_route_heading_deg": None if nearest_heading_deg is None else float(nearest_heading_deg),
+            "nearest_route_command": getattr(nearest_point_command, "name", str(nearest_point_command)),
+            "nearest_route_world": world_dict,
+        }
 
     def get_future_waypoints(self, vehicle_num=0, num=10):
         res = []
@@ -277,6 +365,8 @@ class InstructionPlanner(object):
         ini_wps = []
         for pt in area:
             wpx = self._map.get_waypoint(pt)
+            if wpx is None:
+                continue
             # As x_values are arranged in order, only the last one has to be checked
             if (
                 not ini_wps
@@ -288,18 +378,24 @@ class InstructionPlanner(object):
         # Advance them until the intersection
         wps = []
         for wpx in ini_wps:
-            while not wpx.is_intersection:
-                next_wp = wpx.next(0.5)[0]
+            while wpx and not wpx.is_intersection:
+                next_wps = wpx.next(0.5)
+                if not next_wps:
+                    break
+                next_wp = next_wps[0]
                 if next_wp and not next_wp.is_intersection:
                     wpx = next_wp
                 else:
+                    if next_wp:
+                        wpx = next_wp
                     break
-            wps.append(wpx)
+            if wpx:
+                wps.append(wpx)
 
         return area_loc, wps
 
     def _generate_roundabout_instruction(self, curr_point, routes):
-        print(curr_point, "roundabout")
+        print(f"[DEBUG LMDRIVE] [ROUNDABOUT] curr_point={curr_point.tolist() if hasattr(curr_point, 'tolist') else curr_point}", flush=True)
         i = 0
         angle_list = [np.pi/2,np.pi,np.pi*3/2]
         origin_point = np.array([0,0])
@@ -456,7 +552,7 @@ class InstructionPlanner(object):
             curr_point = np.array([tick_data["gps"][0],tick_data["gps"][1]])
             origin_point = np.array([0,0])
             if np.linalg.norm(curr_point-origin_point) <= 30: # Roundabout range
-                print("roundabout——townid=3")
+                print("[DEBUG LMDRIVE] [ROUNDABOUT] town_id=Town03 active_roundabout_instruction=1", flush=True)
                 if self.roundabout_instruction == '':
                     self.roundabout_instruction = self._generate_roundabout_instruction(curr_point, self.routes)
                 self.prev_instruction[ego_id] = self.roundabout_instruction
@@ -668,7 +764,7 @@ class InstructionPlanner(object):
         waypoint = self._map.get_waypoint(location)
         self.curr_command_mislead[ego_id] = command
         if self.curr_command_mislead[ego_id] in [1,2,3]:
-            for tjunction_loc in self.tjunction_mapping[town_id]:
+            for tjunction_loc in self.tjunction_mapping.get(town_id, []):
                 if math.sqrt(pow(-tjunction_loc[1]-gps_pos[0],2)+pow(tjunction_loc[0]-gps_pos[1],2))<tjunction_loc[2]:
                     target_angle_left = (tjunction_loc[3] * np.pi / 2) % (np.pi * 2)
                     target_angle_right = (tjunction_loc[3] * np.pi / 2 + np.pi) % (np.pi * 2)
@@ -756,6 +852,8 @@ class InstructionPlanner(object):
             return self.light_notice_text
 
     def get_left_nums(self, waypoint):
+        if waypoint is None:
+            return 0
         num = 0
         last_lane_id = waypoint.lane_id
         while True:
@@ -771,6 +869,8 @@ class InstructionPlanner(object):
         return num
 
     def get_right_nums(self, waypoint):
+        if waypoint is None:
+            return 0
         num = 0
         while True:
             waypoint = waypoint.get_right_lane()
@@ -803,6 +903,44 @@ class InstructionPlanner(object):
 
         return deg
 
+    def get_debug_state(self, ego_id=0):
+        def _vec_to_list(value):
+            if value is None:
+                return None
+            if hasattr(value, "tolist"):
+                return [float(x) for x in value.tolist()]
+            if isinstance(value, (list, tuple)):
+                return [float(x) for x in value]
+            return [float(value)]
+
+        def _maybe_int(value):
+            return None if value is None else int(value)
+
+        return {
+            "town_id": self.town_id,
+            "frame_count": int(self.frame_count),
+            "returned_instruction_id": int(self.prev_instruction_id[ego_id]),
+            "returned_instruction_text": self.prev_instruction[ego_id],
+            "pending_instruction_id": int(self.curr_instruction_id[ego_id]),
+            "pending_instruction_text": self.curr_instruction[ego_id],
+            "returned_mislead_id": int(self.prev_mislead_id[ego_id]),
+            "returned_mislead_text": self.prev_mislead[ego_id],
+            "pending_mislead_id": int(self.curr_mislead_id[ego_id]),
+            "pending_mislead_text": self.curr_mislead[ego_id],
+            "current_command_value": _maybe_int(self.curr_command[ego_id]),
+            "last_command_value": _maybe_int(self.last_command[ego_id]),
+            "current_mislead_command_value": _maybe_int(self.curr_command_mislead[ego_id]),
+            "destination_distance_m": float(self.destination_distance[ego_id]),
+            "last_target_point_local": _vec_to_list(self.last_target_point[ego_id]),
+            "last_target_point_mislead_local": _vec_to_list(self.last_target_point_mislead[ego_id]),
+            "left_lane_num": int(self.left_lane_num),
+            "right_lane_num": int(self.right_lane_num),
+            "notice_text": self.notice,
+            "light_notice_text": self.light_notice_text,
+            "roundabout_instruction": self.roundabout_instruction,
+            "trigger_distance": bool(self.trigger_distance),
+        }
+
 class MultiInsturctionsPlanner(InstructionPlanner):
     def __init__(self, global_plan, scenario_cofing_name = '', notice_light_switch = False):
         super().__init__(scenario_cofing_name, notice_light_switch)
@@ -815,7 +953,8 @@ class MultiInsturctionsPlanner(InstructionPlanner):
         self.prob = 0.9 # Probobility of combining instruction (reverse)
 
     def command2multiInstruct(self, town_id, tick_data, routes=None, ego_id=0):
-        next_wp, next_cmd = self._route_planner.run_step(tick_data["gps"])
+        route_out = self._route_planner.run_step(tick_data["gps"])
+        next_wp, next_cmd = route_out[0], route_out[1]
         combine_prob = random.random()
         if combine_prob > self.prob or self.is_combine:
             generate_instruction = self.command2instruct(town_id, tick_data, dis_on=False)
@@ -839,7 +978,8 @@ class MultiInsturctionsPlanner(InstructionPlanner):
                     input_data = {}
                     gps = next_wp
                     if len(self._route_planner.route) > 2:
-                        next_wp, next_cmd = self._route_planner.run_step(gps)
+                        route_out = self._route_planner.run_step(gps)
+                        next_wp, next_cmd = route_out[0], route_out[1]
                         input_data["gps"] = gps
                         input_data["next_waypoint"] = next_wp
                         input_data["next_command"] = next_cmd.value

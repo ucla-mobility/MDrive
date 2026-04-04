@@ -17,6 +17,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+try:
+    from common.carla_connection_events import (
+        create_logged_client,
+        install_process_lifecycle_logging,
+        log_carla_event,
+        log_process_exception,
+    )
+except Exception:  # pragma: no cover - probe should still run standalone
+    def create_logged_client(carla_module, host, port, *, timeout_s=None, context="", attempt=None, process_name=None):
+        del context, attempt, process_name
+        client = carla_module.Client(host, int(port))
+        if timeout_s is not None:
+            client.set_timeout(float(timeout_s))
+        return client
+
+    def install_process_lifecycle_logging(process_name, *, env_keys=None):
+        del process_name, env_keys
+
+    def log_carla_event(event_type, *, process_name=None, **fields):
+        del event_type, process_name, fields
+
+    def log_process_exception(exc, *, process_name, where=""):
+        del exc, process_name, where
+
 
 CRASH_PATTERNS = [
     "LowLevelFatalError",
@@ -26,6 +50,7 @@ CRASH_PATTERNS = [
     "Unhandled Exception",
     "Assertion failed",
 ]
+CARLA_CRASH_PROBE_PROCESS_NAME = "carla_crash_probe"
 
 
 @dataclass
@@ -211,6 +236,17 @@ class CarlaServer:
 
     def start(self) -> Tuple[bool, str]:
         self.stop()
+        log_carla_event(
+            "CRASH_PROBE_SERVER_START_BEGIN",
+            process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+            host=self.host,
+            port=self.port,
+            script=str(self.carla_script),
+            gpu=self.gpu,
+            startup_timeout_s=self.startup_timeout_s,
+            cmd_extra=" ".join(self.extra_args),
+            log_path=str(self.log_path),
+        )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_handle = self.log_path.open("w", encoding="utf-8")
         cmd = [
@@ -235,7 +271,21 @@ class CarlaServer:
 
         ok = _wait_for_port(self.host, self.port, should_be_open=True, timeout_s=self.startup_timeout_s)
         if ok:
+            log_carla_event(
+                "CRASH_PROBE_SERVER_START_READY",
+                process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+                host=self.host,
+                port=self.port,
+                pid=None if self.proc is None else self.proc.pid,
+            )
             return True, "CARLA RPC port opened"
+        log_carla_event(
+            "CRASH_PROBE_SERVER_START_FAIL",
+            process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+            host=self.host,
+            port=self.port,
+            pid=None if self.proc is None else self.proc.pid,
+        )
         return False, "CARLA RPC port did not open before timeout"
 
     def alive(self) -> bool:
@@ -243,9 +293,22 @@ class CarlaServer:
 
     def stop(self) -> None:
         if self.proc is not None:
+            log_carla_event(
+                "CRASH_PROBE_SERVER_STOP_BEGIN",
+                process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+                host=self.host,
+                port=self.port,
+                pid=self.proc.pid,
+            )
             _terminate_process(self.proc, grace_s=8.0)
             _wait_for_port(self.host, self.port, should_be_open=False, timeout_s=8.0)
             self.proc = None
+            log_carla_event(
+                "CRASH_PROBE_SERVER_STOP_END",
+                process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+                host=self.host,
+                port=self.port,
+            )
         if self.log_handle is not None:
             self.log_handle.flush()
             self.log_handle.close()
@@ -289,6 +352,17 @@ def _run_case(
     waypoint_limit: int,
 ) -> List[ProbeResult]:
     results: List[ProbeResult] = []
+    log_carla_event(
+        "CRASH_PROBE_CASE_BEGIN",
+        process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+        case=case_name,
+        map_name=map_name,
+        has_route=int(bool(route_info)),
+        rpc_timeout_s=float(rpc_timeout_s),
+        stable_s=float(stable_s),
+        weather_presets=",".join(str(p) for p in weather_presets),
+        waypoint_limit=int(waypoint_limit),
+    )
     t0 = time.monotonic()
     started, msg = server.start()
     results.append(
@@ -305,8 +379,14 @@ def _run_case(
     if not started:
         return results
 
-    client = carla.Client(server.host, server.port)
-    client.set_timeout(float(rpc_timeout_s))
+    client = create_logged_client(
+        carla,
+        server.host,
+        server.port,
+        timeout_s=float(rpc_timeout_s),
+        context=f"crash_probe:{case_name}",
+        process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+    )
 
     t1 = time.monotonic()
     try:
@@ -458,6 +538,14 @@ def _run_case(
             )
         )
 
+    log_carla_event(
+        "CRASH_PROBE_CASE_END",
+        process_name=CARLA_CRASH_PROBE_PROCESS_NAME,
+        case=case_name,
+        phases=len(results),
+        failed_phases=sum(1 for item in results if not item.ok),
+        server_alive=int(bool(server.alive())),
+    )
     return results
 
 
@@ -476,6 +564,10 @@ def _write_summary(results: List[ProbeResult], out_dir: Path) -> None:
 
 
 def main() -> int:
+    install_process_lifecycle_logging(
+        CARLA_CRASH_PROBE_PROCESS_NAME,
+        env_keys=("CARLA_ROOTCAUSE_LOGDIR", "CARLA_CONNECTION_EVENTS_LOG", "CUDA_VISIBLE_DEVICES"),
+    )
     parser = argparse.ArgumentParser(description="Probe CARLA crash phase across maps/routes.")
     parser.add_argument("--carla-root", type=Path, default=Path("/data2/marco/CoLMDriver/carla912"))
     parser.add_argument("--carla-script", type=Path, default=None, help="Path to CarlaUE4.sh")
@@ -588,4 +680,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        log_process_exception(exc, process_name=CARLA_CRASH_PROBE_PROCESS_NAME, where="__main__")
+        raise

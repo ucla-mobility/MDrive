@@ -41,7 +41,7 @@ class PIDController(object):
         self.angle_thresh = angle_thresh
         self.dist_thresh = dist_thresh
 
-    def control_pid(self, waypoints, speed, target):
+    def control_pid(self, waypoints, speed, target, tail_mode=False, tail_passed_terminal=False):
         ''' Predicts vehicle control with a PID controller.
         Args:
             waypoints (tensor): output of self.plan()
@@ -76,6 +76,12 @@ class PIDController(object):
         # (reduces noise in eg. straight roads, helps with sudden turn commands)
         use_target_to_aim = np.abs(angle_target) < np.abs(angle)
         use_target_to_aim = use_target_to_aim or (np.abs(angle_target-angle_last) > self.angle_thresh and target[1] < self.dist_thresh)
+        # Endpoint safety guard: once we're in route tail mode, a behind-ego
+        # command target can cause a large wrapped target angle and sharp steer
+        # reversal. Keep steering on trajectory angle in this narrow case.
+        terminal_behind_guard = bool(tail_mode and target[1] <= 0.0)
+        if terminal_behind_guard:
+            use_target_to_aim = False
         if use_target_to_aim:
             angle_final = angle_target
         else:
@@ -108,6 +114,10 @@ class PIDController(object):
             'angle_target': float(angle_target.astype(np.float64)),
             'angle_final': float(angle_final.astype(np.float64)),
             'delta': float(delta.astype(np.float64)),
+            'tail_mode': bool(tail_mode),
+            'tail_passed_terminal': bool(tail_passed_terminal),
+            'terminal_behind_guard': bool(terminal_behind_guard),
+            'use_target_to_aim': bool(use_target_to_aim),
         }
 
         return steer, throttle, brake, metadata

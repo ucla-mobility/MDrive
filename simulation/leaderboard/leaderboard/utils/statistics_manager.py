@@ -11,12 +11,14 @@ This module contains a statistics manager for the CARLA AD leaderboard
 
 from __future__ import print_function
 
+import copy
 from dictor import dictor
 import math
 import sys
 import numpy as np
 
 from leaderboard.utils.pdm_metrics import compute_pdm_route_metrics
+from leaderboard.utils.hugsim_metrics import compute_hugsim_route_metrics
 
 from srunner.scenariomanager.traffic_events import TrafficEventType
 
@@ -54,6 +56,7 @@ class RouteRecord():
 
         # navsim-style PDM metrics (filled later)
         self.pdm = None
+        self.hugsim = None
 
         self.meta = {}
 
@@ -226,6 +229,12 @@ class StatisticsManager(object):
             config=config,
             ego_id=self.ego_car_id,
         )
+        route_record.hugsim = compute_hugsim_route_metrics(
+            pdm_trace=pdm_trace,
+            pdm_world_trace=pdm_world_trace,
+            config=config,
+            ego_id=self.ego_car_id,
+        )
 
         return route_record
 
@@ -251,6 +260,9 @@ class StatisticsManager(object):
         pdm_count = 0
         pdm_min_ttc = np.inf
         pdm_min_ttc_dist = np.inf
+        hugsim_fields = ["hug_score", "route_completion", "mean_epdm_score"]
+        hugsim_accumulator = {key: 0.0 for key in hugsim_fields}
+        hugsim_count = 0
 
         if self._registry_route_records:
             for route_record in self._registry_route_records:
@@ -292,6 +304,12 @@ class StatisticsManager(object):
                     ttc_min_distance_m = route_record.pdm.get("ttc_min_distance_m")
                     if ttc_min_distance_m is not None:
                         pdm_min_ttc_dist = min(pdm_min_ttc_dist, ttc_min_distance_m)
+                route_hugsim = getattr(route_record, "hugsim", None)
+                if route_hugsim and route_hugsim.get("available"):
+                    hugsim_count += 1
+                    hugsim_accumulator["hug_score"] += route_hugsim.get("hug_score", 0.0)
+                    hugsim_accumulator["route_completion"] += route_hugsim.get("route_completion", 0.0)
+                    hugsim_accumulator["mean_epdm_score"] += route_hugsim.get("mean_epdm_score", 0.0)
 
         global_record.scores['score_route'] /= float(total_routes)
         global_record.scores['score_penalty'] /= float(total_routes)
@@ -306,6 +324,13 @@ class StatisticsManager(object):
             global_record.pdm["ttc_min_distance_m"] = None if pdm_min_ttc_dist == np.inf else float(pdm_min_ttc_dist)
         else:
             global_record.pdm = {"available": False}
+        if hugsim_count > 0:
+            global_record.hugsim = {
+                key: hugsim_accumulator[key] / hugsim_count for key in hugsim_fields
+            }
+            global_record.hugsim["available"] = True
+        else:
+            global_record.hugsim = {"available": False}
 
         return global_record
 
@@ -393,6 +418,20 @@ class StatisticsManager(object):
                 'PDM TTC min time (s)',
                 'PDM TTC min distance (m)',
             ]
+        hugsim_stats = stats_dict.get("hugsim")
+        if not isinstance(hugsim_stats, dict):
+            hugsim_stats = {}
+        if hugsim_stats.get("available"):
+            data['values'] += [
+                '{:.3f}'.format(hugsim_stats.get('hug_score', 0.0)),
+                '{:.3f}'.format(hugsim_stats.get('route_completion', 0.0)),
+                '{:.3f}'.format(hugsim_stats.get('mean_epdm_score', 0.0)),
+            ]
+            data['labels'] += [
+                'HUGSIM driving score',
+                'HUGSIM route completion',
+                'HUGSIM mean EPDM (no EP)',
+            ]
 
         entry_status = "Finished"
         eligible = True
@@ -412,6 +451,89 @@ class StatisticsManager(object):
                 if "Agent" in route_status:
                     entry_status = "Finished with agent errors"
                     break
+
+        def _summarize_partition(records):
+            count = len(records)
+            if count <= 0:
+                return {
+                    "count": 0,
+                    "avg_score_composed": 0.0,
+                    "avg_score_route": 0.0,
+                    "avg_score_penalty": 0.0,
+                    "completed_count": 0,
+                    "failed_count": 0,
+                }
+            score_composed = 0.0
+            score_route = 0.0
+            score_penalty = 0.0
+            completed_count = 0
+            failed_count = 0
+            for record in records:
+                scores_local = record.get("scores", {}) if isinstance(record, dict) else {}
+                status_local = str(record.get("status", "") if isinstance(record, dict) else "")
+                score_composed += float(scores_local.get("score_composed", 0.0) or 0.0)
+                score_route += float(scores_local.get("score_route", 0.0) or 0.0)
+                score_penalty += float(scores_local.get("score_penalty", 0.0) or 0.0)
+                if status_local.lower().startswith("completed"):
+                    completed_count += 1
+                elif status_local:
+                    failed_count += 1
+            return {
+                "count": int(count),
+                "avg_score_composed": float(score_composed / count),
+                "avg_score_route": float(score_route / count),
+                "avg_score_penalty": float(score_penalty / count),
+                "completed_count": int(completed_count),
+                "failed_count": int(failed_count),
+            }
+
+        recovered_routes = []
+        unrecovered_routes = []
+        eligible_recovered = []
+        ineligible_recovered = []
+        recovered_manifest = []
+        for record in route_records:
+            if not isinstance(record, dict):
+                continue
+            meta_local = record.get("meta", {}) if isinstance(record.get("meta"), dict) else {}
+            recovered = bool(meta_local.get("route_recovered", False))
+            if recovered:
+                recovered_routes.append(record)
+            else:
+                unrecovered_routes.append(record)
+            terminal_class = str(meta_local.get("route_terminal_status", "") or "")
+            if recovered:
+                eligible_candidate = bool(meta_local.get("benchmark_eligible_candidate", True))
+                invalid_for_benchmark = bool(meta_local.get("invalid_for_benchmark", False))
+                if eligible_candidate and not invalid_for_benchmark:
+                    eligible_recovered.append(record)
+                else:
+                    ineligible_recovered.append(record)
+                recovered_manifest.append(
+                    {
+                        "route_id": record.get("route_id"),
+                        "route_index": record.get("index"),
+                        "status": record.get("status"),
+                        "route_terminal_status": terminal_class,
+                        "recovery_count": int(meta_local.get("recovery_count", 0) or 0),
+                        "planner_continuity_mode": meta_local.get("planner_continuity_mode", ""),
+                        "recovered_approximate": bool(meta_local.get("recovered_approximate", True)),
+                        "checkpoint_id": meta_local.get("checkpoint_id"),
+                        "recovery_reason": meta_local.get("recovery_reason", ""),
+                        "recovery_failure_kind": meta_local.get("recovery_failure_kind", ""),
+                        "invalid_for_benchmark": invalid_for_benchmark,
+                        "benchmark_eligible_candidate": eligible_candidate and not invalid_for_benchmark,
+                    }
+                )
+
+        data["recovery_summary"] = {
+            "all_routes": _summarize_partition(route_records),
+            "unrecovered_routes_only": _summarize_partition(unrecovered_routes),
+            "recovered_routes_only": _summarize_partition(recovered_routes),
+            "eligible_recovered_routes_only": _summarize_partition(eligible_recovered),
+            "ineligible_recovered_routes_only": _summarize_partition(ineligible_recovered),
+        }
+        data["recovered_route_manifest"] = recovered_manifest
 
         data['entry_status'] = entry_status
         data['eligible'] = eligible
@@ -444,3 +566,27 @@ class StatisticsManager(object):
         if not endpoint.startswith(('http:', 'https:', 'ftp:')):
             with open(endpoint, 'w') as fd:
                 fd.truncate(0)
+
+    def snapshot_state(self):
+        """
+        Return evaluator-side statistics state for checkpoint-based recovery.
+        """
+        return {
+            "ego_car_id": int(self.ego_car_id),
+            "registry_route_records": [copy.deepcopy(record.__dict__) for record in self._registry_route_records],
+        }
+
+    def restore_state(self, state):
+        """
+        Restore evaluator-side statistics state from a checkpoint snapshot.
+        """
+        if not isinstance(state, dict):
+            return
+        records = state.get("registry_route_records", [])
+        restored = []
+        if isinstance(records, list):
+            for record_dict in records:
+                if isinstance(record_dict, dict):
+                    restored.append(to_route_record(copy.deepcopy(record_dict)))
+        if restored:
+            self._registry_route_records = restored

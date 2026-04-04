@@ -24,12 +24,10 @@ import traceback
 import argparse
 from argparse import RawTextHelpFormatter
 from datetime import datetime
-from distutils.version import LooseVersion
 import importlib
 import os
 import sys
 import gc
-import pkg_resources
 import sys
 import carla
 import copy
@@ -50,6 +48,33 @@ from leaderboard.autoagents.agent_wrapper import  AgentWrapper, AgentError
 from leaderboard.utils.statistics_manager import StatisticsManager
 from leaderboard.utils.route_indexer import RouteIndexer
 
+try:
+    from common.carla_connection_events import (
+        create_logged_client,
+        install_process_lifecycle_logging,
+        log_carla_event,
+        log_process_exception,
+    )
+except Exception:  # pragma: no cover - keep evaluator runnable without repo root on PYTHONPATH
+    def create_logged_client(carla_module, host, port, *, timeout_s=None, context="", attempt=None, process_name=None):
+        del context, attempt, process_name
+        client = carla_module.Client(host, int(port))
+        if timeout_s is not None:
+            client.set_timeout(float(timeout_s))
+        return client
+
+    def install_process_lifecycle_logging(process_name, *, env_keys=None):
+        del process_name, env_keys
+
+    def log_carla_event(event_type, *, process_name=None, **fields):
+        del event_type, process_name, fields
+
+    def log_process_exception(exc, *, process_name, where=""):
+        del exc, process_name, where
+
+
+EVALUATOR_PROCESS_NAME = "leaderboard_evaluator"
+
 class Logger(object):
     def __init__(self, file_name = 'temp.log', stream = sys.stdout) -> None:
         self.terminal = stream
@@ -57,16 +82,15 @@ class Logger(object):
 
     def write(self, message):
         local_time = time.localtime(time.time())
-        if message=='\n':
+        if message == '\n':
             time_str = ''
         else:
             time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
         try:
             self.terminal.write(message)
-            self.log = open(self.file_name, "a")
-            self.log.write(time_str+'  '+message)
-            # self.log.close()
-        except Exception as e:
+            with open(self.file_name, "a") as log:
+                log.write(time_str + '  ' + message)
+        except Exception:
             pass
 
     def flush(self):
@@ -79,6 +103,7 @@ sensors_to_icons = {
     'sensor.lidar.ray_cast':    'carla_lidar',
     'sensor.lidar.ray_cast_semantic':    'carla_lidar',
     'sensor.other.radar':       'carla_radar',
+    'sensor.other.collision':   'carla_collision',
     'sensor.other.gnss':        'carla_gnss',
     'sensor.other.imu':         'carla_imu',
     'sensor.opendrive_map':     'carla_opendrive_map',
@@ -112,17 +137,27 @@ class LeaderboardEvaluator(object):
         # First of all, we need to create the client that will send the requests
         # to the simulator. Here we'll assume the simulator is accepting
         # requests in the localhost at port 2000.
-        self.client = carla.Client(args.host, int(args.port))
         if args.timeout:
             self.client_timeout = float(args.timeout)
-        self.client.set_timeout(self.client_timeout)
+        self.client = create_logged_client(
+            carla,
+            args.host,
+            int(args.port),
+            timeout_s=self.client_timeout,
+            context="leaderboard_evaluator_init",
+            process_name=EVALUATOR_PROCESS_NAME,
+        )
+        log_carla_event(
+            "EVALUATOR_INIT",
+            process_name=EVALUATOR_PROCESS_NAME,
+            host=args.host,
+            port=int(args.port),
+            tm_port=int(args.trafficManagerPort),
+            timeout_s=float(self.client_timeout),
+            ego_vehicles=int(args.ego_num),
+        )
 
         self.traffic_manager = self.client.get_trafficmanager(int(args.trafficManagerPort))
-
-        dist = pkg_resources.get_distribution("carla")
-        # if dist.version != 'leaderboard':
-        #     if LooseVersion(dist.version) < LooseVersion('0.9.10'):
-        #         raise ImportError("CARLA version 0.9.10.1 or newer required. CARLA version found: {}".format(dist))
 
         # Load agent
         module_name = os.path.basename(args.agent).split('.')[0]
@@ -166,6 +201,11 @@ class LeaderboardEvaluator(object):
         """
         Remove and destroy all actors
         """
+        log_carla_event(
+            "EVALUATOR_CLEANUP_BEGIN",
+            process_name=EVALUATOR_PROCESS_NAME,
+            ego_vehicle_count=len(self.ego_vehicles),
+        )
 
         # Simulation still running and in synchronous mode?
         if self.manager and self.manager.get_running_status() \
@@ -186,6 +226,12 @@ class LeaderboardEvaluator(object):
 
         for i, _ in enumerate(self.ego_vehicles):
             if self.ego_vehicles[i]:
+                log_carla_event(
+                    "ACTOR_DESTROY",
+                    process_name=EVALUATOR_PROCESS_NAME,
+                    actor_id=getattr(self.ego_vehicles[i], 'id', None),
+                    actor_type="ego_vehicle",
+                )
                 self.ego_vehicles[i].destroy()
                 self.ego_vehicles[i] = None
         self.ego_vehicles = []
@@ -197,9 +243,38 @@ class LeaderboardEvaluator(object):
             self.agent_instance.destroy()
             self.agent_instance = None
 
+        # Explicitly stop and destroy all sensors so CARLA's streaming server releases
+        # their GPU buffers immediately. Without this, sensor stream objects accumulate
+        # in the CARLA server across scenario runs (visible as growing nvidia_fd count)
+        # and contribute to FMallocBinned2 pool exhaustion.
+        if hasattr(self, 'world') and self.world:
+            try:
+                for sensor in self.world.get_actors().filter('*sensor*'):
+                    try:
+                        sensor.stop()
+                    except Exception:
+                        pass
+                    try:
+                        log_carla_event(
+                            "SENSOR_DESTROY",
+                            process_name=EVALUATOR_PROCESS_NAME,
+                            sensor_id=getattr(sensor, 'id', None),
+                            sensor_type=getattr(sensor, 'type_id', None),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        sensor.destroy()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         if hasattr(self, 'statistics_manager') and self.statistics_manager:
             for j in range(self.ego_vehicles_num):
                 self.statistics_manager[j].scenario = None
+
+        log_carla_event("EVALUATOR_CLEANUP_END", process_name=EVALUATOR_PROCESS_NAME)
 
     def _prepare_ego_vehicles(self, ego_vehicles, wait_for_ego_vehicles=False):
         """
@@ -241,7 +316,23 @@ class LeaderboardEvaluator(object):
         """
         Load a new CARLA world and provide data to CarlaDataProvider
         """
+        log_carla_event(
+            "EVALUATOR_WORLD_LOAD_BEGIN",
+            process_name=EVALUATOR_PROCESS_NAME,
+            requested_town=town,
+            tm_port=int(args.trafficManagerPort),
+            provider_seed=int(args.carlaProviderSeed),
+            tm_seed=int(args.trafficManagerSeed),
+        )
 
+        # Force a reload_world() first to trigger UE4's GC cycle and flush render
+        # streaming caches (textures, mesh LODs, sensor GPU buffers) that accumulate
+        # across scenario runs. load_world() alone does NOT clear these caches, which
+        # causes FMallocBinned2 "large memory pool offset" SIGABRT after ~100 runs.
+        try:
+            self.client.reload_world(reset_settings=False)
+        except Exception:
+            pass  # harmless on first connect when world isn't yet initialised
         self.world = self.client.load_world(town)
         settings = self.world.get_settings()
         settings.fixed_delta_seconds = 1.0 / self.frame_rate
@@ -270,9 +361,18 @@ class LeaderboardEvaluator(object):
         else:
             self.world.wait_for_tick()
 
-        if CarlaDataProvider.get_map().name != town:
+        loaded_map = CarlaDataProvider.get_map().name
+        if loaded_map != town:
             raise Exception("The CARLA server uses the wrong map!"
                             "This scenario requires to use map {}".format(town))
+        log_carla_event(
+            "EVALUATOR_WORLD_LOAD_READY",
+            process_name=EVALUATOR_PROCESS_NAME,
+            requested_town=town,
+            loaded_map=loaded_map,
+            sync_mode=int(bool(settings.synchronous_mode)),
+            fixed_delta_s=settings.fixed_delta_seconds,
+        )
 
     def _register_statistics(self, config, ego_car_num, checkpoint, entry_status, crash_message="",):
         """
@@ -316,6 +416,14 @@ class LeaderboardEvaluator(object):
         """
         crash_message = ""
         entry_status = "Started"
+
+        log_carla_event(
+            "ROUTE_PREPARE_BEGIN",
+            process_name=EVALUATOR_PROCESS_NAME,
+            route=config.name,
+            repetition=config.repetition_index,
+            town=getattr(config, "town", None),
+        )
 
         print("\n\033[1m========= Preparing {} (repetition {}) =========".format(config.name, config.repetition_index))
         print("> Setting up the agent\033[0m")
@@ -377,9 +485,17 @@ class LeaderboardEvaluator(object):
             print("\n\033[91mThe sensor's configuration used is invalid:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
             crash_message = "Agent's sensors were invalid"
             entry_status = "Rejected"
+            log_carla_event(
+                "ROUTE_AGENT_SENSOR_INVALID",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                error=str(e),
+            )
             # self._register_statistics(config, args.ego_num, args.checkpoint, entry_status, crash_message)
             self._cleanup()
             sys.exit(-1)
@@ -389,8 +505,16 @@ class LeaderboardEvaluator(object):
             print("\n\033[91mCould not set up the required agent:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
             crash_message = "Agent couldn't be set up"
+            log_carla_event(
+                "ROUTE_AGENT_SETUP_FAIL",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                error=str(e),
+            )
             # self._register_statistics(config,  args.ego_num, args.checkpoint, entry_status, crash_message)
             self._cleanup()
             return
@@ -427,16 +551,31 @@ class LeaderboardEvaluator(object):
             if args.record:
                 self.client.start_recorder("{}/{}_rep{}.log".format(args.record, config.name, config.repetition_index))
             self.manager.load_scenario(scenario, self.agent_instance, config.repetition_index, self.ego_vehicles_num, save_root=config.save_path_root, sensor_tf_list=scenario.get_sensor_tf(), is_crazy=(args.crazy_level != 0))
+            log_carla_event(
+                "ROUTE_SCENARIO_LOADED",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                town=config.town,
+            )
 
         except Exception as e:
             # The scenario is wrong -> set the ejecution to crashed and stop
             print("\n\033[91mThe scenario could not be loaded:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
 
             crash_message = "Simulation crashed"
             entry_status = "Crashed"
+            log_carla_event(
+                "ROUTE_SCENARIO_LOAD_FAIL",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                error=str(e),
+            )
 
             self._register_statistics(config,  args.ego_num, args.checkpoint, entry_status, crash_message)
 
@@ -450,23 +589,54 @@ class LeaderboardEvaluator(object):
 
         # Run the scenario
         try:
+            log_carla_event(
+                "ROUTE_RUN_BEGIN",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+            )
             self.manager.run_scenario()
+            log_carla_event(
+                "ROUTE_RUN_END",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                status="ok",
+            )
         except AgentError as e:
             # The agent has failed -> stop the route
             print("\n\033[91mStopping the route, the agent has crashed:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
 
             crash_message = "Agent crashed"
+            log_carla_event(
+                "ROUTE_RUN_FAIL",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                reason="agent_error",
+                error=str(e),
+            )
         except Exception as e:
             print("\n\033[91mError during the simulation:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
 
             crash_message = "Run scenario crashed"
             entry_status = "Crashed"
+            log_carla_event(
+                "ROUTE_RUN_FAIL",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                reason="exception",
+                error=str(e),
+            )
 
         # Stop the scenario
         try:
@@ -488,15 +658,42 @@ class LeaderboardEvaluator(object):
             for zombie in self.world.get_actors().filter("*sensor*"):
                 zombie.stop()
                 zombie.destroy()
-                zombie = None            
+                zombie = None
+            log_carla_event(
+                "ROUTE_STOP",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                status="ok",
+                entry_status=entry_status,
+                crash_message=crash_message,
+            )
 
         except Exception as e:
             print("\n\033[91mFailed to stop the scenario, the statistics might be empty:")
             print("> {}\033[0m\n".format(e))
             traceback.print_exc()
-            traceback.print_exc(file=open(log_file_dir,'a'))
+            with open(log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
 
             crash_message = "Simulation crashed"
+            log_carla_event(
+                "ROUTE_STOP",
+                process_name=EVALUATOR_PROCESS_NAME,
+                route=config.name,
+                repetition=config.repetition_index,
+                status="fail",
+                error=str(e),
+            )
+
+        log_carla_event(
+            "ROUTE_COMPLETE",
+            process_name=EVALUATOR_PROCESS_NAME,
+            route=config.name,
+            repetition=config.repetition_index,
+            entry_status=entry_status,
+            crash_message=crash_message,
+        )
 
         # if crash_message == "Simulation crashed":
         #     sys.exit(-1)
@@ -549,7 +746,8 @@ class LeaderboardEvaluator(object):
         except Exception as e:
             print('route error:',e)
             traceback.print_exc()
-            traceback.print_exc(file=open(self.log_file_dir,'a'))      
+            with open(self.log_file_dir, 'a') as _lf:
+                traceback.print_exc(file=_lf)
 
 def main():
     description = "CARLA AD Leaderboard Evaluation: evaluate your Agent in CARLA scenarios\n"
@@ -611,6 +809,15 @@ def main():
     parser.add_argument('--trigger-distance', type=int, default=10, help='scenario3 trigger distance.')
 
     arguments = parser.parse_args()
+    install_process_lifecycle_logging(
+        EVALUATOR_PROCESS_NAME,
+        env_keys=(
+            "CARLA_ROOTCAUSE_LOGDIR",
+            "CARLA_CONNECTION_EVENTS_LOG",
+            "SAVE_PATH",
+            "CHECKPOINT_ENDPOINT",
+        ),
+    )
 
     if not os.path.exists(os.environ["SAVE_PATH"]):
         os.makedirs(os.environ["SAVE_PATH"])
@@ -627,6 +834,7 @@ def main():
         leaderboard_evaluator.run(arguments)
 
     except Exception as e:
+        log_process_exception(e, process_name=EVALUATOR_PROCESS_NAME, where="main")
         traceback.print_exc()
     finally:
         del leaderboard_evaluator

@@ -10,9 +10,9 @@ This module provides the base class for all autonomous agents
 from __future__ import print_function
 
 from enum import Enum
+import os
 
 import carla
-print(carla.__file__)
 from srunner.scenariomanager.timer import GameTime
 
 from leaderboard.utils.route_manipulation import downsample_route
@@ -45,6 +45,13 @@ class AutonomousAgent(object):
 
         # this data structure will contain all sensor data
         self.sensor_interface = SensorInterface()
+        self._checkpoint_last_input_data = None
+        self._checkpoint_last_timestamp = None
+        self._checkpoint_last_output = None
+        self._checkpoint_capture_raw_observations = (
+            str(os.environ.get("CARLA_RECOVERY_MODE", "off")).strip().lower()
+            != "publication_safe"
+        )
 
         # agent's initialization
         self.setup(path_to_conf_file, ego_vehicles_num)
@@ -112,16 +119,45 @@ class AutonomousAgent(object):
 
         # 
         timestamp = GameTime.get_time()
+        if self._checkpoint_capture_raw_observations:
+            self._checkpoint_last_input_data = input_data
+        else:
+            # Publication-safe recovery never stores generic raw sensor payloads.
+            self._checkpoint_last_input_data = None
+        self._checkpoint_last_timestamp = timestamp
         if not self.wallclock_t0:
             self.wallclock_t0 = GameTime.get_wallclocktime()
 
         # get control signal, function run_step should be rewritten in your customized agent
         control = self.run_step(input_data, timestamp)
+        self._checkpoint_last_output = control
         for i in range(len(control)):
             if control[i]:  
                 control[i].manual_gear_shift = False
 
         return control
+
+    def get_checkpoint_state(self):
+        """
+        Optional planner snapshot hook used by evaluator-side recovery.
+        Child agents can override to return a JSON-serializable state payload.
+        """
+        return None
+
+    def set_checkpoint_state(self, state):
+        """
+        Optional planner restore hook used by evaluator-side recovery.
+        Child agents can override to rehydrate temporal planner state.
+        """
+        del state
+
+    def rebind_after_recovery(self, recovery_context):
+        """
+        Optional hook for rebinding stale CARLA references after a simulator restart.
+        Return True if rebinding succeeded and the planner can continue without reset.
+        """
+        del recovery_context
+        return False
 
     def set_global_plan(self, global_plan_gps, global_plan_world_coord):
         """
@@ -158,5 +194,3 @@ class AutonomousAgent(object):
             self._global_plan.append(global_plan)
             self._global_plan_world_coord_all.append(global_plan_world_coord_all)
             self._global_plan_all.append(global_plan_all)
-
-

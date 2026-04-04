@@ -1,9 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-04-04-15-39-17_11_1" model="vehicle.citroen.c3" role="static" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="0.437828" roll="-0.008461" time="0.000000" x="-546.193457" y="-39.519166" yaw="8.014532" z="9.623433" />
-    <waypoint pitch="0.437580" roll="-0.007926" time="12.500000" x="-546.193457" y="-39.519166" yaw="8.014532" z="9.623426" />
-    <waypoint pitch="0.437580" roll="-0.007926" time="12.600000" x="-546.218610" y="-39.522717" yaw="8.014532" z="9.623426" />
-    <waypoint pitch="0.437332" roll="-0.007391" time="12.700000" x="-546.220374" y="-39.522966" yaw="8.014532" z="9.623418" />
-  </route>
-</routes>

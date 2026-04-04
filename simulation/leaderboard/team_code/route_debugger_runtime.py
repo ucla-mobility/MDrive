@@ -18,6 +18,7 @@ class RouteRuntimeDebugger:
         self.tick_records = []
         self.actual_positions = []
         self.distances = []
+        self.centerline_distances = []
         self.command_histogram = {}
         self.divergence_events = []
         self.divergence_threshold = 4.0
@@ -88,6 +89,7 @@ class RouteRuntimeDebugger:
         near_node,
         near_command,
         near_world=None,
+        extra_fields=None,
     ):
         gps_list = [float(g) for g in gps]
         pos_list = self._to_list(local_pos)
@@ -107,18 +109,27 @@ class RouteRuntimeDebugger:
             "command": cmd_name,
             "distance_to_waypoint": dist,
         }
+        if extra_fields:
+            record.update(extra_fields)
+        route_centerline_distance = record.get("nearest_route_centerline_distance")
+        if route_centerline_distance is not None:
+            route_centerline_distance = float(route_centerline_distance)
         self.tick_records.append(record)
         self.actual_positions.append(pos_list)
         self.distances.append(dist)
+        if route_centerline_distance is not None:
+            self.centerline_distances.append(route_centerline_distance)
         self.command_histogram[cmd_name] = self.command_histogram.get(cmd_name, 0) + 1
 
-        if dist > self.divergence_threshold:
+        divergence_distance = route_centerline_distance if route_centerline_distance is not None else dist
+        if divergence_distance > self.divergence_threshold:
             if not self._last_over_threshold:
                 self.divergence_events.append(
                     {
                         "tick": int(tick_index),
                         "timestamp": float(timestamp),
-                        "distance": dist,
+                        "distance": float(divergence_distance),
+                        "distance_metric": "route_centerline" if route_centerline_distance is not None else "next_waypoint",
                         "command": cmd_name,
                         "position": pos_list,
                         "target_waypoint": waypoint,
@@ -137,6 +148,8 @@ class RouteRuntimeDebugger:
             "total_ticks": len(self.tick_records),
             "max_distance_to_next_waypoint": max(self.distances, default=0.0),
             "avg_distance_to_next_waypoint": float(np.mean(self.distances)) if self.distances else 0.0,
+            "max_distance_to_route_centerline": max(self.centerline_distances, default=0.0),
+            "avg_distance_to_route_centerline": float(np.mean(self.centerline_distances)) if self.centerline_distances else 0.0,
             "divergence_threshold": self.divergence_threshold,
             "divergence_events": self.divergence_events,
             "command_histogram": self.command_histogram,
@@ -184,6 +197,8 @@ class RouteRuntimeDebugger:
         ticks = [rec["tick"] for rec in self.tick_records]
         plt.figure(figsize=(10, 4))
         plt.plot(ticks, self.distances, label="Distance to next waypoint")
+        if self.centerline_distances:
+            plt.plot(ticks[: len(self.centerline_distances)], self.centerline_distances, label="Distance to route centerline")
         plt.axhline(self.divergence_threshold, color="red", linestyle="--", label="Divergence threshold")
         plt.xlabel("Tick")
         plt.ylabel("Distance (m)")

@@ -54,6 +54,7 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 	def setup(self, path_to_conf_file, ego_vehicles_num=1):
 		self.agent_name='TCP'
 		self.ego_vehicles_num= ego_vehicles_num
+		self._timing_debug_stdout = os.environ.get("TCP_TIMING_DEBUG", "").lower() in ("1", "true", "yes")
 
 		self.track = autonomous_agent.Track.SENSORS
 		self.alpha = 0.3
@@ -71,7 +72,8 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.config_TCP = GlobalConfig()
 		self.net = TCP(self.config_TCP)
 
-		print('path_to_conf_file:', path_to_conf_file)
+		if self._timing_debug_stdout:
+			print('path_to_conf_file:', path_to_conf_file)
 		self.config = yaml.load(open(path_to_conf_file),Loader=yaml.Loader)
 		ckpt = torch.load(self.config['ckpt_path'])
 		# ckpt = torch.load(path_to_conf_file)
@@ -88,9 +90,10 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.net.cuda()
 		self.net.eval()
 
-		print(
-            f"\033[0;31;40m[PERCEPTION]\033[0m Model param count:{sum([m.numel() for m in self.net.parameters()])}\n"
-        )
+		if self._timing_debug_stdout:
+			print(
+				f"\033[0;31;40m[PERCEPTION]\033[0m Model param count:{sum([m.numel() for m in self.net.parameters()])}\n"
+			)
 
 		self.takeover = False
 		self.stop_time = 0
@@ -101,6 +104,14 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.calibration_path = None
 		self._im_transform = T.Compose([T.ToTensor(), T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])])
 		self.pid_metadata = {}
+		# Per-step timing accumulators (only populated on inference steps that are not skipped)
+		self._step_timings = {
+			'tick_preprocess': [],   # tick() sensor read + route planner + optional cv2.resize
+			'tensor_build':    [],   # CPU->GPU tensor construction
+			'net_forward':     [],   # TCP model forward pass (ResNet34 + GRU loops)
+			'process_action':  [],   # process_action() + control_pid() combined
+		}
+		self._timing_log_path = None
 		self._saved_first_tick = [False] * self.ego_vehicles_num
 		self.save_interval = _env_int("TCP_SAVE_INTERVAL", 4, minimum=1)
 		self.model_rgb_width = _env_int("TCP_MODEL_RGB_WIDTH", 900, minimum=1)
@@ -115,10 +126,9 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 			string = pathlib.Path(os.environ['ROUTES']).stem + '_'
 			string += '_'.join(map(lambda x: '%02d' % x, (now.month, now.day, now.hour, now.minute, now.second)))
 
-			print (string)
-
 			self.save_path = pathlib.Path(os.environ['SAVE_PATH']) / string
 			self.save_path.mkdir(parents=True, exist_ok=False)
+			self._timing_log_path = self.save_path / 'timing_tcp.log'
 			self.logreplayimages_path = self.save_path / "logreplayimages"
 			if self.capture_logreplay_images or self.capture_sensor_frames:
 				self.logreplayimages_path.mkdir(parents=True, exist_ok=True)
@@ -275,10 +285,10 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 
 	@torch.no_grad()
 	def run_step_single_vehicle(self, ego_id, input_data, timestamp):
-		import time
 		if not self.initialized:
 			self._init()
 		# print('input_data:', input_data.keys())
+		_t_tick_start = time.time()
 		tick_data = self.tick(ego_id, input_data)
 		if SAVE_PATH is not None and not self.capture_sensor_frames:
 			if not self._saved_first_tick[ego_id]:
@@ -296,6 +306,7 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 				(self.model_rgb_width, self.model_rgb_height),
 				interpolation=cv2.INTER_AREA,
 			)
+		_t_tick_end = time.time()
 		if self.step < self.config_TCP.seq_len:
 			rgb = self._im_transform(rgb_input).unsqueeze(0)
 
@@ -319,7 +330,7 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 				# return the previous control signal.
 				return self.prev_control[ego_id]
 
-		start_time = time.time()
+		_t_tensor_start = time.time()
 		gt_velocity = torch.FloatTensor([tick_data['speed']]).to('cuda', dtype=torch.float32)
 		command = tick_data['next_command']
 		if command < 0:
@@ -337,12 +348,17 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 										torch.FloatTensor([tick_data['target_point'][1]])]
 		target_point = torch.stack(tick_data['target_point'], dim=1).to('cuda', dtype=torch.float32)
 		state = torch.cat([speed, target_point, cmd_one_hot], 1)
+		_t_tensor_end = time.time()
 
+		_t_net_start = time.time()
 		pred= self.net(rgb, state, target_point)
+		_t_net_end = time.time()
 
+		_t_action_start = time.time()
 		steer_ctrl, throttle_ctrl, brake_ctrl, metadata = self.net.process_action(pred, tick_data['next_command'], gt_velocity, target_point)
 
 		steer_traj, throttle_traj, brake_traj, metadata_traj = self.net.control_pid(pred['pred_wp'], gt_velocity, target_point)
+		_t_action_end = time.time()
 		if brake_traj < 0.05: brake_traj = 0.0
 		if throttle_traj > brake_traj: brake_traj = 0.0
 
@@ -399,14 +415,32 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.pid_metadata['status'] = self.status[ego_id]
 
 		self.prev_control[ego_id] = control
-		end_time = time.time()
-		print(self.step, end_time-start_time)
-		self.next_action_step[ego_id] = self.step + (end_time - start_time) * 2
-
-		# with open('/DB/rhome/weibomao/GPFS/CoP3_v10/infer_tcp.txt', 'a') as f:
-		# 	print('Writing into the TXT file.')
-		# 	f.write('{}\n'.format(end_time-start_time))
-
+		_dt_tick   = _t_tick_end    - _t_tick_start
+		_dt_tensor = _t_tensor_end  - _t_tensor_start
+		_dt_net    = _t_net_end     - _t_net_start
+		_dt_action = _t_action_end  - _t_action_start
+		_dt_total  = _t_action_end  - _t_tensor_start
+		self._step_timings['tick_preprocess'].append(_dt_tick)
+		self._step_timings['tensor_build'].append(_dt_tensor)
+		self._step_timings['net_forward'].append(_dt_net)
+		self._step_timings['process_action'].append(_dt_action)
+		_timing_msg = (
+			f"[TCP timing] step={self.step} ego={ego_id} "
+			f"tick={_dt_tick*1000:.1f}ms "
+			f"tensor={_dt_tensor*1000:.1f}ms "
+			f"net={_dt_net*1000:.1f}ms "
+			f"action={_dt_action*1000:.1f}ms "
+			f"total={_dt_total*1000:.1f}ms"
+		)
+		if self._timing_debug_stdout:
+			print(_timing_msg)
+		if self._timing_log_path is not None:
+			try:
+				with open(self._timing_log_path, 'a') as _f:
+					_f.write(_timing_msg + '\n')
+			except Exception:
+				pass
+		self.next_action_step[ego_id] = self.step + _dt_total * 2
 		return control
 
 	def save(self, ego_id, tick_data):
@@ -433,6 +467,26 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		outfile.close()
 
 	def destroy(self):
+		# Print and save per-step timing summary before cleanup
+		_summary_lines = ["[TCP timing summary]"]
+		for _phase, _durations in self._step_timings.items():
+			if _durations:
+				_n = len(_durations)
+				_mean = sum(_durations) / _n * 1000
+				_max  = max(_durations) * 1000
+				_min  = min(_durations) * 1000
+				_summary_lines.append(
+					f"  {_phase}: n={_n} mean={_mean:.1f}ms max={_max:.1f}ms min={_min:.1f}ms"
+				)
+		_summary = '\n'.join(_summary_lines)
+		if self._timing_debug_stdout:
+			print(_summary)
+		if self._timing_log_path is not None:
+			try:
+				with open(self._timing_log_path, 'a') as _f:
+					_f.write(_summary + '\n')
+			except Exception:
+				pass
 		del self.net
 		torch.cuda.empty_cache()
 

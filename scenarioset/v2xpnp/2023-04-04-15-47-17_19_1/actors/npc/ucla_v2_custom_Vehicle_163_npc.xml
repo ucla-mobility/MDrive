@@ -1,9 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-04-04-15-47-17_19_1" model="vehicle.dodge.charger_2020" role="npc" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="-0.413591" roll="0.006599" time="0.000000" x="-485.713204" y="-34.411799" yaw="178.885685" z="10.338647" />
-    <waypoint pitch="-0.498932" roll="0.008974" time="0.100000" x="-486.465164" y="-34.398962" yaw="179.006202" z="10.288893" />
-    <waypoint pitch="-0.498932" roll="0.008974" time="0.200000" x="-487.322015" y="-34.385768" yaw="179.140228" z="10.288893" />
-    <waypoint pitch="-0.531699" roll="0.012329" time="2.500000" x="-503.480687" y="-34.592011" yaw="-177.392005" z="10.270311" />
-  </route>
-</routes>

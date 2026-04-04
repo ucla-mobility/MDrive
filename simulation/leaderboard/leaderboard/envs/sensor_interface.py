@@ -4,10 +4,9 @@ import numpy as np
 import os
 import time
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Condition, Lock, Thread
 
 from queue import Queue
-from queue import Empty
 from queue import Full
 
 import carla
@@ -175,6 +174,8 @@ class CallBack(object):
             self._parse_gnss_cb(data, self._tag)
         elif isinstance(data, carla.libcarla.IMUMeasurement):
             self._parse_imu_cb(data, self._tag)
+        elif isinstance(data, carla.libcarla.CollisionEvent):
+            self._parse_collision_cb(data, self._tag)
         elif isinstance(data, GenericMeasurement):
             self._parse_pseudosensor(data, self._tag)
         else:
@@ -225,6 +226,38 @@ class CallBack(object):
                          ], dtype=np.float64)
         self._data_provider.update_sensor(tag, array, imu_data.frame)
 
+    def _parse_collision_cb(self, collision_event, tag):
+        impulse = collision_event.normal_impulse
+        other_actor = getattr(collision_event, "other_actor", None)
+        role_name = ""
+        type_id = ""
+        actor_id = None
+        if other_actor is not None:
+            actor_id = int(getattr(other_actor, "id", -1))
+            type_id = str(getattr(other_actor, "type_id", ""))
+            if hasattr(other_actor, "attributes"):
+                role_name = other_actor.attributes.get("role_name", "")
+        payload = {
+            "has_collision": True,
+            "event_frame": int(getattr(collision_event, "frame", GameTime.get_frame())),
+            "other_actor_id": actor_id,
+            "other_actor_type": type_id,
+            "other_actor_role_name": role_name,
+            "normal_impulse": [
+                float(getattr(impulse, "x", 0.0)),
+                float(getattr(impulse, "y", 0.0)),
+                float(getattr(impulse, "z", 0.0)),
+            ],
+            "normal_impulse_magnitude": float(
+                np.linalg.norm([
+                    float(getattr(impulse, "x", 0.0)),
+                    float(getattr(impulse, "y", 0.0)),
+                    float(getattr(impulse, "z", 0.0)),
+                ])
+            ),
+        }
+        self._data_provider.update_sensor(tag, payload, payload["event_frame"])
+
     def _parse_pseudosensor(self, package, tag):
         self._data_provider.update_sensor(tag, package.data, package.frame)
 
@@ -232,10 +265,13 @@ class CallBack(object):
 class SensorInterface(object):
     def __init__(self):
         self._sensors_objects = {}
-        self._data_buffers = {}
-        self._new_data_buffers = Queue()
+        self._sensor_types = {}
+        self._mailbox_lock = Lock()
+        self._mailbox_cv = Condition(self._mailbox_lock)
+        self._latest_data = {}
         self._queue_timeout = 100 # default: 10
         self._last_returned_timestamps = {}
+        self._event_sensor_types = {"sensor.other.collision"}
 
         # Only sensor that doesn't get the data on tick, needs special treatment
         self._opendrive_tag = None
@@ -353,76 +389,136 @@ class SensorInterface(object):
 
 
     def register_sensor(self, tag, sensor_type, sensor):
-        if tag in self._sensors_objects:
-            raise SensorConfigurationInvalid("Duplicated sensor tag [{}]".format(tag))
+        with self._mailbox_cv:
+            if tag in self._sensors_objects:
+                raise SensorConfigurationInvalid("Duplicated sensor tag [{}]".format(tag))
 
-        self._sensors_objects[tag] = sensor
-        self._last_returned_timestamps[tag] = None
+            self._sensors_objects[tag] = sensor
+            self._sensor_types[tag] = sensor_type
+            self._last_returned_timestamps[tag] = None
+            self._latest_data.pop(tag, None)
+            if sensor_type in self._event_sensor_types:
+                self._latest_data[tag] = (
+                    -1,
+                    {
+                        "has_collision": False,
+                        "event_frame": None,
+                        "other_actor_id": None,
+                        "other_actor_type": "",
+                        "other_actor_role_name": "",
+                        "normal_impulse": [0.0, 0.0, 0.0],
+                        "normal_impulse_magnitude": 0.0,
+                    },
+                )
 
-        if sensor_type == 'sensor.opendrive_map': 
-            self._opendrive_tag = tag
+            if sensor_type == 'sensor.opendrive_map':
+                self._opendrive_tag = tag
+
+    def unregister_sensor(self, tag):
+        with self._mailbox_cv:
+            self._sensors_objects.pop(tag, None)
+            self._sensor_types.pop(tag, None)
+            self._last_returned_timestamps.pop(tag, None)
+            self._latest_data.pop(tag, None)
+            if self._opendrive_tag == tag:
+                self._opendrive_tag = None
+            self._mailbox_cv.notify_all()
 
     def update_sensor(self, tag, data, timestamp):
-        # print("Updating {} - {}".format(tag, timestamp))
-        if tag not in self._sensors_objects:
-            # sensor may have been removed (e.g., ego destroyed); ignore late callbacks
-            return
+        # Keep only the latest packet per sensor tag (bounded mailbox).
+        with self._mailbox_cv:
+            if tag not in self._sensors_objects:
+                # sensor may have been removed (e.g., ego destroyed); ignore late callbacks
+                return
 
-        self._new_data_buffers.put((tag, timestamp, data))
+            last_returned = self._last_returned_timestamps.get(tag)
+            if last_returned is not None and timestamp < last_returned:
+                return
 
-    def _store_latest_sample(self, data_dict, tag, timestamp, payload):
+            current = self._latest_data.get(tag)
+            if current is not None and timestamp < current[0]:
+                return
+
+            self._latest_data[tag] = (timestamp, data)
+            self._mailbox_cv.notify_all()
+
+    def reset_after_recovery(self):
         """
-        Keep the newest available packet for each tag.
-        Reject packets older than the last packet we already returned for this tag
-        to avoid one-frame rollbacks from out-of-order callback delivery.
+        Reset mailbox progression so fresh post-recovery sensor packets are accepted
+        even though CARLA frame counters may restart from zero.
         """
-        if tag not in self._sensors_objects:
-            return False
-
-        last_returned = self._last_returned_timestamps.get(tag)
-        if last_returned is not None and timestamp < last_returned:
-            return False
-
-        current = data_dict.get(tag)
-        if current is not None and timestamp < current[0]:
-            return False
-
-        data_dict[tag] = (timestamp, payload)
-        return True
+        with self._mailbox_cv:
+            for tag in list(self._last_returned_timestamps.keys()):
+                self._last_returned_timestamps[tag] = None
+            # Keep event-sensor defaults but clear stale frame-bound payloads.
+            preserved = {}
+            for tag, sensor_type in self._sensor_types.items():
+                if sensor_type in self._event_sensor_types:
+                    preserved[tag] = (
+                        -1,
+                        {
+                            "has_collision": False,
+                            "event_frame": None,
+                            "other_actor_id": None,
+                            "other_actor_type": "",
+                            "other_actor_role_name": "",
+                            "normal_impulse": [0.0, 0.0, 0.0],
+                            "normal_impulse_magnitude": 0.0,
+                        },
+                    )
+            self._latest_data = preserved
+            self._mailbox_cv.notify_all()
 
     def get_data(self):
-        try: 
-            data_dict = {}
-            while len(data_dict.keys()) < len(self._sensors_objects.keys()):
-
-                # Don't wait for the opendrive sensor
-                if self._opendrive_tag and self._opendrive_tag not in data_dict.keys() \
-                        and len(self._sensors_objects.keys()) == len(data_dict.keys()) + 1:
-                    # print("Ignoring opendrive sensor")
-                    break
-
-                sensor_data = self._new_data_buffers.get(True, self._queue_timeout)
-
-                # Drop stale data that belongs to sensors already removed (e.g., after an ego vehicle is destroyed)
-                tag = sensor_data[0]
-                self._store_latest_sample(data_dict, tag, sensor_data[1], sensor_data[2])
-
-            # Drain any already-queued packets and keep the newest sample per tag.
-            # Without this, we can return stale camera frames when newer packets are
-            # already in the queue for tags we have seen earlier in this call.
+        deadline = time.time() + self._queue_timeout
+        with self._mailbox_cv:
             while True:
-                try:
-                    sensor_data = self._new_data_buffers.get_nowait()
-                except Empty:
-                    break
+                sensor_tags = list(self._sensors_objects.keys())
+                required_tags = [tag for tag in sensor_tags if tag != self._opendrive_tag]
 
-                tag = sensor_data[0]
-                self._store_latest_sample(data_dict, tag, sensor_data[1], sensor_data[2])
+                data_dict = {}
+                missing_tags = []
+                for tag in required_tags:
+                    sample = self._latest_data.get(tag)
+                    sensor_type = self._sensor_types.get(tag)
+                    is_event_sensor = sensor_type in self._event_sensor_types
+                    if sample is None:
+                        if is_event_sensor:
+                            data_dict[tag] = (
+                                -1,
+                                {
+                                    "has_collision": False,
+                                    "event_frame": None,
+                                    "other_actor_id": None,
+                                    "other_actor_type": "",
+                                    "other_actor_role_name": "",
+                                    "normal_impulse": [0.0, 0.0, 0.0],
+                                    "normal_impulse_magnitude": 0.0,
+                                },
+                            )
+                        else:
+                            missing_tags.append(tag)
+                        continue
+                    timestamp, payload = sample
+                    last_returned = self._last_returned_timestamps.get(tag)
+                    # Require a strictly newer sample per get_data() call.
+                    if (not is_event_sensor) and last_returned is not None and timestamp <= last_returned:
+                        missing_tags.append(tag)
+                        continue
+                    data_dict[tag] = (timestamp, payload)
 
-        except Empty:
-            raise SensorReceivedNoData("A sensor took too long to send their data")
+                if not missing_tags:
+                    # opendrive_map is optional and may stay stale by design
+                    if self._opendrive_tag and self._opendrive_tag in sensor_tags:
+                        opendrive_sample = self._latest_data.get(self._opendrive_tag)
+                        if opendrive_sample is not None:
+                            data_dict[self._opendrive_tag] = opendrive_sample
 
-        for tag, (timestamp, _) in data_dict.items():
-            self._last_returned_timestamps[tag] = timestamp
+                    for tag, (timestamp, _) in data_dict.items():
+                        self._last_returned_timestamps[tag] = timestamp
+                    return data_dict
 
-        return data_dict
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise SensorReceivedNoData("A sensor took too long to send their data")
+                self._mailbox_cv.wait(timeout=remaining)

@@ -1,6 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-03-23-15-39-40_3_0" model="vehicle.ford.mustang" role="static" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="-0.550411" roll="-0.000157" time="19.200000" x="-465.919441" y="-49.121208" yaw="93.853797" z="10.941892" />
-  </route>
-</routes>

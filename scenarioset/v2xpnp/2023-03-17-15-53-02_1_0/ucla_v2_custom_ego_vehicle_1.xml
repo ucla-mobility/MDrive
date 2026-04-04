@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route id="2023-03-17-15-53-02_1_0" role="ego" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="-0.000016" roll="-0.000034" x="-112.771484" y="-30.110104" yaw="-79.095627" z="0.019999" />
-    <waypoint pitch="-0.000016" roll="-0.000034" x="-112.349953" y="-32.298187" yaw="-79.095627" z="0.019999" />
-  </route>
-</routes>

@@ -148,14 +148,42 @@ def interpolate_trajectory(world, waypoints_trajectory, hop_resolution=1.0):
         grp = GlobalRoutePlanner(dao)
         grp.setup()
     # Obtain route plan
-    route = []
+    route_trace = []
     for i in range(len(waypoints_trajectory) - 1):   # Goes until the one before the last.
 
         waypoint = waypoints_trajectory[i]
         waypoint_next = waypoints_trajectory[i + 1]
         interpolated_trace = grp.trace_route(waypoint, waypoint_next)
-        for wp_tuple in interpolated_trace:
-            route.append((wp_tuple[0].transform, wp_tuple[1]))
+        route_trace.extend(interpolated_trace)
+
+    route_before = [(wp_tuple[0].transform, wp_tuple[1]) for wp_tuple in route_trace]
+    postprocess_meta = {}
+    if hasattr(grp, "postprocess_route_trace"):
+        try:
+            route = grp.postprocess_route_trace(
+                route_trace,
+                enable_ucla_v2_smoothing=True,
+                return_transforms=True,
+            )
+            postprocess_meta = dict(getattr(grp, "_last_postprocess_meta", {}) or {})
+        except Exception:
+            route = route_before
+            postprocess_meta = {
+                "status": "postprocess_exception",
+                "applied": False,
+            }
+    else:
+        route = route_before
+        postprocess_meta = {
+            "status": "postprocess_unavailable",
+            "applied": False,
+        }
+
+    interpolate_trajectory.last_debug = {
+        "before_route": route_before,
+        "after_route": route,
+        "postprocess_meta": postprocess_meta,
+    }
 
     lat_ref, lon_ref = _get_latlon_ref(world)
 

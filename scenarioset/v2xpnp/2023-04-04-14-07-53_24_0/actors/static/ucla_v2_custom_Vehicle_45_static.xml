@@ -1,6 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-04-04-14-07-53_24_0" model="vehicle.toyota.prius" role="static" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="0.000000" roll="0.000000" time="8.300000" x="-470.641526" y="107.293197" yaw="-88.018748" z="0.020000" />
-  </route>
-</routes>

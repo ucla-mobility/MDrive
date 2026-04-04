@@ -23,12 +23,6 @@ import seaborn as sns
 from tabulate import tabulate
 
 
-CATEGORY_RULES = [
-    ("IC", lambda r: any(key in r for key in ("ins_ss", "ins_sl", "ins_oppo", "ins_chaos"))),
-    ("LM", lambda r: any(key in r for key in ("ins_sr", "ins_c", "ins_rl", "hw_merge"))),
-    ("LC", lambda r: any(key in r for key in ("crosschange", "hw_c"))),
-]
-CATEGORY_ORDER = ["Total", "IC", "LM", "LC"]
 ROUTE_PREFIXES = {
     "Interdrive_no_npc_": "No NPC",
     "Interdrive_npc_": "NPC",
@@ -544,93 +538,8 @@ Max rounds: {overall_stats.get('max_rounds', 0.0):.0f}
     return "\n".join(lines).strip()
 
 
-def classify_route(route_name: str) -> str:
-    for category, predicate in CATEGORY_RULES:
-        if predicate(route_name):
-            return category
-    return "Other"
-
-
-def init_metrics():
-    return {
-        "score_route": [],
-        "score_penalty": [],
-        "score_composed": [],
-        "success_rate": [],
-        "game_time": [],
-        "count": 0,
-    }
-
-
-def update_metrics(bucket, score_route, score_penalty, score_composed, success_flag, game_time):
-    bucket["score_route"].append(score_route)
-    bucket["score_penalty"].append(score_penalty)
-    bucket["score_composed"].append(score_composed)
-    bucket["success_rate"].append(success_flag)
-    bucket["game_time"].append(game_time)
-    bucket["count"] += 1
-
-
 def average(values):
     return sum(values) / len(values) if values else 0.0
-
-
-def format_row(metrics):
-    return [
-        metrics["count"],
-        round(average(metrics["score_composed"]), 2),
-        round(average(metrics["score_route"]), 2),
-        round(average(metrics["score_penalty"]), 3),
-        round(average(metrics["success_rate"]), 3),
-        round(average(metrics["game_time"]), 2),
-    ]
-
-
-def build_category_metrics(entries):
-    metrics = {cat: init_metrics() for cat in CATEGORY_ORDER}
-    metrics["Other"] = init_metrics()
-    for entry in entries:
-        update_metrics(
-            metrics["Total"],
-            entry["score_route"],
-            entry["score_penalty"],
-            entry["score_composed"],
-            entry["success_flag"],
-            entry["duration_game"],
-        )
-        target_key = entry["category"] if entry["category"] in metrics else "Other"
-        update_metrics(
-            metrics[target_key],
-            entry["score_route"],
-            entry["score_penalty"],
-            entry["score_composed"],
-            entry["success_flag"],
-            entry["duration_game"],
-        )
-    return metrics
-
-
-def summarize_categories(entries):
-    if not entries:
-        return []
-    metrics = build_category_metrics(entries)
-    summary_rows = []
-    for cat in CATEGORY_ORDER:
-        metric = metrics.get(cat)
-        if not metric:
-            continue
-        summary_rows.append(
-            {
-                "Category": cat,
-                "Routes": metric["count"],
-                "DS": average(metric["score_composed"]),
-                "RC": average(metric["score_route"]),
-                "IS": average(metric["score_penalty"]),
-                "SR": average(metric["success_rate"]),
-                "Avg Game Time (s)": average(metric["game_time"]),
-            }
-        )
-    return summary_rows
 
 
 def extract_route_index(route_name: str) -> int:
@@ -671,6 +580,9 @@ def aggregate_route_records(records):
     duration_game_vals = []
     duration_system_vals = []
     infractions_totals = defaultdict(int)
+    hug_score_vals = []
+    hug_route_completion_vals = []
+    hug_epdm_vals = []
 
     for record in records:
         scores = record.get("scores", {})
@@ -682,6 +594,12 @@ def aggregate_route_records(records):
         duration_game_vals.append(meta.get("duration_game", 0.0))
         duration_system_vals.append(meta.get("duration_system", 0.0))
         success_flags.append(1 if scores.get("score_composed", 0.0) > 99.95 else 0)
+
+        hugsim = record.get("hugsim", {})
+        if hugsim.get("available", False):
+            hug_score_vals.append(float(hugsim.get("hug_score", 0.0)))
+            hug_route_completion_vals.append(float(hugsim.get("route_completion", 0.0)))
+            hug_epdm_vals.append(float(hugsim.get("mean_epdm_score", 0.0)))
 
         infractions = record.get("infractions", {})
         if infractions:
@@ -701,6 +619,9 @@ def aggregate_route_records(records):
         "success_flag": average(success_flags),
         "duration_game": average(duration_game_vals),
         "duration_system": average(duration_system_vals),
+        "hug_score": average(hug_score_vals) if hug_score_vals else None,
+        "hug_route_completion": average(hug_route_completion_vals) if hug_route_completion_vals else None,
+        "hug_epdm": average(hug_epdm_vals) if hug_epdm_vals else None,
     }
     infractions_clean = {k: v for k, v in infractions_totals.items() if v > 0}
     if infractions_clean:
@@ -906,9 +827,6 @@ def analyze_results(main_path: str):
         agent_count = len([d for d in os.listdir(route_path) if d.startswith("ego_vehicle")])
 
         route_name = route_dir.replace(prefix, "", 1)
-        category = classify_route(route_name)
-        if category == "Other":
-            unmatched_routes.append((route_name, mode))
 
         aggregated = aggregate_route_records(records)
         score_route = aggregated["score_route"]
@@ -974,7 +892,6 @@ def analyze_results(main_path: str):
                 "route_id": route_dir,
                 "route_name": route_name,
                 "mode": mode,
-                "category": category,
                 "score_composed": score_composed,
                 "score_route": score_route,
                 "score_penalty": score_penalty,
@@ -984,6 +901,9 @@ def analyze_results(main_path: str):
                 "ego_runs": aggregated["ego_runs"],
                 "infractions": infractions or {},
                 "agent_count": agent_count,
+                "hug_score": aggregated.get("hug_score"),
+                "hug_route_completion": aggregated.get("hug_route_completion"),
+                "hug_epdm": aggregated.get("hug_epdm"),
                 "negotiations_count": negotiation_count,
                 "negotiation_rounds": negotiation_rounds,
                 "negotiation_avg_rounds": negotiation_avg_rounds,
@@ -1010,11 +930,9 @@ def analyze_results(main_path: str):
     npc_entries = [entry for entry in route_entries if entry["mode"] == "NPC"]
     no_npc_entries = [entry for entry in route_entries if entry["mode"] == "No NPC"]
 
-    category_summaries = {
-        "NPC Only": summarize_categories(npc_entries),
-        "No NPC": summarize_categories(no_npc_entries),
-        "Combined": summarize_categories(route_entries),
-    }
+    hug_vals = [e["hug_score"] for e in route_entries if e.get("hug_score") is not None]
+    hug_rc_vals = [e["hug_route_completion"] for e in route_entries if e.get("hug_route_completion") is not None]
+    hug_epdm_vals_all = [e["hug_epdm"] for e in route_entries if e.get("hug_epdm") is not None]
 
     stats = {
         "total_route_entries": len(route_entries),
@@ -1022,8 +940,11 @@ def analyze_results(main_path: str):
         "npc_route_entries": len(npc_entries),
         "no_npc_route_entries": len(no_npc_entries),
         "with_infractions": len(infractions_summary),
-        "unmatched_routes": len(unmatched_routes),
         "total_ego_runs": total_ego_runs,
+        "avg_hug": average(hug_vals) if hug_vals else None,
+        "avg_hug_rc": average(hug_rc_vals) if hug_rc_vals else None,
+        "avg_hug_epdm": average(hug_epdm_vals_all) if hug_epdm_vals_all else None,
+        "hug_available": len(hug_vals) > 0,
         "avg_ds": average([entry["score_composed"] for entry in route_entries]),
         "avg_success": average([entry["success_flag"] for entry in route_entries]),
         "total_negotiations": total_negotiations,
@@ -1122,8 +1043,6 @@ def analyze_results(main_path: str):
     return {
         "route_entries": route_entries,
         "infractions": infractions_summary,
-        "unmatched_routes": unmatched_routes,
-        "category_summaries": category_summaries,
         "stats": stats,
         "infraction_totals": dict(sorted(infraction_totals.items(), key=lambda item: item[0])),
         "communication_summary": communication_summary,
@@ -1132,16 +1051,21 @@ def analyze_results(main_path: str):
     }
 
 
+def _fmt_hug(val: Optional[float]) -> str:
+    return f"{val:.4f}" if val is not None else ""
+
+
 def route_entries_for_table(entries: List[Dict]) -> List[List]:
     rows = []
     for entry in sorted(entries, key=route_entry_sort_key):
-        category_label = entry["category"] if entry["category"] in ("IC", "LM", "LC") else entry["category"]
         rows.append(
             [
                 entry["route_name"],
                 entry["mode"],
                 entry.get("agent_count", 0),
-                category_label,
+                entry.get("hug_score"),
+                entry.get("hug_route_completion"),
+                entry.get("hug_epdm"),
                 entry["score_composed"],
                 entry["score_route"],
                 entry["score_penalty"],
@@ -1209,31 +1133,50 @@ def render_console_report(label: str, result: Dict):
             width=100,
         )
     )
-    print(
-        textwrap.fill(
-            (
-                f"Average DS: {round(stats['avg_ds'], 2)} · "
-                f"Average success rate: {round(stats['avg_success'] * 100, 1)}%."
-            ),
-            width=100,
-        )
-    )
+    score_parts = []
+    if stats.get("hug_available"):
+        score_parts.append(f"Average HUG: {round(stats['avg_hug'], 4)}")
+        if stats.get("avg_hug_rc") is not None:
+            score_parts.append(f"HUG RC: {round(stats['avg_hug_rc'], 4)}")
+        if stats.get("avg_hug_epdm") is not None:
+            score_parts.append(f"EPDM: {round(stats['avg_hug_epdm'], 4)}")
+    score_parts.append(f"Average DS: {round(stats['avg_ds'], 2)}")
+    score_parts.append(f"Success rate: {round(stats['avg_success'] * 100, 1)}%")
+    print(textwrap.fill(" · ".join(score_parts), width=100))
 
-    top_routes = sorted(route_entries, key=lambda e: e["score_composed"], reverse=True)[:5]
+    hug_available = stats.get("hug_available", False)
+    sort_key = (lambda e: e["hug_score"] if e.get("hug_score") is not None else -1) if hug_available else (lambda e: e["score_composed"])
+    top_routes = sorted(route_entries, key=sort_key, reverse=True)[:5]
     if top_routes:
-        table = [
-            [
-                entry["route_name"],
-                entry["mode"],
-                round(entry["score_composed"], 2),
-                round(entry["score_route"], 2),
-                round(entry["score_penalty"], 3),
-                f"{round(entry['success_flag'] * 100, 1)}%",
+        if hug_available:
+            table = [
+                [
+                    entry["route_name"],
+                    entry["mode"],
+                    f"{entry['hug_score']:.4f}" if entry.get("hug_score") is not None else "-",
+                    f"{entry['hug_route_completion']:.4f}" if entry.get("hug_route_completion") is not None else "-",
+                    f"{entry['hug_epdm']:.4f}" if entry.get("hug_epdm") is not None else "-",
+                    round(entry["score_composed"], 2),
+                    f"{round(entry['success_flag'] * 100, 1)}%",
+                ]
+                for entry in top_routes
             ]
-            for entry in top_routes
-        ]
-        print("\nTop 5 Routes by Driving Score")
-        print(tabulate(table, headers=["Route", "Mode", "DS", "RC", "IS", "Success"], tablefmt="github"))
+            print("\nTop 5 Routes by HUG Score")
+            print(tabulate(table, headers=["Route", "Mode", "HUG", "HUG RC", "EPDM", "DS", "Success"], tablefmt="github"))
+        else:
+            table = [
+                [
+                    entry["route_name"],
+                    entry["mode"],
+                    round(entry["score_composed"], 2),
+                    round(entry["score_route"], 2),
+                    round(entry["score_penalty"], 3),
+                    f"{round(entry['success_flag'] * 100, 1)}%",
+                ]
+                for entry in top_routes
+            ]
+            print("\nTop 5 Routes by Driving Score")
+            print(tabulate(table, headers=["Route", "Mode", "DS", "RC", "IS", "Success"], tablefmt="github"))
 
     route_pairs = compute_route_pairs(route_entries)
     penalty_rows = []
@@ -1345,63 +1288,6 @@ def render_console_report(label: str, result: Dict):
         print(tabulate(inf_rows, headers=["Route", "Mode", "Details"], tablefmt="github"))
     else:
         print("\nNo infractions detected ✅")
-
-    if result["unmatched_routes"]:
-        print("\nRoutes not mapped to IC/LM/LC:")
-        for route_name, mode in sorted(result["unmatched_routes"], key=lambda item: (item[0].lower(), item[1])):
-            print(f"- {route_name} ({mode})")
-
-
-def generate_category_charts(figures_dir: Path, category_summaries: Dict[str, List[Dict]], experiment_dir: Path):
-    categories = [row["Category"] for row in category_summaries.get("Combined", []) if row["Category"] != "Total"]
-    if not categories:
-        for summary in category_summaries.values():
-            if summary:
-                categories = [row["Category"] for row in summary if row["Category"] != "Total"]
-                if categories:
-                    break
-    modes = [name for name in ("No NPC", "NPC Only", "Combined") if category_summaries.get(name)]
-    if not categories or not modes:
-        return {}
-
-    figure_paths = {}
-    x = np.arange(len(categories))
-    width = 0.8 / max(len(modes), 1)
-
-    metrics = [
-        ("DS", "Driving Score (DS)", False, "category_scores.png"),
-        ("SR", "Success Rate (%)", True, "category_success_rate.png"),
-    ]
-
-    for metric_key, metric_label, as_percent, filename in metrics:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        for idx, mode in enumerate(modes):
-            summary_map = {row["Category"]: row for row in category_summaries.get(mode, [])}
-            values = []
-            for category in categories:
-                value = summary_map.get(category, {}).get(metric_key, 0.0)
-                if as_percent:
-                    value *= 100
-                values.append(value)
-            offset = (idx - (len(modes) - 1) / 2) * width
-            ax.bar(x + offset, values, width, label=mode)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(categories)
-        ax.set_ylabel(metric_label)
-        ax.set_title(f"{metric_label} by Scenario Category")
-        ax.legend()
-        ax.set_ylim(bottom=0)
-        ax.grid(True, axis="y", linestyle="--", alpha=0.3)
-        fig.tight_layout()
-
-        ensure_directory(figures_dir)
-        path = figures_dir / filename
-        fig.savefig(path, dpi=200)
-        plt.close(fig)
-        figure_paths[filename] = path.relative_to(experiment_dir).as_posix()
-
-    return figure_paths
 
 
 def generate_npc_gap_chart(figures_dir: Path, route_pairs: Dict[str, Dict[str, Dict]], experiment_dir: Path):
@@ -1714,7 +1600,7 @@ def generate_figures(experiment_dir: Path, result: Dict):
     figures_dir = experiment_dir / "figures"
     ensure_directory(figures_dir)
 
-    figure_paths = generate_category_charts(figures_dir, result["category_summaries"], experiment_dir)
+    figure_paths = {}
 
     npc_gap_path = generate_npc_gap_chart(figures_dir, compute_route_pairs(result["route_entries"]), experiment_dir)
     if npc_gap_path:
@@ -1753,9 +1639,7 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
     infractions = result["infractions"]
 
     per_route_csv = None
-    category_csvs: Dict[str, str] = {}
     infractions_csv = None
-    unmatched_csv = None
     negotiation_summary_csv = None
     negotiation_detailed_csv = None
     negotiation_report = None
@@ -1766,9 +1650,7 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
 
     if resources:
         per_route_csv = resources.get("per_route_csv")
-        category_csvs = resources.get("category_csvs", {})
         infractions_csv = resources.get("infractions_csv")
-        unmatched_csv = resources.get("unmatched_csv")
         negotiation_summary_csv = resources.get("negotiation_summary_csv")
         negotiation_detailed_csv = resources.get("negotiation_detailed_csv")
         negotiation_report = resources.get("negotiation_report")
@@ -1777,26 +1659,33 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
         negotiation_logs_dir = resources.get("negotiation_logs_dir")
         figures = resources.get("figures", {})
 
+    hug_available = stats.get("hug_available", False)
+
     lines: List[str] = []
     lines.append(f"# Experiment Report · {label}")
     lines.append("")
     lines.append("## Overview")
-    lines.extend(
-        [
-            f"- Total route evaluations: **{stats['total_route_entries']}** (No NPC: {stats['no_npc_route_entries']}, NPC: {stats['npc_route_entries']})",
-            f"- Unique route scenarios: **{stats['unique_routes']}**",
-            f"- Aggregated ego runs: **{stats['total_ego_runs']}**",
-            f"- Average driving score (DS): **{round(stats['avg_ds'], 2)}**",
-            f"- Average success rate: **{round(stats['avg_success'] * 100, 1)}%**",
-        ]
-    )
+    overview_items = [
+        f"- Total route evaluations: **{stats['total_route_entries']}** (No NPC: {stats['no_npc_route_entries']}, NPC: {stats['npc_route_entries']})",
+        f"- Unique route scenarios: **{stats['unique_routes']}**",
+        f"- Aggregated ego runs: **{stats['total_ego_runs']}**",
+    ]
+    if hug_available:
+        overview_items.append(f"- Average HUG score: **{round(stats['avg_hug'], 4)}**")
+        if stats.get("avg_hug_rc") is not None:
+            overview_items.append(f"- Average HUG route completion: **{round(stats['avg_hug_rc'], 4)}**")
+        if stats.get("avg_hug_epdm") is not None:
+            overview_items.append(f"- Average EPDM: **{round(stats['avg_hug_epdm'], 4)}**")
+    overview_items.extend([
+        f"- Average driving score (DS): **{round(stats['avg_ds'], 2)}**",
+        f"- Average success rate: **{round(stats['avg_success'] * 100, 1)}%**",
+    ])
+    lines.extend(overview_items)
     lines.append("")
 
     if figures:
         lines.append("## Visual Highlights")
         ordered_figures = [
-            ("category_scores.png", "Driving scores by scenario category and traffic condition."),
-            ("category_success_rate.png", "Success rate by scenario category and traffic condition."),
             ("npc_gap.png", "Routes where NPC traffic changes the driving score (positive values mean NPCs make the scenario harder)."),
             ("negotiations_per_route.png", "Top routes by number of negotiations started."),
             ("negotiation_rounds_distribution.png", "Distribution of negotiation lengths measured in rounds."),
@@ -1827,30 +1716,42 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
     if per_route_csv:
         lines.append(f"[Download full per-route dataset]({per_route_csv})")
 
-    top_routes = sorted(route_entries, key=lambda e: e["score_composed"], reverse=True)[:15]
+    sort_key_md = (lambda e: e["hug_score"] if e.get("hug_score") is not None else -1) if hug_available else (lambda e: e["score_composed"])
+    top_routes = sorted(route_entries, key=sort_key_md, reverse=True)[:15]
     if top_routes:
-        table = [
-            [
-                entry["route_name"],
-                entry["mode"],
-                entry["category"] if entry["category"] in ("IC", "LM", "LC") else entry["category"],
-                round(entry["score_composed"], 2),
-                round(entry["score_route"], 2),
-                round(entry["score_penalty"], 3),
-                f"{round(entry['success_flag'] * 100, 1)}%",
-                round(entry["duration_game"], 2),
+        if hug_available:
+            table = [
+                [
+                    entry["route_name"],
+                    entry["mode"],
+                    f"{entry['hug_score']:.4f}" if entry.get("hug_score") is not None else "-",
+                    f"{entry['hug_route_completion']:.4f}" if entry.get("hug_route_completion") is not None else "-",
+                    f"{entry['hug_epdm']:.4f}" if entry.get("hug_epdm") is not None else "-",
+                    round(entry["score_composed"], 2),
+                    f"{round(entry['success_flag'] * 100, 1)}%",
+                    round(entry["duration_game"], 2),
+                ]
+                for entry in top_routes
             ]
-            for entry in top_routes
-        ]
-        lines.append("")
-        lines.append("Top 15 routes by driving score:")
-        lines.append(
-            tabulate(
-                table,
-                headers=["Route", "Mode", "Category", "DS", "RC", "IS", "Success", "Game Time (s)"],
-                tablefmt="github",
-            )
-        )
+            lines.append("")
+            lines.append("Top 15 routes by HUG score:")
+            lines.append(tabulate(table, headers=["Route", "Mode", "HUG", "HUG RC", "EPDM", "DS", "Success", "Game Time (s)"], tablefmt="github"))
+        else:
+            table = [
+                [
+                    entry["route_name"],
+                    entry["mode"],
+                    round(entry["score_composed"], 2),
+                    round(entry["score_route"], 2),
+                    round(entry["score_penalty"], 3),
+                    f"{round(entry['success_flag'] * 100, 1)}%",
+                    round(entry["duration_game"], 2),
+                ]
+                for entry in top_routes
+            ]
+            lines.append("")
+            lines.append("Top 15 routes by driving score:")
+            lines.append(tabulate(table, headers=["Route", "Mode", "DS", "RC", "IS", "Success", "Game Time (s)"], tablefmt="github"))
     else:
         lines.append("No route data available.")
     lines.append("")
@@ -1866,7 +1767,6 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
         delta = no_npc_entry["score_composed"] - npc_entry["score_composed"]
         record = {
             "route": route_name,
-            "category": npc_entry.get("category") if npc_entry.get("category") != "Other" else no_npc_entry.get("category"),
             "no_npc": no_npc_entry["score_composed"],
             "npc": npc_entry["score_composed"],
             "delta": delta,
@@ -1882,43 +1782,19 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
     if penalty_rows:
         lines.append("Routes most impacted by NPC traffic (positive delta = score drop with NPCs present):")
         penalty_table = [
-            [
-                row["route"],
-                row["category"] if row["category"] in ("IC", "LM", "LC") else "",
-                round(row["no_npc"], 2),
-                round(row["npc"], 2),
-                round(row["delta"], 2),
-            ]
+            [row["route"], round(row["no_npc"], 2), round(row["npc"], 2), round(row["delta"], 2)]
             for row in penalty_rows[:10]
         ]
-        lines.append(
-            tabulate(
-                penalty_table,
-                headers=["Route", "Category", "No NPC DS", "NPC DS", "Delta DS"],
-                tablefmt="github",
-            )
-        )
+        lines.append(tabulate(penalty_table, headers=["Route", "No NPC DS", "NPC DS", "Delta DS"], tablefmt="github"))
         lines.append("")
 
     if benefit_rows:
         lines.append("Routes where NPC traffic improved the score (negative delta):")
         benefit_table = [
-            [
-                row["route"],
-                row["category"] if row["category"] in ("IC", "LM", "LC") else "",
-                round(row["no_npc"], 2),
-                round(row["npc"], 2),
-                round(row["delta"], 2),
-            ]
+            [row["route"], round(row["no_npc"], 2), round(row["npc"], 2), round(row["delta"], 2)]
             for row in benefit_rows[:5]
         ]
-        lines.append(
-            tabulate(
-                benefit_table,
-                headers=["Route", "Category", "No NPC DS", "NPC DS", "Delta DS"],
-                tablefmt="github",
-            )
-        )
+        lines.append(tabulate(benefit_table, headers=["Route", "No NPC DS", "NPC DS", "Delta DS"], tablefmt="github"))
         lines.append("")
 
     lowest_routes = sorted(route_entries, key=lambda entry: entry["score_composed"])[:10]
@@ -2069,35 +1945,6 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
         lines.append("No negotiations were recorded in these runs.")
         lines.append("")
 
-    lines.append("## Category Summaries")
-    for section_name in ("No NPC", "NPC Only", "Combined"):
-        summary = category_summaries.get(section_name, [])
-        if not summary:
-            continue
-        lines.append(f"### {section_name}")
-        lines.append(
-            tabulate(
-                [
-                    [
-                        row["Category"],
-                        row["Routes"],
-                        round(row["DS"], 2),
-                        round(row["RC"], 2),
-                        round(row["IS"], 3),
-                        f"{round(row['SR'] * 100, 1)}%",
-                        round(row["Avg Game Time (s)"], 2),
-                    ]
-                    for row in summary
-                ],
-                headers=["Category", "Routes", "DS", "RC", "IS", "Success", "Game Time (s)"],
-                tablefmt="github",
-            )
-        )
-        csv_path = category_csvs.get(section_name)
-        if csv_path:
-            lines.append(f"[Download CSV]({csv_path})")
-        lines.append("")
-
     lines.append("## Infractions")
     if infractions:
         if infractions_csv:
@@ -2122,15 +1969,6 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
         lines.append("No infractions recorded.")
     lines.append("")
 
-    if result["unmatched_routes"]:
-        lines.append("## Unmatched Routes")
-        if unmatched_csv:
-            lines.append(f"[Download unmatched routes list]({unmatched_csv})")
-        lines.extend([f"- {route} ({mode})" for route, mode in sorted(result["unmatched_routes"])])
-    else:
-        lines.append("## Unmatched Routes")
-        lines.append("All routes were categorized into IC/LM/LC.")
-
     lines.append("")
     return "\n".join(lines).strip() + "\n"
 
@@ -2149,7 +1987,9 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
             "Route",
             "Mode",
             "Agent Count",
-            "Category",
+            "HUG Score",
+            "HUG Route Completion",
+            "HUG EPDM",
             "DS",
             "RC",
             "IS",
@@ -2175,52 +2015,32 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
                 row[0],
                 row[1],
                 str(int(row[2])) if isinstance(row[2], (int, float)) else row[2],
-                row[3],
-                f"{row[4]:.3f}",
-                f"{row[5]:.3f}",
-                f"{row[6]:.4f}",
+                f"{row[3]:.4f}" if row[3] is not None else "",
+                f"{row[4]:.4f}" if row[4] is not None else "",
+                f"{row[5]:.4f}" if row[5] is not None else "",
+                f"{row[6]:.3f}",
                 f"{row[7]:.3f}",
-                f"{row[8]:.2f}",
-                f"{row[9]:.2f}",
-                str(int(row[10])) if isinstance(row[10], (int, float)) else row[10],
-                row[11],
+                f"{row[8]:.4f}",
+                f"{row[9]:.3f}",
+                f"{row[10]:.2f}",
+                f"{row[11]:.2f}",
                 str(int(row[12])) if isinstance(row[12], (int, float)) else row[12],
-                f"{row[13]:.2f}",
-                f"{row[14]:.2f}",
-                str(int(row[15])) if isinstance(row[15], (int, float)) else row[15],
-                str(int(row[16])) if isinstance(row[16], (int, float)) else row[16],
-                f"{row[17]:.2f}",
-                f"{row[18]:.2f}",
-                f"{row[19]:.2f}",
+                row[13],
+                str(int(row[14])) if isinstance(row[14], (int, float)) else row[14],
+                f"{row[15]:.2f}",
+                f"{row[16]:.2f}",
+                str(int(row[17])) if isinstance(row[17], (int, float)) else row[17],
+                str(int(row[18])) if isinstance(row[18], (int, float)) else row[18],
+                str(int(row[19])) if isinstance(row[19], (int, float)) else row[19],
                 f"{row[20]:.2f}",
                 f"{row[21]:.2f}",
+                f"{row[22]:.2f}",
+                f"{row[23]:.2f}",
+                f"{row[24]:.2f}",
             ]
             for row in route_rows
         ],
     )
-
-    category_csv_paths = {}
-    for section_name, summary in result["category_summaries"].items():
-        if not summary:
-            continue
-        csv_path = tables_dir / f"category_summary_{slugify(section_name)}.csv"
-        write_csv_file(
-            csv_path,
-            ["Category", "Routes", "DS", "RC", "IS", "Success Rate", "Avg Game Time (s)"],
-            [
-                [
-                    row["Category"],
-                    row["Routes"],
-                    f"{row['DS']:.3f}",
-                    f"{row['RC']:.3f}",
-                    f"{row['IS']:.4f}",
-                    f"{row['SR']:.3f}",
-                    f"{row['Avg Game Time (s)']:.2f}",
-                ]
-                for row in summary
-            ],
-        )
-        category_csv_paths[section_name] = csv_path.relative_to(experiment_dir).as_posix()
 
     infractions_csv_path = None
     if result["infractions"]:
@@ -2236,16 +2056,6 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
             infractions_rows,
         )
         infractions_csv_path = infractions_csv.relative_to(experiment_dir).as_posix()
-
-    unmatched_csv_path = None
-    if result["unmatched_routes"]:
-        unmatched_csv = tables_dir / "unmatched_routes.csv"
-        write_csv_file(
-            unmatched_csv,
-            ["Route", "Mode"],
-            [[route, mode] for route, mode in sorted(result["unmatched_routes"])],
-        )
-        unmatched_csv_path = unmatched_csv.relative_to(experiment_dir).as_posix()
 
     figure_paths = generate_figures(experiment_dir, result)
 
@@ -2410,9 +2220,7 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
 
     resources = {
         "per_route_csv": route_csv_path.relative_to(experiment_dir).as_posix(),
-        "category_csvs": category_csv_paths,
         "infractions_csv": infractions_csv_path,
-        "unmatched_csv": unmatched_csv_path,
         "figures": figure_paths,
         "negotiation_summary_csv": negotiation_summary_csv_path,
         "negotiation_detailed_csv": negotiation_detailed_csv_path,

@@ -14,6 +14,8 @@ from __future__ import print_function
 import math
 import os
 import re
+import csv
+import json
 import queue
 import bisect
 import xml.etree.ElementTree as ET
@@ -3810,7 +3812,7 @@ def compare_scenarios(scenario_choice, existent_scenario):
             dy = float(pos_choice['y']) - float(pos_existent['y'])
             dz = float(pos_choice['z']) - float(pos_existent['z'])
             dist_position = math.sqrt(dx * dx + dy * dy + dz * dz)
-            dyaw = float(pos_choice['yaw']) - float(pos_choice['yaw'])
+            dyaw = float(pos_choice['yaw']) - float(pos_existent['yaw'])
             dist_angle = math.sqrt(dyaw * dyaw)
             if dist_position < TRIGGER_THRESHOLD and dist_angle < TRIGGER_ANGLE_THRESHOLD:
                 return True
@@ -3827,7 +3829,18 @@ class RouteScenario(BasicScenario):
 
     category = "RouteScenario"
 
-    def __init__(self, world, config, debug_mode=0, criteria_enable=True, ego_vehicles_num=1,log_dir=None, scenario_parameter=None,trigger_distance=10):
+    def __init__(
+        self,
+        world,
+        config,
+        debug_mode=0,
+        criteria_enable=True,
+        ego_vehicles_num=1,
+        log_dir=None,
+        scenario_parameter=None,
+        trigger_distance=10,
+        route_plots_only: bool = False,
+    ):
         """
         Setup all relevant parameters and create scenarios along route
 
@@ -3848,6 +3861,7 @@ class RouteScenario(BasicScenario):
         # load or initialize params
         self.config = config
         self.route = None
+        self.route_debug = None
         self.sampled_scenarios_definitions = None
         self.ego_vehicles_num=ego_vehicles_num
         self.new_config_trajectory=None
@@ -3857,6 +3871,7 @@ class RouteScenario(BasicScenario):
         self.sensor_tf_num = 0
         self.sensor_tf_list = []
         self.log_dir = log_dir
+        self._route_plots_only = bool(route_plots_only)
         
         self.scenario_parameter = scenario_parameter
         self.background_params = scenario_parameter.get('Background',{})
@@ -3887,6 +3902,15 @@ class RouteScenario(BasicScenario):
 
         # update waypoints and scenarios along the routes
         self._update_route(world, config, debug_mode>0)
+
+        if self._route_plots_only:
+            # Route-plots-only mode only needs global route interpolation + plotting artifacts.
+            # Skip ego/background/custom actor spawning and full scenario tree construction.
+            self.ego_vehicles = []
+            self.other_actors = []
+            self.list_scenarios = []
+            self.scenario = []
+            return
 
         # set traffic sensors
         for j in range(self.sensor_tf_num):
@@ -4243,14 +4267,101 @@ class RouteScenario(BasicScenario):
         """
         draw waypoints coordinates from self.route
         """
+        if not self.route:
+            return
+
+        def _extract_transform(route_entry):
+            if not isinstance(route_entry, tuple) or len(route_entry) < 1:
+                return None
+            obj = route_entry[0]
+            if hasattr(obj, 'location') and hasattr(obj, 'rotation'):
+                return obj
+            if hasattr(obj, 'transform'):
+                return obj.transform
+            return None
+
+        def _road_option_fields(road_option):
+            option_name = str(getattr(road_option, 'name', road_option))
+            option_value = getattr(road_option, 'value', None)
+            if option_value is not None:
+                try:
+                    option_value = int(option_value)
+                except Exception:  # pylint: disable=broad-except
+                    option_value = str(option_value)
+            return option_name, option_value
+
         fig = plt.figure(dpi=400)
         colors = ['tab:red','tab:blue','tab:orange', 'tab:purple','tab:green','tab:pink', 'tab:brown', 'tab:gray', 'tab:olive', 'tab:cyan']
         center_x = self.route[0][0][0].location.x
         center_y = self.route[0][0][0].location.y
+        route_debug = self.route_debug if isinstance(self.route_debug, list) else []
+        route_data = {
+            'center': {
+                'x': float(center_x),
+                'y': float(center_y),
+            },
+            'ego_routes': [],
+        }
+        per_ego_data_dir = os.path.join(self.log_dir, 'per_ego_route_data')
+        os.makedirs(per_ego_data_dir, exist_ok=True)
+        corrected_label_used = False
+        sanitized_label_used = False
+
         for i in range(len(self.route)):
+            debug_entry = route_debug[i] if i < len(route_debug) and isinstance(route_debug[i], dict) else {}
+            before_route = list(debug_entry.get('before_route', []) or [])
+            postprocess_meta = dict(debug_entry.get('postprocess_meta', {}) or {})
+            corrected_indices = sorted(
+                int(idx) for idx in postprocess_meta.get('corrected_indices', [])
+                if isinstance(idx, (int, float))
+            )
+            corrected_set = set(corrected_indices)
+            sanitized_indices = sorted(
+                int(idx) for idx in postprocess_meta.get('sanitized_indices', [])
+                if isinstance(idx, (int, float))
+            )
+            sanitized_set = set(sanitized_indices)
+
+            before_points = []
+            before_plot_x = []
+            before_plot_y = []
+            for j, route_entry in enumerate(before_route):
+                tf_before = _extract_transform(route_entry)
+                if tf_before is None:
+                    continue
+                before_x = tf_before.location.x - center_x + 1*i
+                before_y = tf_before.location.y - center_y + 1*i
+                before_plot_x.append(before_x)
+                before_plot_y.append(before_y)
+                before_points.append({
+                    'point_index': int(j),
+                    'x': float(tf_before.location.x),
+                    'y': float(tf_before.location.y),
+                    'z': float(tf_before.location.z),
+                    'yaw': float(tf_before.rotation.yaw),
+                    'pitch': float(tf_before.rotation.pitch),
+                    'roll': float(tf_before.rotation.roll),
+                    'plot_x': float(before_x),
+                    'plot_y': float(before_y),
+                })
+
+            if before_plot_x and before_plot_y:
+                plt.plot(
+                    before_plot_x,
+                    before_plot_y,
+                    linestyle='--',
+                    linewidth=1.0,
+                    alpha=0.35,
+                    color=colors[i],
+                    label='before(raw)' if i == 0 else None,
+                )
+
+            ego_points = []
             for j in range(len(self.route[i])):
-                point_x = self.route[i][j][0].location.x - center_x + 1*i
-                point_y = self.route[i][j][0].location.y - center_y + 1*i
+                transform = self.route[i][j][0]
+                road_option = self.route[i][j][1]
+                point_x = transform.location.x - center_x + 1*i
+                point_y = transform.location.y - center_y + 1*i
                 if j==0:
                     plt.scatter(point_x, point_y, s=50, c=colors[i], label='ego{}'.format(i))
                     plt.text(point_x+0.1, point_y+0.1, 'ego{} start'.format(i))
@@ -4259,8 +4370,119 @@ class RouteScenario(BasicScenario):
                     plt.text(point_x+0.1, point_y+2*(i+1), 'ego{} end'.format(i))
                 else:
                     plt.scatter(point_x, point_y, s=20, c=colors[i])
+
+                if j in sanitized_set:
+                    marker_label = None
+                    if not sanitized_label_used:
+                        marker_label = 'sanitized node'
+                        sanitized_label_used = True
+                    plt.scatter(
+                        point_x,
+                        point_y,
+                        s=95,
+                        facecolors='none',
+                        edgecolors='lime',
+                        linewidths=1.4,
+                        label=marker_label,
+                    )
+
+                if j in corrected_set:
+                    marker_label = None
+                    if not corrected_label_used:
+                        marker_label = 'corrected node'
+                        corrected_label_used = True
+                    plt.scatter(
+                        point_x,
+                        point_y,
+                        s=80,
+                        facecolors='none',
+                        edgecolors='yellow',
+                        linewidths=1.2,
+                        label=marker_label,
+                    )
+
+                option_name, option_value = _road_option_fields(road_option)
+                ego_points.append({
+                    'point_index': int(j),
+                    'is_start': bool(j == 0),
+                    'is_end': bool(j == (len(self.route[i]) - 1)),
+                    'is_corrected': bool(j in corrected_set),
+                    'is_sanitized': bool(j in sanitized_set),
+                    'x': float(transform.location.x),
+                    'y': float(transform.location.y),
+                    'z': float(transform.location.z),
+                    'yaw': float(transform.rotation.yaw),
+                    'pitch': float(transform.rotation.pitch),
+                    'roll': float(transform.rotation.roll),
+                    'plot_x': float(point_x),
+                    'plot_y': float(point_y),
+                    'road_option': option_name,
+                    'road_option_value': option_value,
+                })
+
+            route_data['ego_routes'].append({
+                'ego_index': int(i),
+                'num_points': int(len(ego_points)),
+                'num_before_points': int(len(before_points)),
+                'num_corrected_points': int(len(corrected_indices)),
+                'num_sanitized_points': int(len(sanitized_indices)),
+                'corrected_indices': corrected_indices,
+                'sanitized_indices': sanitized_indices,
+                'postprocess_meta': postprocess_meta,
+                'before_points': before_points,
+                'points': ego_points,
+            })
+
+            csv_path = os.path.join(per_ego_data_dir, 'ego{}_route_points.csv'.format(i))
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=[
+                        'point_index',
+                        'is_start',
+                        'is_end',
+                        'is_corrected',
+                        'is_sanitized',
+                        'x',
+                        'y',
+                        'z',
+                        'yaw',
+                        'pitch',
+                        'roll',
+                        'plot_x',
+                        'plot_y',
+                        'road_option',
+                        'road_option_value',
+                    ],
+                )
+                writer.writeheader()
+                for point in ego_points:
+                    writer.writerow(point)
+
+            before_csv_path = os.path.join(per_ego_data_dir, 'ego{}_route_points_before.csv'.format(i))
+            with open(before_csv_path, 'w', newline='', encoding='utf-8') as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=[
+                        'point_index',
+                        'x',
+                        'y',
+                        'z',
+                        'yaw',
+                        'pitch',
+                        'roll',
+                        'plot_x',
+                        'plot_y',
+                    ],
+                )
+                writer.writeheader()
+                for point in before_points:
+                    writer.writerow(point)
+
         plt.legend(loc='lower right')
         plt.savefig(os.path.join(self.log_dir,'point_coordinates.png'))
+        with open(os.path.join(self.log_dir, 'point_coordinates.json'), 'w', encoding='utf-8') as json_file:
+            json.dump(route_data, json_file, indent=2)
         plt.close()
 
     def _update_route(self, world, config, debug_mode):
@@ -4285,6 +4507,7 @@ class RouteScenario(BasicScenario):
         # road-graph segments, and its output is unused anyway.
         if self.ego_vehicles_num == 0:
             self.route = []
+            self.route_debug = []
             CarlaDataProvider.set_ego_vehicle_route([])
             config.agent.set_global_plan([], [])
             self.sampled_scenarios_definitions = []
@@ -4299,6 +4522,7 @@ class RouteScenario(BasicScenario):
             self._align_start_waypoints(world, trajectory, config)
         gps_route=[]
         route=[]
+        route_debug=[]
         potential_scenarios_definitions=[]
 
         # prepare route's trajectory (interpolate and add the GPS route)
@@ -4307,6 +4531,7 @@ class RouteScenario(BasicScenario):
             gps, r = interpolate_trajectory(world, tr)
             gps_route.append(gps)
             route.append(r)
+            route_debug.append(dict(getattr(interpolate_trajectory, 'last_debug', {}) or {}))
             print('load scenarios for ego{}'.format(i))
             potential_scenarios_definition, _ = RouteParser.scan_route_for_scenarios(
                 config.town, r, world_annotations)
@@ -4314,6 +4539,7 @@ class RouteScenario(BasicScenario):
         # print(potential_scenarios_definitions)
         # self.route is a list of ego_vehicles' routes
         self.route = route
+        self.route_debug = route_debug
         if self.log_dir is not None:
             # plot waypoints coordinates
             self.draw_route()

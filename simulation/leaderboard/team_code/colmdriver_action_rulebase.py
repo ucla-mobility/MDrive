@@ -874,8 +874,10 @@ class PnP_infer():
 			self.save_path = pathlib.Path(SAVE_PATH) / string
 			self.save_path.mkdir(parents=True, exist_ok=False)
 			(self.save_path / "meta").mkdir(parents=True, exist_ok=False)
-
-		self.log_path = self.save_path / pathlib.Path("log")
+			self.log_path = self.save_path / pathlib.Path("log")
+			self.log_path.mkdir(parents=True, exist_ok=True)
+		else:
+			self.log_path = None
 
 		self.total_time_cost = 0
 		self.total_infer_step = 0
@@ -1220,8 +1222,9 @@ class PnP_infer():
 			else:
 				control_all.append(self.prev_control[ego_id])
 
-		with open(self.log_path / pathlib.Path("nego.json"), 'w') as f:
-			json.dump(self.nego_assistant.nego_content, f, indent=4)
+		if self.log_path is not None:
+			with open(self.log_path / pathlib.Path("nego.json"), 'w') as f:
+				json.dump(self.nego_assistant.nego_content, f, indent=4)
 
 		return control_all
 

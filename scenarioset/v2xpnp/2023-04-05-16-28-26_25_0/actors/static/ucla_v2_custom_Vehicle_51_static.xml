@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<routes>
-  <route control_mode="replay" id="2023-04-05-16-28-26_25_0" model="vehicle.mercedes.sprinter" role="static" snap_to_road="false" town="ucla_v2">
-    <waypoint pitch="-0.297575" roll="0.002360" time="0.000000" x="-595.286617" y="-46.714287" yaw="-172.523325" z="9.317728" />
-    <waypoint pitch="-0.297575" roll="0.002360" time="2.900000" x="-595.286617" y="-46.714287" yaw="-172.523325" z="9.317728" />
-  </route>
-</routes>

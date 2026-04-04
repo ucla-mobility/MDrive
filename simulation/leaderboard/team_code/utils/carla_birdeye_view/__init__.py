@@ -1,7 +1,7 @@
 import carla
 import logging
 import numpy as np
-from carla_birdeye_view.mask import MAP_BOUNDARY_MARGIN
+from .mask import MAP_BOUNDARY_MARGIN
 
 
 from enum import IntEnum, auto, Enum
@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import List
 from filelock import FileLock
 
-from carla_birdeye_view import actors, cache
-from carla_birdeye_view.actors import SegregatedActors
-from carla_birdeye_view.colors import RGB
-from carla_birdeye_view.mask import (
+from . import actors, cache
+from .actors import SegregatedActors
+from .colors import RGB
+from .mask import (
     PixelDimensions,
     Coord,
     CroppingRect,

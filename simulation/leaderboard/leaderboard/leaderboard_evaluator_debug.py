@@ -16,12 +16,10 @@ import traceback
 import argparse
 from argparse import RawTextHelpFormatter
 from datetime import datetime
-from distutils.version import LooseVersion
 import importlib
 import os
 import sys
 import gc
-import pkg_resources
 import sys
 import carla
 import copy

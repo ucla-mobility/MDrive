@@ -281,6 +281,46 @@ cache_core_weather_files() {
   log "Cached core weather assets."
 }
 
+ensure_global_route_planner_dao() {
+  local carla_dir="$1"
+  local dao_path="$carla_dir/PythonAPI/carla/agents/navigation/global_route_planner_dao.py"
+
+  if [[ -f "$dao_path" ]]; then
+    log "GlobalRoutePlannerDAO shim already present: $dao_path"
+    return
+  fi
+
+  mkdir -p "$(dirname "$dao_path")"
+  cat > "$dao_path" <<'PY'
+# Copyright (c) 2018-2020 CVC.
+#
+# This work is licensed under the terms of the MIT license.
+# For a copy, see <https://opensource.org/licenses/MIT>.
+
+"""
+Compatibility shim for CARLA 0.9.12+ where GlobalRoutePlannerDAO may be absent.
+"""
+
+
+class GlobalRoutePlannerDAO(object):
+    """Compatibility wrapper that emulates the old DAO interface."""
+
+    def __init__(self, wmap, sampling_resolution=1.0):
+        self._wmap = wmap
+        self._sampling_resolution = sampling_resolution
+
+    def get_topology(self):
+        return self._wmap.get_topology()
+
+    def get_waypoint(self, location):
+        return self._wmap.get_waypoint(location)
+
+    def get_resolution(self):
+        return self._sampling_resolution
+PY
+  log "Created GlobalRoutePlannerDAO compatibility shim: $dao_path"
+}
+
 run_validation() {
   local carla_dir="$1"
   local repo_root="$2"
@@ -417,6 +457,8 @@ main() {
     tar -xzf "$carla_archive" -C "$carla_dir"
     [[ -f "$carla_dir/CarlaUE4.sh" ]] || die "Extraction failed, CarlaUE4.sh not found"
   fi
+
+  ensure_global_route_planner_dao "$carla_dir"
 
   cache_core_weather_files "$carla_archive" "$cache_uasset" "$cache_uexp"
 

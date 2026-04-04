@@ -39,7 +39,13 @@ from team_code.v2x_utils import (generate_relative_heatmap,
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from opencood.tools import train_utils
 from opencood.tools import train_utils, inference_utils
-from opencood.visualization import vis_utils, my_vis, simple_vis_multiclass
+try:
+	from opencood.visualization import vis_utils, my_vis, simple_vis_multiclass
+except ImportError:
+	# Optional visualization helpers are not required for open-loop evaluation.
+	from opencood.visualization import vis_utils
+	my_vis = None
+	simple_vis_multiclass = None
 
 ####### Input: raw_data, N(actor)+M(RSU)
 ####### Output: actors action, N(actor)
@@ -423,6 +429,8 @@ class PnP_infer():
 		self.prev_lidar = []
 		self.prev_control = {}
 		self.prev_surround_map = {}
+		self.last_predicted_waypoints_local = {}
+		self.last_predicted_waypoints_step = {}
 
 		self.pre_raw_data_bank = {}
 		############
@@ -767,6 +775,8 @@ class PnP_infer():
 			ego_i += 1
 			# get the data for current vehicle
 			pred_waypoints = np.around(pred_waypoints_total[ego_i].detach().cpu().numpy(), decimals=2)
+			self.last_predicted_waypoints_local[ego_id] = np.asarray(pred_waypoints, dtype=np.float64).copy()
+			self.last_predicted_waypoints_step[ego_id] = int(step)
 
 			route_info = {
 				'speed': car_data_raw[ego_i]['measurements']["speed"],
@@ -1752,9 +1762,12 @@ import numpy as np
 import copy
 import torch
 
-from opencood.tools.inference_utils import get_cav_box
-import opencood.visualization.simple_plot3d.canvas_3d as canvas_3d
-import opencood.visualization.simple_plot3d.canvas_bev as canvas_bev
+try:
+	import opencood.visualization.simple_plot3d.canvas_3d as canvas_3d
+	import opencood.visualization.simple_plot3d.canvas_bev as canvas_bev
+except ImportError:
+	canvas_3d = None
+	canvas_bev = None
 
 def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=False, measurements=None, lidar_len=None, predicted_waypoints=None, target_point=None):
 		"""
@@ -1792,6 +1805,9 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 		method: str, 'bev' or '3d'
 
 		"""
+
+		if canvas_3d is None or canvas_bev is None:
+			raise ImportError("simple_plot3d visualization modules are unavailable in this environment.")
 
 		if method in ["first_person","bev"]:
 			plt.figure()

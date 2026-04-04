@@ -508,6 +508,11 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
                                                         step=self.step,
                                                         timestamp=timestamp)
 
+        # Expose planning model's world-frame waypoints so the open-loop
+        # evaluator can use them directly instead of rolling out controls.
+        # planning_bank[0]: [N_wps, 2] world-frame (x, y) at 0.1 s intervals.
+        self.last_planned_waypoints_world = self.infer.planning_bank.get(0)
+
         ### return the control signal in list format.
         return control_all
 

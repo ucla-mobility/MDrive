@@ -21,6 +21,12 @@ from team_code.utils.map_utils import \
     convert_tl_status, exclude_off_road_agents, retrieve_city_object_info, \
     obj_in_range
 
+try:
+    from common.carla_connection_events import log_sensor_event as _log_sensor_event
+except Exception:  # pragma: no cover - keep runnable without repo root on PYTHONPATH
+    def _log_sensor_event(event, **kwargs):  # type: ignore[misc]
+        pass
+
 TPE = {
     carla.CityObjectLabel.Buildings: "Building", 
     carla.CityObjectLabel.Vegetation: "Vegetation", 
@@ -688,18 +694,92 @@ class SensorUnit(object):
         Remove sensor tags of one rsu
         """
         for sensor_spec in self.sensors():
-            del self.sensor_interface._sensors_objects[self.name+'_'+sensor_spec['id']+"_{}".format(self.id)]
+            sensor_tag = self.name + '_' + sensor_spec['id'] + "_{}".format(self.id)
+            try:
+                _log_sensor_event("SENSOR_LISTENER_DETACH", sensor_tag=sensor_tag, status="begin")
+            except Exception:
+                pass
+            if hasattr(self.sensor_interface, "unregister_image_capture"):
+                self.sensor_interface.unregister_image_capture(sensor_tag)
+            if hasattr(self.sensor_interface, "unregister_sensor"):
+                self.sensor_interface.unregister_sensor(sensor_tag)
+            else:
+                self.sensor_interface._sensors_objects.pop(sensor_tag, None)
+                if hasattr(self.sensor_interface, "_last_returned_timestamps"):
+                    self.sensor_interface._last_returned_timestamps.pop(sensor_tag, None)
+                if hasattr(self.sensor_interface, "_latest_data"):
+                    self.sensor_interface._latest_data.pop(sensor_tag, None)
+            try:
+                _log_sensor_event("SENSOR_LISTENER_DETACH", sensor_tag=sensor_tag, status="end")
+            except Exception:
+                pass
         self.deleted=True
 
     def cleanup(self):
         """
         Remove and destroy all sensors
         """
-        for _sensor in self._sensors_list:
-            if _sensor is not None:
+        # Detach callbacks first so late packets are ignored during teardown.
+        self.del_sensors()
+
+        sensor_actor_ids = []
+        for idx, _sensor in enumerate(self._sensors_list):
+            if _sensor is None:
+                continue
+            try:
+                _log_sensor_event("SENSOR_STOP_BEGIN", sensor=_sensor, sensor_tag=f"{self.name}_{self.id}:{idx}")
+            except Exception:
+                pass
+            try:
                 _sensor.stop()
+            except Exception:
+                pass
+            try:
+                _log_sensor_event("SENSOR_STOP_END", sensor=_sensor, sensor_tag=f"{self.name}_{self.id}:{idx}")
+            except Exception:
+                pass
+            try:
+                sensor_id = getattr(_sensor, "id", None)
+                if sensor_id is not None:
+                    sensor_actor_ids.append(int(sensor_id))
+            except Exception:
+                pass
+
+        destroy_summary = CarlaDataProvider.destroy_actor_ids(
+            sensor_actor_ids,
+            reason=f"fixed_sensor_cleanup_{self.name}_{self.id}",
+            timeout_s=3.0,
+            poll_s=0.05,
+        )
+        try:
+            _log_sensor_event(
+                "SENSOR_DESTROY_BATCH_RESULT",
+                sensor_tag=f"{self.name}_{self.id}",
+                actor_count=len(sensor_actor_ids),
+                destroyed_count=len(destroy_summary.get("destroyed_ids", [])),
+                already_gone_count=len(destroy_summary.get("already_gone_ids", [])),
+                failed_count=len(destroy_summary.get("failed_ids", [])),
+                remaining_count=len(destroy_summary.get("remaining_alive_ids", [])),
+            )
+        except Exception:
+            pass
+        failed_ids = set(destroy_summary.get("failed_ids", []))
+        failed_ids.update(destroy_summary.get("remaining_alive_ids", []))
+
+        for idx, _sensor in enumerate(self._sensors_list):
+            if _sensor is None:
+                continue
+            sensor_id = getattr(_sensor, "id", None)
+            if sensor_id is not None and int(sensor_id) not in failed_ids:
+                continue
+            try:
+                _log_sensor_event("SENSOR_DESTROY", sensor=_sensor, sensor_tag=f"{self.name}_{self.id}:{idx}")
+            except Exception:
+                pass
+            try:
                 _sensor.destroy()
-                _sensor = None
+            except Exception:
+                pass
         self._sensors_list = []
         self.deleted=True
 
