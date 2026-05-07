@@ -365,3 +365,14 @@ v2xpnp/map/carla_topdown_cache.json
 .grp_cache.json
 .scenario_review_state.json
 scenario_review_status.csv
+
+# Scratch result/investigation dirs
+investigation/
+colmresults/
+final/
+finalresults/
+colmoverallnow/
+poseerr/
+realtime_latency/
+newestwithfix/
+videos_highway_onramp/

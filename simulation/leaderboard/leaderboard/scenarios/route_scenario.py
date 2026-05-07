@@ -92,167 +92,181 @@ def _build_passthrough_route(world, locations, yaws):
             carla.Rotation(yaw=float(yaw)),
         ))
 
-    # Integration fix (default ON): without enrichment, the fast-path leaves
-    # every waypoint tagged LANEFOLLOW, so end-to-end planners (UniAD/VAD)
-    # never see turn cues at junctions and drive straight through curves.
-    # Set CUSTOM_ENRICH_ROAD_OPTIONS=0 to restore the legacy LANEFOLLOW-only
-    # behaviour (matches the broken-integration baseline state).
-    enrich_flag = os.environ.get("CUSTOM_ENRICH_ROAD_OPTIONS", "1") == "1"
-    if enrich_flag:
-        try:
-            road_options = _enrich_road_options_from_map(world, transforms, locations)
-        except Exception as exc:  # pylint: disable=broad-except
-            print(
-                "[_build_passthrough_route] RoadOption enrichment failed "
-                f"({type(exc).__name__}: {exc}); falling back to LANEFOLLOW for all "
-                f"{n} waypoints"
-            )
-            road_options = [RoadOption.LANEFOLLOW] * n
-    else:
-        road_options = [RoadOption.LANEFOLLOW] * n
-
-    route = list(zip(transforms, road_options))
+    options = _compute_road_options_from_lane_geom(world, transforms)
+    if options is None:
+        options = _compute_road_options_via_grp(world, transforms)
+    route = list(zip(transforms, options))
     lat_ref, lon_ref = _get_latlon_ref(world)
     gps = location_route_to_gps(route, lat_ref, lon_ref)
     return gps, route
 
 
-def _enrich_road_options_from_map(world, transforms, locations):
-    """Assign proper RoadOption tags to a pre-computed dense waypoint trace,
-    using ONLY the dense trace itself + CARLA's HD map (no route planner).
+def _compute_road_options_via_grp(world, transforms):
+    """Use CARLA's GRP (the old `interpolate_trajectory` path) to label
+    each transform with a RoadOption, but PRESERVE our dense aligned
+    positions — GRP only contributes labels.
 
-    Why no GRP: the whole point of the precomputed-dense path is to bypass GRP's
-    A* re-snapping. Calling GRP back here would (a) re-introduce the same
-    inconsistency we paid the bypass to avoid and (b) failed in practice on
-    smooth roundabout traces (GRP between adjacent ~2m dense waypoints stays
-    in lane and reports LANEFOLLOW even at the roundabout entry).
+    Approach: trace GRP between EACH PAIR of consecutive aligned
+    transforms. For each pair, GRP returns a short trace with one or
+    more (waypoint, road_option) tuples. We assign the destination
+    transform's road_option as the option of the LAST step in that
+    trace (typically 1 step for short hops, more if GRP re-routes
+    around an obstacle/junction). Lane-change/turn options are
+    preserved when GRP detects them; spurious re-routing is bounded
+    because consecutive aligned waypoints are 1-2 m apart, leaving GRP
+    no room to detour.
 
-    Strategy — purely waypoint-local, map-aware:
-      1. For each dense waypoint, query the closest map waypoint and check
-         ``carla.Waypoint.is_junction``. Junction-resident waypoints are
-         candidates for LEFT/RIGHT/STRAIGHT.
-      2. For each contiguous junction run, compute the signed yaw change
-         between the dense waypoint just BEFORE the run and the dense waypoint
-         just AFTER it. The sign+magnitude classifies the maneuver:
-            |Δyaw| < ``STRAIGHT_DEG``  →  STRAIGHT (proceed across intersection)
-            Δyaw > +``STRAIGHT_DEG``   →  LEFT     (CARLA convention: +yaw turns left)
-            Δyaw < −``STRAIGHT_DEG``   →  RIGHT
-         All waypoints inside the run get that single label.
-      3. Lane-change detection (outside junctions): if the closest map
-         waypoint's ``lane_id`` differs from the previous dense waypoint's,
-         tag a brief CHANGELANELEFT or CHANGELANERIGHT span based on the sign
-         of the lateral offset.
-      4. Everything else: LANEFOLLOW.
-
-    The resulting tag sequence on a roundabout entry typically looks like:
-        LANEFOLLOW × M  →  LEFT × K  →  LANEFOLLOW × J (circling inside)  →  LANEFOLLOW × ...
-
-    On a left turn at a regular signalized intersection:
-        LANEFOLLOW × M  →  LEFT × K  →  LANEFOLLOW × ...
-
-    Dense XY/yaw/z positions are preserved bit-exactly. Only the discrete
-    RoadOption tag changes.
+    Returns None if `world` or GRP is unavailable; the caller falls
+    back to the map-geometry detector.
     """
-    STRAIGHT_DEG = 25.0  # |yaw change across a junction| below this is "STRAIGHT"
-
     n = len(transforms)
-    if n == 0:
-        return []
-
-    world_map = world.get_map()
-
-    # Step 1 — per-waypoint map info
-    is_junction: List[bool] = []
-    lane_ids: List[int] = []
-    road_ids: List[int] = []
-    for tf in transforms:
-        try:
-            wp = world_map.get_waypoint(tf.location, project_to_road=True)
-            is_junction.append(bool(wp.is_junction))
-            lane_ids.append(int(wp.lane_id))
-            road_ids.append(int(wp.road_id))
-        except Exception:  # pylint: disable=broad-except
-            is_junction.append(False)
-            lane_ids.append(0)
-            road_ids.append(0)
-
-    # Step 2 — find contiguous junction runs and classify each by signed yaw change
-    out: List["RoadOption"] = [RoadOption.LANEFOLLOW] * n
-    i = 0
-    while i < n:
-        if not is_junction[i]:
-            i += 1
-            continue
-        # Find end of this junction run
-        j = i
-        while j + 1 < n and is_junction[j + 1]:
-            j += 1
-
-        # Take dense waypoints just before (i-1) and just after (j+1) the run
-        # to measure the maneuver's signed yaw change.
-        before_idx = max(0, i - 1)
-        after_idx = min(n - 1, j + 1)
-        yaw_before = float(transforms[before_idx].rotation.yaw)
-        yaw_after = float(transforms[after_idx].rotation.yaw)
-        # Wrap to (-180, 180]
-        d = (yaw_after - yaw_before + 540.0) % 360.0 - 180.0
-
-        if d > STRAIGHT_DEG:
-            opt = RoadOption.LEFT
-        elif d < -STRAIGHT_DEG:
-            opt = RoadOption.RIGHT
-        else:
-            opt = RoadOption.STRAIGHT
-
-        for k in range(i, j + 1):
-            out[k] = opt
-        i = j + 1
-
-    # Step 3 — outside junctions: detect lane-change runs by lane_id changes
-    # within a stable road_id (avoids tagging junction-internal lane numbering).
-    # We mark a single waypoint at the change with CHANGELANE_*; the surrounding
-    # dense waypoints stay LANEFOLLOW. Direction is inferred from the lateral
-    # offset between consecutive dense XY positions in the local lane frame.
-    for k in range(1, n):
-        if is_junction[k] or is_junction[k - 1]:
-            continue
-        if road_ids[k] != road_ids[k - 1]:
-            continue
-        if lane_ids[k] == lane_ids[k - 1]:
-            continue
-        # Use sign of lane_id delta. CARLA convention: lane_id increases away
-        # from road centerline in one direction; sign depends on driving side.
-        # As a robust fallback, check the lateral offset of the new dense
-        # waypoint relative to the previous one's heading.
-        prev = transforms[k - 1]
-        cur = transforms[k]
-        dx = cur.location.x - prev.location.x
-        dy = cur.location.y - prev.location.y
-        yaw = math.radians(float(prev.rotation.yaw))
-        # Lateral offset (left positive) in prev's local frame:
-        lateral = -math.sin(yaw) * dx + math.cos(yaw) * dy
-        if lateral > 0.05:
-            out[k] = RoadOption.CHANGELANELEFT
-        elif lateral < -0.05:
-            out[k] = RoadOption.CHANGELANERIGHT
-        # else: leave as LANEFOLLOW (lane_id changed without lateral motion;
-        # likely a map-side discontinuity, not a real lane change)
-
-    # Diagnostic
+    if world is None or n < 2:
+        return [RoadOption.LANEFOLLOW] * n
     try:
-        from collections import Counter
-        c = Counter(o for o in out)
-        readable = {str(k).split(".")[-1]: v for k, v in c.items()}
-        # Also report junction span info for sanity
-        n_junc = sum(1 for j in is_junction if j)
-        print(
-            f"[_build_passthrough_route] enriched RoadOption distribution "
-            f"(n={len(out)}, n_junction_wp={n_junc}): {readable}"
-        )
-    except Exception:  # pylint: disable=broad-except
-        pass
+        from leaderboard.utils.route_manipulation import interpolate_trajectory
+    except Exception:
+        return None
+    try:
+        locations = [t.location for t in transforms]
+        _gps, grp_route = interpolate_trajectory(world, locations,
+                                                  hop_resolution=2.0)
+    except Exception:
+        return None
+    if not grp_route:
+        return None
+    grp_xy_opt = []
+    for entry in grp_route:
+        try:
+            wp, opt = entry
+            if isinstance(wp, carla.Transform):
+                loc = wp.location
+            elif isinstance(wp, carla.Waypoint):
+                loc = wp.transform.location
+            else:
+                loc = getattr(wp, 'location', None) or wp.transform.location
+            grp_xy_opt.append((float(loc.x), float(loc.y), opt))
+        except Exception:
+            continue
+    if not grp_xy_opt:
+        return None
+    options = []
+    grp_idx = 0
+    for tr in transforms:
+        best_d = float('inf'); best_opt = RoadOption.LANEFOLLOW
+        lo = max(0, grp_idx - 5)
+        hi = min(len(grp_xy_opt), grp_idx + 50)
+        for j in range(lo, hi):
+            x, y, opt = grp_xy_opt[j]
+            d = (x - tr.location.x) ** 2 + (y - tr.location.y) ** 2
+            if d < best_d:
+                best_d = d; best_opt = opt; grp_idx = j
+        options.append(best_opt)
+    spread_back, spread_fwd = 3, 3
+    spread = list(options)
+    for i, opt in enumerate(options):
+        if opt in (RoadOption.CHANGELANELEFT, RoadOption.CHANGELANERIGHT):
+            for j in range(max(0, i - spread_back), min(n, i + spread_fwd + 1)):
+                if spread[j] == RoadOption.LANEFOLLOW:
+                    spread[j] = opt
+    return spread
 
-    return out
+
+def _compute_road_options_from_lane_geom(world, transforms,
+                                          spread_back=3, spread_fwd=3,
+                                          turn_yaw_threshold_deg=25.0):
+    """Derive RoadOption per waypoint from CARLA map lane geometry.
+
+    For each transform, query the CARLA map for the nearest driving-lane
+    waypoint. Compare against the previous distinct lane to classify:
+
+      - same road, same lane               -> LANEFOLLOW
+      - same road, ego moves to LEFT lane  -> CHANGELANELEFT
+      - same road, ego moves to RIGHT lane -> CHANGELANERIGHT
+      - different road / junction          -> turn classification by
+        signed yaw delta (LEFT / RIGHT / STRAIGHT)
+
+    Lane-change events are spread to neighboring waypoints
+    (`spread_back` before, `spread_fwd` after) so the planner sees the
+    maneuver as a sustained command, not a single transition tick.
+
+    Falls back to LANEFOLLOW everywhere if `world` or its map is
+    unavailable.
+    """
+    n = len(transforms)
+    options = [RoadOption.LANEFOLLOW] * n
+    if world is None or n < 2:
+        return options
+    try:
+        carla_map = world.get_map()
+    except Exception:
+        return options
+
+    map_wps = []
+    for tr in transforms:
+        try:
+            wp = carla_map.get_waypoint(
+                tr.location, project_to_road=True,
+                lane_type=carla.LaneType.Driving)
+        except Exception:
+            wp = None
+        map_wps.append(wp)
+
+    prev_wp = None
+    for i in range(n):
+        cw = map_wps[i]
+        if cw is None or prev_wp is None:
+            prev_wp = cw if cw is not None else prev_wp
+            continue
+        if cw.road_id == prev_wp.road_id and cw.lane_id == prev_wp.lane_id:
+            prev_wp = cw
+            continue
+        if cw.road_id == prev_wp.road_id:
+            opt = None
+            try:
+                left_lane = prev_wp.get_left_lane()
+                right_lane = prev_wp.get_right_lane()
+            except Exception:
+                left_lane = right_lane = None
+            if left_lane is not None and left_lane.lane_id == cw.lane_id:
+                opt = RoadOption.CHANGELANELEFT
+            elif right_lane is not None and right_lane.lane_id == cw.lane_id:
+                opt = RoadOption.CHANGELANERIGHT
+            else:
+                try:
+                    heading_rad = math.radians(prev_wp.transform.rotation.yaw)
+                    dx = cw.transform.location.x - prev_wp.transform.location.x
+                    dy = cw.transform.location.y - prev_wp.transform.location.y
+                    lateral = -math.sin(heading_rad) * dx + math.cos(heading_rad) * dy
+                    opt = (RoadOption.CHANGELANERIGHT if lateral > 0
+                           else RoadOption.CHANGELANELEFT)
+                except Exception:
+                    opt = RoadOption.LANEFOLLOW
+            lo = max(0, i - spread_back)
+            hi = min(n, i + spread_fwd + 1)
+            for j in range(lo, hi):
+                if options[j] == RoadOption.LANEFOLLOW:
+                    options[j] = opt
+            prev_wp = cw
+            continue
+        try:
+            cur_yaw = transforms[i].rotation.yaw
+            ref_idx = min(n - 1, i + max(1, int(spread_fwd / 2)))
+            nxt_yaw = transforms[ref_idx].rotation.yaw if ref_idx > i else cur_yaw
+            dy = nxt_yaw - transforms[max(i - 1, 0)].rotation.yaw
+            dy = ((dy + 180.0) % 360.0) - 180.0
+            if dy > turn_yaw_threshold_deg:
+                opt = RoadOption.RIGHT
+            elif dy < -turn_yaw_threshold_deg:
+                opt = RoadOption.LEFT
+            else:
+                opt = RoadOption.STRAIGHT
+        except Exception:
+            opt = RoadOption.LANEFOLLOW
+        if options[i] == RoadOption.LANEFOLLOW:
+            options[i] = opt
+        prev_wp = cw
+
+    return options
 
 
 def _resolve_ground_z(world: Optional[carla.World], location: carla.Location) -> Optional[float]:

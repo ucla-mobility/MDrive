@@ -49,6 +49,22 @@ class RoutePlanner(object):
 
         self.debug = Plotter(debug_size)
 
+    def _safe_ahead_trigger_threshold(self):
+        """Distance at which the safe_ahead guard fires (route[1] within
+        this distance of ego, including past it). Default mirrors the
+        prior inline literal so non-overriding callers see no behaviour
+        change. Subclasses may override to widen the trigger zone."""
+        return max(1.0, 0.5 * self.min_distance)
+
+    def _compute_safe_ahead_target(self, vehicle_num, gps, seg_dir, safe_ahead):
+        """Hook returning the target_point when the safe_ahead guard fires.
+
+        Default: simple linear projection along the current segment
+        (`gps + seg_dir * safe_ahead`) so existing agents see no change.
+        Subclasses may override to use a different lookahead strategy
+        (e.g. polyline-based cumulative lookahead in CoLMRoutePlanner)."""
+        return gps + seg_dir * safe_ahead
+
     def set_route(self, global_plan, gps=False):
         self.route.clear()
         route_num = len(global_plan)
@@ -135,10 +151,11 @@ class RoutePlanner(object):
         seg_norm = np.linalg.norm(seg_vec)
         if seg_norm > 1e-6:
             seg_dir = seg_vec / seg_norm
-            safe_ahead = max(1.0, 0.5 * self.min_distance)
+            safe_ahead = self._safe_ahead_trigger_threshold()
             remaining = float(np.dot(route[1][0] - gps, seg_dir))
             if remaining <= safe_ahead:
-                safe_pos = gps + seg_dir * safe_ahead
+                safe_pos = self._compute_safe_ahead_target(
+                    vehicle_num, gps, seg_dir, safe_ahead)
                 return (safe_pos, route[1][1])
 
         return self.route[vehicle_num][1]
