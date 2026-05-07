@@ -38,7 +38,11 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable, List, Literal, Optional
+from typing import Any, Callable, Iterable, List, Optional
+try:
+    from typing import Literal  # Python 3.8+
+except ImportError:
+    from typing_extensions import Literal  # Python 3.7 fallback (colmdrivermarco2)
 
 
 log = logging.getLogger(__name__)

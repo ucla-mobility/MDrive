@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-03-17-16-10-12_1_1" model="vehicle.tesla.model3" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="0.358929" roll="-0.001551" time="0.000000" x="-524.890872" y="-102.470757" yaw="5.824286" z="10.873415" />
+    <waypoint pitch="0.358929" roll="-0.001551" time="0.100000" x="-524.890872" y="-102.470757" yaw="5.824286" z="10.873415" />
+    <waypoint pitch="0.358929" roll="-0.001551" time="0.200000" x="-524.890872" y="-102.470757" yaw="5.824286" z="10.873415" />
+    <waypoint pitch="0.358929" roll="-0.001551" time="0.300000" x="-524.890872" y="-102.470757" yaw="5.824286" z="10.873415" />
+    <waypoint pitch="0.358929" roll="-0.001551" time="13.000000" x="-524.890872" y="-102.470757" yaw="5.824286" z="10.873415" />
+  </route>
+</routes>

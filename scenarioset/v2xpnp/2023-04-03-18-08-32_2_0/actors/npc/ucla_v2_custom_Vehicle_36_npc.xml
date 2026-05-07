@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-03-18-08-32_2_0" model="vehicle.mercedes.coupe_2020" role="npc" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="1.312315" roll="-0.043633" time="0.000000" x="-476.497679" y="78.803047" yaw="-84.187353" z="8.275863" />
+    <waypoint pitch="1.312315" roll="-0.043633" time="0.100000" x="-476.393778" y="77.767559" yaw="-83.822612" z="8.275863" />
+    <waypoint pitch="1.312315" roll="-0.043633" time="0.200000" x="-476.279925" y="76.675722" yaw="-83.822612" z="8.275863" />
+  </route>
+</routes>

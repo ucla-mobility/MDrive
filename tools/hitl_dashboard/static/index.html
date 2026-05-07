@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CoLMDriver HITL Control Panel</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --card: #ffffff;
+      --line: #e2e3e7;
+      --ink: #1f2330;
+      --muted: #6a6f7d;
+      --accent: #2563eb;
+      --accent-ink: #ffffff;
+      --good: #16a34a;
+      --warn: #d97706;
+      --bad: #dc2626;
+      --tile: #1a1d24;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--ink); font-size: 14px;
+    }
+
+    header.topbar {
+      position: sticky; top: 0; z-index: 10;
+      background: white; border-bottom: 1px solid var(--line);
+      padding: 0.6rem 1rem;
+      display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    }
+    header.topbar h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+    .live-pill {
+      display: inline-block; padding: 2px 10px; border-radius: 11px;
+      font-size: 0.75rem; font-weight: 600;
+    }
+    .live-pill.connected { background: #dcfce7; color: var(--good); }
+    .live-pill.disconnected { background: #fee2e2; color: var(--bad); }
+    .sim-pill {
+      display: inline-block; padding: 2px 10px; border-radius: 11px;
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em;
+    }
+    .sim-pill.paused  { background: #fee2e2; color: var(--bad); }
+    .sim-pill.running { background: #dcfce7; color: var(--good); }
+    .scenario-info { display: flex; gap: 1rem; color: var(--muted); font-size: 0.85rem; }
+    .scenario-info strong { color: var(--ink); font-weight: 600; }
+
+    button.cmd {
+      font: inherit; font-size: 0.85rem; font-weight: 500;
+      padding: 5px 10px; margin: 0; border: 1px solid var(--line);
+      border-radius: 6px; background: white; color: var(--ink); cursor: pointer;
+      transition: background 80ms, border-color 80ms;
+    }
+    button.cmd:hover { background: #f1f5f9; }
+    button.cmd.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+    button.cmd.warn { color: var(--bad); }
+
+    main {
+      padding: 1rem;
+      display: grid; gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+    }
+    .ego-card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      overflow: hidden; display: flex; flex-direction: column;
+    }
+    .ego-card.completed { border-color: var(--good); box-shadow: 0 0 0 2px rgba(22,163,74,0.12); }
+    .ego-card.near-goal { border-color: var(--warn); }
+    .ego-card.terminal { opacity: 0.65; }
+    .ego-card.terminal.operator_terminated { border-color: var(--bad); box-shadow: 0 0 0 2px rgba(220,38,38,0.12); }
+    .ego-card.terminal.actor_destroyed   { border-color: var(--muted); box-shadow: 0 0 0 2px rgba(106,111,125,0.18); }
+
+    .terminal-banner {
+      padding: 0.45rem 0.85rem; font-size: 0.85rem; font-weight: 600;
+      display: flex; gap: 0.6rem; align-items: center; justify-content: space-between;
+    }
+    .terminal-banner.goal_reached       { background: #dcfce7; color: var(--good); }
+    .terminal-banner.actor_destroyed    { background: #f1f2f5; color: var(--muted); }
+    .terminal-banner.operator_terminated { background: #fee2e2; color: var(--bad); }
+
+    .ego-head {
+      padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+    }
+    .ego-id { font-weight: 700; font-size: 1rem; }
+    .ego-stat { display: flex; flex-direction: column; align-items: flex-start; }
+    .ego-stat .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .ego-stat .l { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .badge {
+      padding: 2px 8px; border-radius: 11px; font-size: 0.7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .badge.mode-direct { background: #dbeafe; color: var(--accent); }
+    .badge.mode-negotiating { background: #fef3c7; color: var(--warn); }
+    .badge.completed { background: #dcfce7; color: var(--good); }
+    .badge.near-goal { background: #fef3c7; color: var(--warn); }
+    .badge.terminal { background: #fee2e2; color: var(--bad); }
+    .badge.off-route { background: #ffe4e6; color: var(--bad); }
+    .ego-card.off-route { border-color: var(--bad); box-shadow: 0 0 0 2px rgba(220,38,38,0.10); }
+
+    .stat-row {
+      display: flex; gap: 0.75rem; flex-wrap: wrap;
+      padding: 0.45rem 0.85rem; font-size: 0.78rem;
+      border-bottom: 1px solid var(--line);
+      background: #fafbfc;
+    }
+    .stat-row .stat { min-width: 64px; }
+    .stat-row .stat .v { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .stat-row .stat .l { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; display: block; }
+
+    .progress {
+      flex: 1; min-width: 80px;
+      height: 6px; background: #eef0f4; border-radius: 999px; overflow: hidden;
+      position: relative;
+    }
+    .progress > .bar {
+      height: 100%; background: var(--accent);
+      transition: width 200ms ease-out;
+    }
+    .ego-card.completed .progress > .bar { background: var(--good); }
+
+    .frame-grid {
+      display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 4px;
+      padding: 0.5rem; background: var(--tile);
+    }
+    .frame-grid .frame-cell { position: relative; aspect-ratio: 16 / 9; background: #0f1116; border-radius: 4px; overflow: hidden; }
+    .frame-grid .frame-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .frame-grid .frame-cell.empty { opacity: 0.3; }
+
+    .map-row {
+      padding: 0.5rem 0.85rem; background: #fafbfc;
+      border-bottom: 1px solid var(--line);
+      display: grid; grid-template-columns: 1fr; gap: 0.4rem;
+    }
+    .map-row svg { width: 100%; height: 110px; background: #f0f2f5; border-radius: 4px; }
+    .map-row .legend { font-size: 0.7rem; color: var(--muted); display: flex; gap: 1rem; align-items: center; }
+    .map-row .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+    .frame-grid .frame-label {
+      position: absolute; top: 4px; left: 6px;
+      color: white; font-size: 0.65rem; font-weight: 600;
+      letter-spacing: 0.04em; text-shadow: 0 0 4px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+
+    .controls {
+      padding: 0.6rem 0.85rem; display: flex; flex-direction: column; gap: 0.4rem;
+    }
+    .control-row {
+      display: flex; gap: 0.3rem; align-items: center; flex-wrap: wrap;
+    }
+    .control-row > .l {
+      width: 38px; color: var(--muted); font-size: 0.7rem; text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .control-row > .nav-btn { font-size: 0.72rem; padding: 4px 8px; }
+
+    .applied {
+      padding: 0.4rem 0.85rem; border-top: 1px solid var(--line);
+      background: #fafbfc; font-size: 0.78rem; color: var(--muted);
+    }
+    .applied code { background: #e9eef6; color: var(--ink); padding: 1px 6px; border-radius: 4px; font-weight: 600; }
+    .applied .override { color: var(--bad); font-weight: 600; }
+
+    /* Pending negotiation panel — kept for negotiation mode runs */
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem; margin: 0 1rem 1rem; }
+    .panel h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+    .deadline { font-variant-numeric: tabular-nums; }
+
+    /* Log */
+    table.log { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    table.log th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+    table.log td { padding: 3px 8px; border-bottom: 1px solid #f1f2f5; font-variant-numeric: tabular-nums; }
+    table.log td:nth-child(2), table.log td:nth-child(3) { text-align: right; }
+
+    .empty-state {
+      grid-column: 1 / -1;
+      padding: 3rem 1rem; text-align: center; color: var(--muted);
+      background: var(--card); border: 1px dashed var(--line); border-radius: 10px;
+    }
+
+    .start-overlay {
+      position: fixed; inset: 0;
+      background: rgba(15, 17, 22, 0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; backdrop-filter: blur(2px);
+    }
+    .start-overlay[hidden] { display: none !important; }
+    .start-card {
+      background: white; border-radius: 12px; padding: 1.75rem 2rem;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.18);
+      max-width: 420px; text-align: center;
+    }
+    .start-card h2 { margin: 0 0 0.5rem; font-size: 1.2rem; }
+    .start-card p { margin: 0 0 1.25rem; color: var(--muted); font-size: 0.92rem; line-height: 1.4; }
+    .start-card button {
+      font: inherit; font-size: 1rem; font-weight: 600;
+      padding: 0.7rem 2rem; border-radius: 8px;
+      background: var(--good); color: white; border: none; cursor: pointer;
+      transition: transform 80ms, box-shadow 120ms;
+    }
+    .start-card button:hover { transform: translateY(-1px); box-shadow: 0 6px 14px rgba(22,163,74,0.30); }
+    .start-card .scen { font-weight: 600; color: var(--ink); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <h1>CoLMDriver HITL
+      <span class="live-pill disconnected" id="conn">connecting…</span>
+      <span class="sim-pill paused" id="sim-status">PAUSED — waiting</span>
+    </h1>
+    <div class="scenario-info">
+      <span><strong id="scenario-id">—</strong> · step <strong id="step">0</strong></span>
+      <span><strong id="ego-count">0</strong> ego(s)</span>
+      <span id="queue-progress"></span>
+    </div>
+    <div style="margin-left:auto; display:flex; gap:0.4rem; align-items:center;">
+      <button class="cmd" id="download-btn" title="Download results.json snapshot">⬇ Download results</button>
+      <button class="cmd warn" id="retry-btn" title="Throw away this attempt and restart the same scenario from scratch">↺ Retry scenario</button>
+      <button class="cmd warn" id="end-btn" title="Mark all egos terminal, save, advance to next scenario">⏭ End scenario</button>
+    </div>
+  </header>
+
+  <main id="ego-grid">
+    <div class="empty-state" id="empty-state">
+      Waiting for the agent to register egos and stream telemetry…
+    </div>
+  </main>
+
+  <div class="start-overlay" id="start-overlay" hidden>
+    <div class="start-card">
+      <h2>Ready to start?</h2>
+      <p>
+        Egos are held at brake&nbsp;=&nbsp;1 until you click. Take a moment
+        to preview the cameras and route polylines for
+        <span class="scen" id="start-scenario-label">this scenario</span>,
+        then start when you're ready.
+      </p>
+      <button id="start-btn">▶ Start scenario</button>
+    </div>
+  </div>
+
+  <!-- Negotiation-mode pending panel (only used in --mode negotiation runs) -->
+  <div class="panel" id="pending-panel" hidden>
+    <h3>Pending negotiation
+      <span style="color: var(--muted); font-size: 0.8rem;">deadline: <span class="deadline" id="deadline">—</span></span>
+    </h3>
+    <div id="pending-body">No pending negotiation.</div>
+    <div style="margin-top: 0.5rem;">
+      <label><input type="checkbox" id="apply-all-pending" /> apply same to all egos in group</label>
+      <button class="cmd" id="submit-btn" disabled>Submit decisions</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Recent decisions</h3>
+    <table class="log" id="log-table">
+      <thead><tr><th>time</th><th>step</th><th>ego</th><th>speed</th><th>nav</th><th>source</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+<script>
+let VOCAB = null;
+let pendingRequestId = null;
+let pendingGroup = [];
+let pendingDeadline = 0;
+let perEgoPendingDecision = {};
+
+// Aggregated state for the control panel.
+let directDecisions = {};       // {ego_id: {speed, nav}}
+let directVersion = -1;
+let directTerminal = {};        // {ego_id: {state, reason, at_step, at_time}}
+let directReturnPending = {};   // {ego_id: true} when return_to_route awaiting agent ack
+let telemetry = {};             // {ego_id: {speed_mps, route_progress, ...}}
+let frameVersionCache = {};     // {`${ego}/${view}`: version}
+let routeCache = {};            // {ego_id: {xy: [[x,y],...], goal: [x,y]}}
+
+// Direct-mode subset of the nav vocab — intersection commands aren't
+// wired through to BasicAgent yet (they require route replanning), so
+// we hide them from the dashboard. The vocab module still has them for
+// negotiation-mode runs.
+const NAV_BUTTONS = ["follow the lane", "left lane change", "right lane change"];
+
+function fmtRemaining(secs) {
+  if (!isFinite(secs) || secs <= 0) return "expired";
+  return secs.toFixed(1) + "s";
+}
+
+async function loadVocab() {
+  const r = await fetch("/api/vocab");
+  VOCAB = await r.json();
+}
+
+// ----- top-bar / scenario -----------------------------------------------
+async function refreshState() {
+  let s;
+  try { s = await (await fetch("/api/state")).json(); } catch { return; }
+  document.getElementById("scenario-id").textContent = s.scenario_id || "—";
+  document.getElementById("step").textContent = s.step ?? 0;
+  document.getElementById("ego-count").textContent = s.egos.length;
+  const qp = document.getElementById("queue-progress");
+  if (s.queue_total && s.queue_total > 0) {
+    qp.innerHTML = `· scenario <strong>${s.queue_index}/${s.queue_total}</strong>`;
+  } else {
+    qp.textContent = "";
+  }
+  // Cache telemetry from /api/state for any egos that are present.
+  for (const e of s.egos) {
+    if (e.measurements && Object.keys(e.measurements).length) {
+      telemetry[e.ego_id] = e.measurements;
+    }
+  }
+  renderEgoGrid();
+}
+
+
+// ----- the main control-panel grid -------------------------------------
+async function refreshDirect() {
+  const r = await fetch("/api/current_decisions");
+  const data = await r.json();
+  // Update sim-status pill on every poll regardless of version.
+  const sim = document.getElementById("sim-status");
+  const overlay = document.getElementById("start-overlay");
+  if (data.ready) {
+    sim.textContent = "RUNNING";
+    sim.classList.remove("paused"); sim.classList.add("running");
+    overlay.hidden = true;
+  } else {
+    sim.textContent = "PAUSED — click Start";
+    sim.classList.remove("running"); sim.classList.add("paused");
+    // Show the start overlay only after at least one ego has registered
+    // — otherwise the operator would see a "click start" prompt before
+    // they have any preview at all.
+    const egoCount = Object.keys(directDecisions || {}).length;
+    overlay.hidden = (egoCount === 0);
+    const lbl = document.getElementById("start-scenario-label");
+    if (lbl) lbl.textContent = data.scenario_id || (
+      document.getElementById("scenario-id").textContent || "this scenario"
+    );
+  }
+  if (data.version === directVersion) return;
+  directVersion = data.version;
+  directDecisions = {};
+  for (const k of Object.keys(data.decisions)) {
+    directDecisions[parseInt(k, 10)] = data.decisions[k];
+  }
+  directTerminal = {};
+  const terminal = data.terminal || {};
+  for (const k of Object.keys(terminal)) {
+    directTerminal[parseInt(k, 10)] = terminal[k];
+  }
+  directReturnPending = {};
+  for (const k of Object.keys(data.return_to_route_pending || {})) {
+    directReturnPending[parseInt(k, 10)] = true;
+  }
+  renderEgoGrid();
+}
+
+function renderEgoGrid() {
+  const grid = document.getElementById("ego-grid");
+  const ids = Object.keys(directDecisions).map(Number).sort((a, b) => a - b);
+  if (ids.length === 0) {
+    grid.innerHTML = `<div class="empty-state">Waiting for the agent to register egos and stream telemetry…</div>`;
+    return;
+  }
+  // Build cards. We rebuild the structure but preserve <img> elements'
+  // current src by reusing their cached version map.
+  grid.innerHTML = "";
+  for (const ego_id of ids) {
+    grid.appendChild(buildEgoCard(ego_id));
+  }
+}
+
+function fmtSecs(s) {
+  if (s == null || !isFinite(s)) return "—";
+  if (s < 1) return `${(s * 1000).toFixed(0)} ms`;
+  if (s < 60) return `${s.toFixed(1)} s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r.toFixed(0)}s`;
+}
+
+async function fetchRouteIfMissing(ego_id) {
+  if (routeCache[ego_id]) return;
+  try {
+    const r = await fetch(`/api/route/${ego_id}`);
+    const d = await r.json();
+    if ((d.xy || []).length > 0) routeCache[ego_id] = d;
+  } catch {}
+}
+
+// Render an SVG mini map: route polyline + ego arrow + goal star.
+// Bounding box auto-computed; CARLA's coords are LH so we flip y for
+// screen orientation. Returns an SVG string for innerHTML.
+function buildMiniMapSVG(ego_id) {
+  const route = routeCache[ego_id];
+  if (!route || !route.xy || route.xy.length < 2) {
+    return `<svg viewBox="0 0 400 110" preserveAspectRatio="xMidYMid meet"><text x="200" y="55" text-anchor="middle" fill="#999" font-size="11">no route</text></svg>`;
+  }
+  const t = telemetry[ego_id] || {};
+  const xs = route.xy.map(p => p[0]);
+  const ys = route.xy.map(p => p[1]);
+  if (route.goal) { xs.push(route.goal[0]); ys.push(route.goal[1]); }
+  if (t.x != null) { xs.push(t.x); ys.push(t.y); }
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const PAD = 6;
+  const W = 400, H = 110;
+  const rangeX = Math.max(maxX - minX, 1);
+  const rangeY = Math.max(maxY - minY, 1);
+  // Equal-aspect projection: use the larger range so we don't distort.
+  const range = Math.max(rangeX, rangeY);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  function px(x) { return ((x - cx) / range) * (W - 2 * PAD) + W / 2; }
+  function py(y) { return -((y - cy) / range) * (H - 2 * PAD) + H / 2; } // flip y
+
+  let path = "";
+  for (let i = 0; i < route.xy.length; i++) {
+    const [x, y] = route.xy[i];
+    path += (i === 0 ? "M" : "L") + px(x).toFixed(1) + "," + py(y).toFixed(1) + " ";
+  }
+  let goalMark = "";
+  if (route.goal) {
+    const gx = px(route.goal[0]), gy = py(route.goal[1]);
+    goalMark = `<circle cx="${gx}" cy="${gy}" r="5" fill="#16a34a" stroke="white" stroke-width="1.5"/>`;
+  }
+  let egoMark = "";
+  if (t.x != null && t.y != null) {
+    const ex = px(t.x), ey = py(t.y);
+    // CARLA LH: yaw 0 = +x. SVG screen y is flipped so we negate sin.
+    const yawRad = (t.yaw_deg || 0) * Math.PI / 180;
+    const dx = Math.cos(yawRad), dy = -Math.sin(yawRad);
+    const SIZE = 5;
+    // Triangle pointing along yaw.
+    const x1 = ex + dx * SIZE, y1 = ey + dy * SIZE;
+    const x2 = ex - dx * SIZE * 0.6 + (-dy) * SIZE * 0.6, y2 = ey - dy * SIZE * 0.6 + dx * SIZE * 0.6;
+    const x3 = ex - dx * SIZE * 0.6 - (-dy) * SIZE * 0.6, y3 = ey - dy * SIZE * 0.6 - dx * SIZE * 0.6;
+    egoMark = `<polygon points="${x1.toFixed(1)},${y1.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)} ${x3.toFixed(1)},${y3.toFixed(1)}" fill="#2563eb" stroke="white" stroke-width="1"/>`;
+  }
+  const offRouteHint = (t.off_route)
+    ? `<text x="6" y="14" fill="#dc2626" font-size="10" font-weight="700">OFF-ROUTE</text>`
+    : "";
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+    <path d="${path}" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    ${goalMark}
+    ${egoMark}
+    ${offRouteHint}
+  </svg>`;
+}
+
+function buildEgoCard(ego_id) {
+  const dec = directDecisions[ego_id] || {speed: "KEEP", nav: "follow the lane"};
+  const t = telemetry[ego_id] || {};
+  const term = directTerminal[ego_id] || null;
+
+  const card = document.createElement("div");
+  card.className = "ego-card";
+  if (term) {
+    card.classList.add("terminal", term.state);
+  } else if (t.completed) {
+    card.classList.add("completed");
+  } else if (t.off_route) {
+    card.classList.add("off-route");
+  } else if (t.near_goal) {
+    card.classList.add("near-goal");
+  }
+
+  // ----- header ------------------------------------------------------
+  const head = document.createElement("div");
+  head.className = "ego-head";
+
+  const idEl = document.createElement("div");
+  idEl.className = "ego-id";
+  idEl.textContent = `ego #${ego_id}`;
+  head.appendChild(idEl);
+
+  // Speed (km/h, primary live indicator).
+  const speedV = (t.speed_kmh != null) ? t.speed_kmh.toFixed(1) : "—";
+  head.appendChild(makeStat("speed", `${speedV} km/h`));
+  // Distance to goal.
+  const dgV = (t.distance_to_goal_m != null && isFinite(t.distance_to_goal_m))
+              ? `${t.distance_to_goal_m.toFixed(1)} m` : "—";
+  head.appendChild(makeStat("to goal", dgV));
+  // Progress bar.
+  const progWrap = document.createElement("div");
+  progWrap.className = "progress";
+  const progPct = Math.max(0, Math.min(1, t.route_progress || 0)) * 100;
+  progWrap.innerHTML = `<div class="bar" style="width:${progPct.toFixed(1)}%"></div>`;
+  head.appendChild(progWrap);
+
+  // Status badges.
+  if (term) head.appendChild(makeBadge("terminal", term.state.replace(/_/g, " ")));
+  else if (t.completed) head.appendChild(makeBadge("completed", "GOAL ✓"));
+  else if (t.off_route) {
+    const d = (t.off_route_distance_m != null && isFinite(t.off_route_distance_m))
+      ? ` (${t.off_route_distance_m.toFixed(1)} m)` : "";
+    head.appendChild(makeBadge("off-route", `OFF-ROUTE${d}`));
+  }
+  else if (t.near_goal) head.appendChild(makeBadge("near-goal", "near goal"));
+  if (!term) head.appendChild(makeBadge("mode-direct", "direct"));
+
+  // Mark/Clear terminal button on the right side of head.
+  const termBtn = document.createElement("button");
+  termBtn.className = "cmd";
+  termBtn.style.marginLeft = "auto";
+  if (term && term.state === "operator_terminated") {
+    termBtn.textContent = "Clear terminal";
+    termBtn.onclick = () => clearTerminal(ego_id, false);
+  } else if (term) {
+    termBtn.textContent = "Force-clear";
+    termBtn.title = "Auto-set terminals are sticky; this overrides the simulator-reported state.";
+    termBtn.onclick = () => clearTerminal(ego_id, true);
+  } else {
+    termBtn.textContent = "Mark terminal";
+    termBtn.classList.add("warn");
+    termBtn.onclick = () => markTerminal(ego_id);
+  }
+  head.appendChild(termBtn);
+
+  card.appendChild(head);
+
+  // ----- terminal banner (when applicable) ---------------------------
+  if (term) {
+    const banner = document.createElement("div");
+    banner.className = `terminal-banner ${term.state}`;
+    const label = ({
+      goal_reached: "GOAL REACHED",
+      actor_destroyed: "ACTOR DESTROYED",
+      operator_terminated: "OPERATOR-TERMINATED",
+    })[term.state] || "TERMINAL";
+    const reason = term.reason ? ` — ${term.reason}` : "";
+    const stamp = term.at_step != null ? ` (at step ${term.at_step})` : "";
+    banner.innerHTML = `<div>● ${label}${reason}${stamp}</div><div style="font-size:0.75rem;font-weight:500;opacity:0.8;">agent is force-braking</div>`;
+    card.appendChild(banner);
+  }
+
+  // ----- mini map -----------------------------------------------------
+  const mapWrap = document.createElement("div");
+  mapWrap.className = "map-row";
+  mapWrap.id = `map-${ego_id}`;
+  mapWrap.innerHTML = buildMiniMapSVG(ego_id);
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  legend.innerHTML =
+    `<span><span class="swatch" style="background:#94a3b8"></span>route</span>` +
+    `<span><span class="swatch" style="background:#2563eb"></span>ego (yaw)</span>` +
+    `<span><span class="swatch" style="background:#16a34a"></span>goal</span>`;
+  mapWrap.appendChild(legend);
+  card.appendChild(mapWrap);
+
+  // Lazy-load the route polyline if we haven't yet.
+  fetchRouteIfMissing(ego_id).then(() => {
+    const el = document.getElementById(`map-${ego_id}`);
+    if (el) {
+      el.innerHTML = buildMiniMapSVG(ego_id);
+      el.appendChild(legend);
+    }
+  });
+
+  // ----- DS / RC / Eff / ETA stat row --------------------------------
+  const sr = document.createElement("div");
+  sr.className = "stat-row";
+  const fmtPct = (v) => (v == null || !isFinite(v)) ? "—" : `${v.toFixed(1)}%`;
+  const dsLabel = (t.scores_provenance === "native") ? "DS (native)" : "DS";
+  const rcLabel = (t.scores_provenance === "native") ? "RC (native)" : "RC";
+  sr.appendChild(makeStat(dsLabel, fmtPct(t.ds_pct)));
+  sr.appendChild(makeStat(rcLabel, fmtPct(t.rc_pct)));
+  if (t.score_penalty != null && isFinite(t.score_penalty)) {
+    sr.appendChild(makeStat("penalty", `×${t.score_penalty.toFixed(2)}`));
+  }
+  sr.appendChild(makeStat("Eff", fmtPct(t.efficiency_pct)));
+  sr.appendChild(makeStat("ETA (sim)", fmtSecs(t.eta_sim_s)));
+  sr.appendChild(makeStat("sim t", fmtSecs(t.sim_time_s)));
+  card.appendChild(sr);
+
+  // Infraction summary row (only when native + at least one infraction).
+  const inf = t.infractions || {};
+  const infTotal = Object.values(inf).reduce((a, b) => a + (b || 0), 0);
+  if (t.scores_provenance === "native" && infTotal > 0) {
+    const ir = document.createElement("div");
+    ir.className = "stat-row";
+    ir.style.background = "#fff7ed";
+    ir.style.borderColor = "var(--warn)";
+    const labels = {
+      collisions_pedestrian: "coll-ped",
+      collisions_vehicle: "coll-veh",
+      collisions_layout: "coll-static",
+      red_light: "red light",
+      stop_infraction: "stop",
+      outside_route_lanes: "off-lane",
+      route_dev: "route dev",
+      vehicle_blocked: "blocked",
+    };
+    for (const [k, v] of Object.entries(inf)) {
+      if (v > 0) ir.appendChild(makeStat(labels[k] || k, String(v)));
+    }
+    card.appendChild(ir);
+  }
+
+  // ----- camera grid -------------------------------------------------
+  const cams = document.createElement("div");
+  cams.className = "frame-grid";
+  const cells = [
+    ["left",  "L"],
+    ["front", "FRONT"],
+    ["right", "R"],
+    [null,    null],
+    ["rear",  "REAR"],
+    [null,    null],
+  ];
+  for (const [view, label] of cells) {
+    const cell = document.createElement("div");
+    cell.className = "frame-cell" + (view === null ? " empty" : "");
+    if (view !== null) {
+      const key = `${ego_id}/${view}`;
+      const v = frameVersionCache[key] || 0;
+      cell.innerHTML = `<img id="frame-${ego_id}-${view}" src="/api/frame/${ego_id}/${view}.jpg?v=${v}" alt="${label}" /><span class="frame-label">${label}</span>`;
+    }
+    cams.appendChild(cell);
+  }
+  card.appendChild(cams);
+
+  // ----- decision controls ------------------------------------------
+  const controls = document.createElement("div");
+  controls.className = "controls";
+
+  const speedRow = document.createElement("div");
+  speedRow.className = "control-row";
+  speedRow.appendChild(spanL("speed"));
+  for (const s of VOCAB.speed) {
+    const b = document.createElement("button");
+    b.className = "cmd";
+    b.textContent = s;
+    if (s === dec.speed) b.classList.add("active");
+    if (s === "STOP") b.classList.add("warn");
+    if (term) b.disabled = true;
+    b.onclick = () => directSet(ego_id, s, dec.nav);
+    speedRow.appendChild(b);
+  }
+  controls.appendChild(speedRow);
+
+  const navRow = document.createElement("div");
+  navRow.className = "control-row";
+  navRow.appendChild(spanL("nav"));
+  for (const n of NAV_BUTTONS) {
+    const b = document.createElement("button");
+    b.className = "cmd nav-btn";
+    b.textContent = n;
+    if (n === dec.nav) b.classList.add("active");
+    if (term) b.disabled = true;
+    b.onclick = () => directSet(ego_id, dec.speed, n);
+    navRow.appendChild(b);
+  }
+  controls.appendChild(navRow);
+
+  // Return-to-route button.  Stays highlighted (blue) the entire time the
+  // ego is off the original route — including the in-flight "merging…"
+  // window AND the seconds afterward while the ego is geometrically
+  // drifting back. Switches to disabled/grey only once `off_route` is
+  // false, i.e. the ego is back within the lateral threshold of the
+  // route polyline. This way the operator never sees the old highlight
+  // disappear while the ego is still off-route.
+  const rtrRow = document.createElement("div");
+  rtrRow.className = "control-row";
+  rtrRow.appendChild(spanL(""));
+  const rtrBtn = document.createElement("button");
+  rtrBtn.className = "cmd";
+  if (directReturnPending[ego_id]) {
+    rtrBtn.textContent = "merging back to route…";
+    rtrBtn.disabled = true;
+    rtrBtn.style.background = "var(--accent)";
+    rtrBtn.style.color = "white";
+    rtrBtn.style.borderColor = "var(--accent)";
+  } else if (t.off_route) {
+    rtrBtn.textContent = "↩ Return to route";
+    rtrBtn.style.background = "var(--accent)";
+    rtrBtn.style.color = "white";
+    rtrBtn.style.borderColor = "var(--accent)";
+    rtrBtn.onclick = () => returnToRoute(ego_id);
+  } else {
+    rtrBtn.textContent = "↩ Return to route";
+    rtrBtn.disabled = true;
+    rtrBtn.title = "ego is following the original route";
+  }
+  rtrRow.appendChild(rtrBtn);
+  controls.appendChild(rtrRow);
+
+  card.appendChild(controls);
+
+  // ----- applied / override status ----------------------------------
+  const applied = document.createElement("div");
+  applied.className = "applied";
+  if (term) {
+    applied.innerHTML = `<span class="override">${term.state.replace(/_/g, " ").toUpperCase()}</span> · controls suppressed`;
+  } else if (t.completed) {
+    applied.innerHTML = `<span class="override">GOAL REACHED</span> · agent auto-braking; your <code>${dec.speed}</code> is suppressed`;
+  } else if (t.near_goal) {
+    applied.innerHTML = `<span class="override">NEAR GOAL</span> · agent will auto-brake within ${(t.distance_to_goal_m||0).toFixed(1)} m; your decisions still apply until then`;
+  } else {
+    applied.innerHTML = `applying <code>${dec.speed}</code> · <code>${dec.nav}</code>`;
+  }
+  card.appendChild(applied);
+
+  return card;
+}
+
+async function markTerminal(ego_id) {
+  const reason = prompt(`Mark ego #${ego_id} terminal. Reason (optional):`, "operator decision") || "operator-terminated";
+  const r = await fetch("/api/terminate_ego", {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify({ego_id, reason}),
+  });
+  if (!r.ok) alert("terminate failed: " + await r.text());
+  await refreshDirect();
+}
+
+async function clearTerminal(ego_id, force) {
+  const r = await fetch("/api/clear_terminal", {
+    method: "POST", headers: {"content-type":"application/json"},
+    body: JSON.stringify({ego_id, force: !!force}),
+  });
+  if (!r.ok) alert("clear failed: " + await r.text());
+  await refreshDirect();
+}
+
+async function returnToRoute(ego_id) {
+  // Optimistic: flip pending + reset nav locally before the round-trip.
+  directReturnPending[ego_id] = true;
+  if (directDecisions[ego_id]) {
+    directDecisions[ego_id] = {...directDecisions[ego_id], nav: "follow the lane"};
+  }
+  directVersion = -1;
+  renderEgoGrid();
+  try {
+    const r = await fetch("/api/return_to_route", {
+      method: "POST", headers: {"content-type":"application/json"},
+      body: JSON.stringify({ego_id}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    alert("return-to-route failed: " + e.message);
+    delete directReturnPending[ego_id];
+    renderEgoGrid();
+    return;
+  }
+  await refreshDirect();
+}
+
+async function startScenario() {
+  const btn = document.getElementById("start-btn");
+  btn.disabled = true; btn.textContent = "starting…";
+  try {
+    const r = await fetch("/api/start", {method: "POST", headers: {"content-type":"application/json"}, body: "{}"});
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    alert("start failed: " + e.message);
+    btn.disabled = false; btn.textContent = "▶ Start scenario";
+    return;
+  }
+  await refreshDirect();
+  // Reset for the next scenario in the queue (overlay re-shows on
+  // scenario_started → ready=False).
+  btn.disabled = false;
+  btn.textContent = "▶ Start scenario";
+}
+document.getElementById("start-btn").addEventListener("click", startScenario);
+
+async function downloadResults() {
+  let snap;
+  try {
+    snap = await (await fetch("/api/results")).json();
+  } catch (e) {
+    alert("download failed: " + e.message);
+    return;
+  }
+  const sid = snap.scenario_id || "scenario";
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const blob = new Blob([JSON.stringify(snap, null, 2)], {type: "application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `results_${sid}_${ts}.json`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function endScenario() {
+  const ok = confirm(
+    "End the current scenario now?\n\n" +
+    "All non-terminal egos will be marked operator_terminated, the final " +
+    "results.json will be saved, and the queue advances to the next scenario."
+  );
+  if (!ok) return;
+  const btn = document.getElementById("end-btn");
+  btn.disabled = true; btn.textContent = "ending…";
+  try {
+    const r = await fetch("/api/end_scenario", {
+      method: "POST", headers: {"content-type":"application/json"}, body: "{}",
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    if (data.results_json) {
+      console.log("results saved to", data.results_json);
+    }
+  } catch (e) {
+    alert("end failed: " + e.message);
+    btn.disabled = false; btn.textContent = "⏭ End scenario";
+    return;
+  }
+  // Leave the button disabled — hitl_run will tear down the eval and the
+  // dashboard will reset on the next scenario_started broadcast.
+  btn.textContent = "ending…";
+}
+
+async function retryScenario() {
+  const ok = confirm(
+    "Retry the current scenario from scratch?\n\n" +
+    "All non-terminal egos will be marked operator_terminated, the eval " +
+    "subprocess will be torn down, the per-scenario results dir will be " +
+    "wiped, and the SAME scenario will respawn. You'll need to click " +
+    "Start again once the new run is ready."
+  );
+  if (!ok) return;
+  const btn = document.getElementById("retry-btn");
+  btn.disabled = true; btn.textContent = "retrying…";
+  try {
+    const r = await fetch("/api/retry_scenario", {
+      method: "POST", headers: {"content-type":"application/json"}, body: "{}",
+    });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    alert("retry failed: " + e.message);
+    btn.disabled = false; btn.textContent = "↺ Retry scenario";
+    return;
+  }
+  // hitl_run will tear down the eval and respawn; the dashboard resets on
+  // the next scenario_started broadcast and the button re-enables there.
+}
+
+document.getElementById("download-btn").addEventListener("click", downloadResults);
+document.getElementById("end-btn").addEventListener("click", endScenario);
+document.getElementById("retry-btn").addEventListener("click", retryScenario);
+
+function makeStat(label, value) {
+  const el = document.createElement("div");
+  el.className = "ego-stat";
+  el.innerHTML = `<span class="v">${value}</span><span class="l">${label}</span>`;
+  return el;
+}
+function makeBadge(cls, text) {
+  const el = document.createElement("span");
+  el.className = `badge ${cls}`;
+  el.textContent = text;
+  return el;
+}
+function spanL(text) {
+  const s = document.createElement("span");
+  s.className = "l"; s.textContent = text;
+  return s;
+}
+
+// ----- decision setters -------------------------------------------------
+async function directSet(ego_id, speed, nav) {
+  // Optimistic update — apply locally first so the UI reflects the
+  // click instantly. We bump directVersion=-1 to force the next
+  // refreshDirect to re-render even though the server's version
+  // counter hasn't bumped yet.
+  directDecisions[ego_id] = {speed, nav};
+  directVersion = -1;
+  renderEgoGrid();
+  try {
+    const r = await fetch("/api/set_decision", {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({ego_id, speed, nav}),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  } catch (e) {
+    alert("set_decision failed: " + e.message);
+  }
+  await refreshDirect();
+}
+
+// ----- frame refresh ----------------------------------------------------
+function refreshAllMiniMaps() {
+  for (const k of Object.keys(directDecisions)) {
+    const ego_id = parseInt(k, 10);
+    const el = document.getElementById(`map-${ego_id}`);
+    if (!el) continue;
+    const legend = el.querySelector(".legend");
+    el.innerHTML = buildMiniMapSVG(ego_id);
+    if (legend) el.appendChild(legend);
+  }
+}
+
+async function refreshFrames() {
+  let data;
+  try { data = await (await fetch("/api/frames/versions")).json(); }
+  catch { return; }
+  const versions = data.versions || {};
+  for (const ego_str of Object.keys(versions)) {
+    for (const view of Object.keys(versions[ego_str])) {
+      const v = versions[ego_str][view];
+      const key = `${ego_str}/${view}`;
+      if (frameVersionCache[key] === v) continue;
+      frameVersionCache[key] = v;
+      const img = document.getElementById(`frame-${ego_str}-${view}`);
+      if (img) img.src = `/api/frame/${ego_str}/${view}.jpg?v=${v}`;
+    }
+  }
+}
+
+// ----- pending negotiation (negotiation-mode only) ---------------------
+function renderPending(p) {
+  const panel = document.getElementById("pending-panel");
+  const body = document.getElementById("pending-body");
+  if (!p.pending) {
+    panel.hidden = true;
+    pendingRequestId = null; pendingGroup = []; perEgoPendingDecision = {};
+    document.getElementById("submit-btn").disabled = true;
+    document.getElementById("deadline").textContent = "—";
+    return;
+  }
+  panel.hidden = false;
+  pendingRequestId = p.request_id;
+  pendingGroup = p.group;
+  pendingDeadline = performance.now() / 1000 + p.deadline_remaining_s;
+  perEgoPendingDecision = {};
+  body.innerHTML = "";
+  for (const ego_id of p.group) {
+    const block = document.createElement("div");
+    block.style.padding = "0.4rem 0";
+    block.innerHTML = `<b>ego #${ego_id}</b>`;
+    const sRow = document.createElement("div");
+    sRow.innerHTML = "<span style='color:var(--muted)'>speed: </span>";
+    for (const s of VOCAB.speed) {
+      const b = document.createElement("button");
+      b.className = "cmd"; b.textContent = s; b.dataset.ego = ego_id; b.dataset.speed = s;
+      b.onclick = () => selectPendingSpeed(ego_id, s);
+      sRow.appendChild(b);
+    }
+    const nRow = document.createElement("div");
+    nRow.innerHTML = "<span style='color:var(--muted)'>nav: </span>";
+    for (const n of VOCAB.nav) {
+      const b = document.createElement("button");
+      b.className = "cmd"; b.textContent = n; b.dataset.ego = ego_id; b.dataset.nav = n;
+      b.onclick = () => selectPendingNav(ego_id, n);
+      nRow.appendChild(b);
+    }
+    block.appendChild(sRow); block.appendChild(nRow);
+    body.appendChild(block);
+  }
+  updatePendingSubmitBtn();
+}
+function selectPendingSpeed(ego_id, value) {
+  const all = document.getElementById("apply-all-pending").checked;
+  const targets = all ? pendingGroup : [ego_id];
+  for (const eg of targets) {
+    perEgoPendingDecision[eg] = perEgoPendingDecision[eg] || {};
+    perEgoPendingDecision[eg].speed = value;
+  }
+  redrawPending(); updatePendingSubmitBtn();
+}
+function selectPendingNav(ego_id, value) {
+  const all = document.getElementById("apply-all-pending").checked;
+  const targets = all ? pendingGroup : [ego_id];
+  for (const eg of targets) {
+    perEgoPendingDecision[eg] = perEgoPendingDecision[eg] || {};
+    perEgoPendingDecision[eg].nav = value;
+  }
+  redrawPending(); updatePendingSubmitBtn();
+}
+function redrawPending() {
+  for (const btn of document.querySelectorAll("#pending-body button")) {
+    const ego = parseInt(btn.dataset.ego, 10);
+    const dec = perEgoPendingDecision[ego] || {};
+    btn.classList.toggle("active",
+      (btn.dataset.speed && btn.dataset.speed === dec.speed) ||
+      (btn.dataset.nav && btn.dataset.nav === dec.nav));
+  }
+}
+function updatePendingSubmitBtn() {
+  const ready = pendingRequestId && pendingGroup.every(
+    eg => perEgoPendingDecision[eg] && perEgoPendingDecision[eg].speed && perEgoPendingDecision[eg].nav);
+  document.getElementById("submit-btn").disabled = !ready;
+}
+document.getElementById("submit-btn").onclick = async () => {
+  const r = await fetch("/api/submit", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify({request_id: pendingRequestId, decisions: perEgoPendingDecision}),
+  });
+  if (!r.ok) alert("submit failed: " + await r.text());
+};
+async function refreshPending() {
+  try { renderPending(await (await fetch("/api/pending")).json()); }
+  catch (e) { /* dashboard restarting */ }
+}
+
+// ----- log --------------------------------------------------------------
+async function refreshLog() {
+  let data;
+  try { data = await (await fetch("/api/log?limit=20")).json(); } catch { return; }
+  const tbody = document.querySelector("#log-table tbody");
+  tbody.innerHTML = "";
+  for (const e of data.entries.slice().reverse()) {
+    const tr = document.createElement("tr");
+    const ts = new Date(e.timestamp_s * 1000).toLocaleTimeString();
+    tr.innerHTML = `<td>${ts}</td><td>${e.step}</td><td>${e.ego_id}</td><td>${e.speed}</td><td>${e.nav}</td><td>${e.source}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function tickDeadline() {
+  if (!pendingRequestId) return;
+  const remaining = pendingDeadline - performance.now() / 1000;
+  document.getElementById("deadline").textContent = fmtRemaining(remaining);
+}
+
+// ----- websocket --------------------------------------------------------
+function connectWs() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws");
+  ws.onopen = () => {
+    const p = document.getElementById("conn");
+    p.textContent = "live"; p.classList.remove("disconnected"); p.classList.add("connected");
+  };
+  ws.onclose = () => {
+    const p = document.getElementById("conn");
+    p.textContent = "disconnected"; p.classList.remove("connected"); p.classList.add("disconnected");
+    setTimeout(connectWs, 1500);
+  };
+  ws.onmessage = async (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "negotiation_open") await refreshPending();
+    else if (m.type === "negotiation_resolved") { await refreshPending(); await refreshLog(); }
+    else if (m.type === "decision_set" || m.type === "egos_registered") { await refreshDirect(); await refreshLog(); }
+    else if (m.type === "terminal_set" || m.type === "terminal_cleared" || m.type === "terminal_promoted") {
+      await refreshDirect();
+    }
+    else if (m.type === "return_to_route_requested") {
+      await refreshDirect();
+    }
+    else if (m.type === "return_to_route_done") {
+      if (!m.ok && m.reason) {
+        // Show why the merge failed instead of leaving the operator
+        // with a silently-cleared spinner.
+        alert(`Return-to-route failed: ${m.reason}`);
+      }
+      await refreshDirect();
+    }
+    else if (m.type === "scenario_started") {
+      // New scenario — clear local caches so old route polylines / camera
+      // frames don't bleed in.
+      routeCache = {};
+      frameVersionCache = {};
+      telemetry = {};
+      const endBtn = document.getElementById("end-btn");
+      if (endBtn) { endBtn.disabled = false; endBtn.textContent = "⏭ End scenario"; }
+      const retryBtn = document.getElementById("retry-btn");
+      if (retryBtn) { retryBtn.disabled = false; retryBtn.textContent = "↺ Retry scenario"; }
+      await refreshDirect();
+      await refreshState();
+    }
+    else if (m.type === "scenario_end_requested") {
+      const endBtn = document.getElementById("end-btn");
+      if (endBtn) { endBtn.disabled = true; endBtn.textContent = "ending…"; }
+      await refreshDirect();
+    }
+    else if (m.type === "scenario_retry_requested") {
+      const retryBtn = document.getElementById("retry-btn");
+      if (retryBtn) { retryBtn.disabled = true; retryBtn.textContent = "retrying…"; }
+      const endBtn = document.getElementById("end-btn");
+      if (endBtn) { endBtn.disabled = true; }
+      await refreshDirect();
+    }
+    else if (m.type === "ego_update" || m.type === "tick") { /* state poll handles it */ }
+  };
+}
+
+// ----- bootstrap --------------------------------------------------------
+(async () => {
+  await loadVocab();
+  await refreshState();
+  await refreshDirect();
+  await refreshPending();
+  await refreshLog();
+  setInterval(tickDeadline, 100);
+  setInterval(refreshLog, 5000);
+  setInterval(refreshDirect, 2000);
+  setInterval(refreshFrames, 200);
+  setInterval(refreshState, 250);   // telemetry + step counter live
+  setInterval(refreshAllMiniMaps, 250);  // mini map redraw with latest pose
+  connectWs();
+})();
+</script>
+</body>
+</html>

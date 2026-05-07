@@ -6,10 +6,10 @@ https://mdrive-challenge.github.io/
 
 ## Repository Structure and Scope
 
-This repository implements **MDriveBench**, a multi-agent driving benchmark.  
+This repository implements **MDrive**, a multi-agent driving benchmark.  
 It was originally built on top of **CoLMDriver**; CoLMDriver is now one of multiple models in the repository, and the benchmark infrastructure has been built on top of it.
 
-MDriveBench provides:
+MDrive provides:
 - Benchmark infrastructure (CARLA integration, scenarios, evaluation, analysis)
 - Multiple baseline and LLM-based driving models (TCP, CoDriving, LMDrive, UniAD, CoLMDriver, and VAD)
 - Training code for CoLMDriver components
@@ -83,7 +83,7 @@ Warmup outputs are written to `results/results_driving_custom/warmupscenarios/<s
 ## Results Analysis and Visualization
 
 ### Results Analysis
-Use `visualization/results_analysis.py` on any results folder, not just CoLMDriver outputs.
+Use `visualization/results_analysis.py` on any results folder, not just MDrive outputs.
 
 ```bash
 # Single run folder
@@ -128,7 +128,7 @@ team_name.zip
 ```
 
 ### Environment Specification
-MDriveBench supports two methods of environment provisioning. To ensure 100% reproducibility, we strongly recommend providing a Dockerfile.
+MDrive supports two methods of environment provisioning. To ensure 100% reproducibility, we strongly recommend providing a Dockerfile.
 
 1. ***Docker (Primary):*** Your Dockerfile should be based on a stable CUDA image (e.g., nvidia/cuda:11.3.1-devel-ubuntu20.04). It must install all necessary libraries so that the agent can run immediately upon container launch.
 
@@ -157,7 +157,7 @@ Setup and get ckpts.
 
 The downloaded checkpoints should follow this structure:
 ```Shell
-|--CoLMDriver
+|--MDrive
     |--ckpt
         |--codriving
             |--perception
@@ -169,26 +169,26 @@ The downloaded checkpoints should follow this structure:
 ### TCP Environment Setup
 1. **Create TCP conda environment**
 ```bash
-cd CoLMDriver
+cd MDrive
 conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
 conda activate tcp_codriving
 ```
 2. **Set CARLA path environment variables**
 ```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/carla912
+export CARLA_ROOT=PATHTOYOURREPOROOT/MDrive/carla912
 export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.12-py3.7-linux-x86_64.egg
 ```
 
 ### CoDriving Environment Setup
 1. **Create CoDriving conda environment**
 ```bash
-cd CoLMDriver
+cd MDrive
 conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
 conda activate tcp_codriving
 ```
 2. **Set CARLA path environment variables**
 ```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/carla912
+export CARLA_ROOT=PATHTOYOURREPOROOT/MDrive/carla912
 export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.12-py3.7-linux-x86_64.egg
 ```
 
@@ -209,12 +209,12 @@ Download and place the following into `simulation/assets/LMDrive/ckpt`:
 - Vision encoder: https://huggingface.co/OpenDILabCommunity/LMDrive-vision-encoder-r50-v1.0  
 - LMDrive LLaVA weights: https://huggingface.co/OpenDILabCommunity/LMDrive-llava-v1.5-7b-v1.0  
 
-Download and place the following into `CoLMDriver/ckpt/llava-v1.5-7b`:
+Download and place the following into `MDrive/ckpt/llava-v1.5-7b`:
 - Base LLaVA model: https://huggingface.co/liuhaotian/llava-v1.5-7b  
 
 3. **Create environment and install dependencies**
 ```bash
-cd CoLMDriver
+cd MDrive
 conda env create -f model_envs/lmdrive.yaml -n lmdrive
 conda activate lmdrive
 
@@ -224,7 +224,7 @@ pip install -e simulation/assets/LMDrive/vision_encoder
 
 4. **Set CARLA path environment variables**
 ```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/carla912
+export CARLA_ROOT=PATHTOYOURREPOROOT/MDrive/carla912
 export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.12-py3.7-linux-x86_64.egg
 ```
 
@@ -252,12 +252,12 @@ UniAD runs inside the `uniad_env` conda environment, which contains all required
 #### Additional Files
 
 Create a ckpt/UniAD directory if it does not exist:
-`mkdir -p CoLMDriver/ckpt/UniAD`
+`mkdir -p MDrive/ckpt/UniAD`
 
 Download the UniAD checkpoint from https://huggingface.co/rethinklab/Bench2DriveZoo/blob/main/uniad_base_b2d.pth
 and place it here:
 
-`CoLMDriver/ckpt/UniAD/uniad_base_b2d.pth`
+`MDrive/ckpt/UniAD/uniad_base_b2d.pth`
 
 Download the UniAD config file from https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py and place it in:
 
@@ -271,7 +271,7 @@ The YAML file for the VAD environment is located in:
 
 1. **Create VAD conda environment**
 ```bash
-cd CoLMDriver
+cd MDrive
 conda env create -f model_envs/vad_env.yaml -n vad
 conda activate vad
 ```
@@ -344,7 +344,7 @@ cd ..
 
 **Step 1:** Download checkpoints from [Google drive](https://drive.google.com/file/d/1z3poGdoomhujCNQtoQ80-BCO34GTOLb-/view?usp=sharing). The downloaded checkpoints of CoLMDriver should follow this structure:
 ```Shell
-|--CoLMDriver
+|--MDrive
     |--ckpt
         |--colmdriver
             |--LLM
@@ -355,7 +355,7 @@ cd ..
 
 To download the checkpoints through command line and move them into the correct directories (no GUI required):
 ```Shell
-# In CoLMDriver repository directory, with colmdriver conda env activated
+# In MDrive repository directory, with colmdriver conda env activated
 pip install gdown
 gdown 1z3poGdoomhujCNQtoQ80-BCO34GTOLb-
 
@@ -390,13 +390,13 @@ Note: make sure that the selected ports (1111,8888) are not occupied by other se
 This section is for internal/lab benchmark operations (manual evaluation workflow and submission verification).
 
 ### Evaluation Metrics
-MDriveBench Leaderboard evaluates on two metrics:
+MDrive Leaderboard evaluates on two metrics:
 1. **Driving Score (DS)**: Score of route completion adjusted by infraction penalties
 2. **Success Rate (SR)**: The percentage of routes completed without failure.
 
 #### Evaluation Scenarios
 A full evaluation consists of three distinct benchmarks:
-***OpenCDA (12 Scenarios):*** Uses ZIP-based scenario loading. Ensure all 12 ZIPs (including Scenes A, D, G, J) are in the `opencdascenarios/` folder.
+***OpenCDA (12 Scenarios):*** Uses ZIP-based scenario loading. Ensure all 12 ZIPs (including Scenes A, D, G, J) are in the `precrash/` folder.
 ***InterDrive (Full Suite):*** Cooperative driving evaluated via the `Interdrive_all` set.
 ***Safety-Critical:*** Pre-crash scenarios.
 
@@ -468,7 +468,7 @@ If you use ports other than `1111`/`8888`, update `comm_client` and `vlm_client`
 # BATCH 1: OpenCDA Scenarios (12 ZIPs)
 # ==============================================================================
 echo ">>> [BATCH 1/3] Running OpenCDA Scenarios..."
-SCENARIO_DIR="opencdascenarios"
+SCENARIO_DIR="precrash"
 for zipfile in "$SCENARIO_DIR"/*.zip; do
     name=$(basename "$zipfile" .zip)
     $RUN_CMD tools/run_custom_eval.py \
@@ -502,3 +502,52 @@ echo "Evaluation Complete for $TEAM_NAME."
 ```
 
 ***Step D:*** Record DS and SR. Extract the Driving Score (DS) and Success Rate (SR) from the generated `summary.json`. Verify logs manually if the score is unexpectedly low to ensure no simulator glitches occurred.
+
+---
+
+## MDrive Toolbox
+
+### Agentic Scenario Generation Pipeline
+
+Part of **MDrive-Toolbox**. A language agent emits a structured *scenario description* (topology, behavior arrangement, actor instantiation) grounded in human instructions and in-context expert demonstrations. Proposals are validated via deterministic rules in CARLA, and outputs are exported as CARLA-format scenario directories ready for closed-loop evaluation.
+
+The pipeline ships with 10 interaction categories (highway on-ramp merge, intersection deadlock, roundabout, pedestrian crosswalk, work zones, etc.) yielding the 100-scenario `MDrive-Interaction` bucket, and is **extensible**: new categories can be added by extending [`scenario_generator/scenario_generator/capabilities.py`](scenario_generator/scenario_generator/capabilities.py) with new topology features and interaction primitives.
+
+Code: [`scenario_generator/`](scenario_generator/), entry point [`scenario_generator/start_pipeline.py`](scenario_generator/start_pipeline.py).
+
+```bash
+python scenario_generator/start_pipeline.py --category "Highway On-Ramp Merge" --seed 42
+```
+
+Stop early at any of the 10 pipeline stages via `--stop-after <stage>`. See [`scenario_generator/SCENARIO_PIPELINE.md`](scenario_generator/SCENARIO_PIPELINE.md) for stage details.
+
+### Human-in-the-Loop Simulation Interface
+
+Part of **MDrive-Toolbox**. Lets a human expert take over one or more CAVs in a running scenario while the remaining CAVs and background actors continue executing their assigned policies. Human inputs are mapped to the same throttle/brake/steering channels planners use, so human-driven and policy-driven rollouts are directly comparable.
+
+Code: [`tools/hitl_run.py`](tools/hitl_run.py) (launcher), [`simulation/leaderboard/team_code/hitl_agent.py`](simulation/leaderboard/team_code/hitl_agent.py) (agent).
+
+```bash
+conda activate colmdrivermarco2
+python -m tools.hitl_run --eval-route scenarioset/interaction/Highway_On-Ramp_Merge/1
+```
+
+Default ports: CARLA 4010, dashboard 8765. Forward 8765 from your laptop:
+
+```bash
+ssh -L 8765:localhost:8765 <eval-server>
+```
+
+### Real2Sim Pipeline
+
+Part of **MDrive-Toolbox**. Converts annotated real-world V2X driving logs (from the V2XPnP dataset) into reactive CARLA scenarios for closed-loop evaluation. CAV and actor trajectories are reconstructed through a unified scenario description and coordinate transformation, then snapped to a digital-twin lane graph in CARLA, yielding the 67-scenario `MDrive-V2XPnP` bucket.
+
+Code: [`v2xpnp/pipeline/`](v2xpnp/pipeline/), entry point [`v2xpnp/pipeline/entrypoint.py`](v2xpnp/pipeline/entrypoint.py).
+
+```bash
+python -m v2xpnp.pipeline.entrypoint <log-dir> \
+    --map-pkl v2xpnp/map/v2x_intersection_vector_map.pkl \
+    --carla-map-cache v2xpnp/map/carla_map_cache.pkl \
+    --carla-map-offset-json v2xpnp/map/ucla_map_offset_carla.json \
+    --out /tmp/output.html
+```

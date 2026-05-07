@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-03-18-08-32_2_0" model="vehicle.seat.leon" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-0.825774" roll="0.003205" time="0.000000" x="-464.195818" y="-66.606070" yaw="96.307487" z="11.290666" />
+    <waypoint pitch="-0.827224" roll="0.003180" time="1.200000" x="-464.195818" y="-66.606070" yaw="96.307487" z="11.288764" />
+    <waypoint pitch="-0.827224" roll="0.003180" time="1.300000" x="-464.278564" y="-65.829636" yaw="96.307487" z="11.288764" />
+    <waypoint pitch="-0.828675" roll="0.003156" time="13.300000" x="-464.278564" y="-65.829636" yaw="96.307487" z="11.286863" />
+  </route>
+</routes>

@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-05-16-18-26_15_0" model="vehicle.nissan.micra" role="npc" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-3.235532" roll="0.012661" time="9.700000" x="-418.060236" y="-34.580092" yaw="-179.933611" z="11.952258" />
+    <waypoint pitch="-3.235558" roll="0.012687" time="9.800000" x="-418.475927" y="-34.578946" yaw="-179.933611" z="11.944298" />
+    <waypoint pitch="-3.235550" roll="0.012692" time="9.900000" x="-418.600526" y="-34.578603" yaw="-179.933611" z="11.937826" />
+    <waypoint pitch="-3.235558" roll="0.012715" time="10.000000" x="-418.942088" y="-34.577662" yaw="-179.933611" z="11.922278" />
+    <waypoint pitch="-3.235558" roll="0.012743" time="10.100000" x="-419.092134" y="-34.577248" yaw="-179.933611" z="11.916154" />
+    <waypoint pitch="-3.235543" roll="0.012758" time="10.200000" x="-419.435350" y="-34.576302" yaw="-179.933611" z="11.908296" />
+  </route>
+</routes>

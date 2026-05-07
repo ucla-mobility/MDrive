@@ -2,7 +2,7 @@
 
 Covers:
 - ``detect_scenario_subfolders``: walks arbitrarily nested folders (e.g.
-  ``llmgen/<Category>/<N>/``) and returns a scenario leaf whenever a directory
+  ``interaction/<Category>/<N>/``) and returns a scenario leaf whenever a directory
   has ego XMLs directly inside it.
 - ``read_scenario_actor_overrides``: extracts ``actor_control_mode`` and
   ``log_replay_actors`` attributes declared on the ``<routes>`` element (or
@@ -64,7 +64,7 @@ class DetectScenarioSubfoldersTests(unittest.TestCase):
             names = sorted(n for _, n in result)
             self.assertEqual(names, ["s1", "s2"])
 
-    def test_two_level_layout_llmgen_like(self):
+    def test_two_level_layout_interaction_like(self):
         from tools.run_custom_eval import detect_scenario_subfolders
 
         with tempfile.TemporaryDirectory() as td:
@@ -85,13 +85,13 @@ class DetectScenarioSubfoldersTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_ego_xml(root / "v2xpnp" / "scenario_a" / "ego.xml")
-            _write_ego_xml(root / "llmgen" / "Cat" / "1" / "ego.xml")
+            _write_ego_xml(root / "interaction" / "Cat" / "1" / "ego.xml")
             _write_ego_xml(root / "opencda" / "A" / "ego.xml")
             result = detect_scenario_subfolders(root)
             names = sorted(n for _, n in result)
             self.assertEqual(
                 names,
-                ["llmgen/Cat/1", "opencda/A", "v2xpnp/scenario_a"],
+                ["interaction/Cat/1", "opencda/A", "v2xpnp/scenario_a"],
             )
 
     def test_actors_subfolder_is_skipped(self):

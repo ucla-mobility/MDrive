@@ -1066,6 +1066,74 @@ class PnP_infer():
 
 		return comm_results
 
+	def _hitl_provider(self):
+		# Lazy init so the import only happens when COLMDRIVER_HITL=1.
+		provider = getattr(self, "_hitl_decision_provider_instance", None)
+		if provider is None:
+			from hitl_decision_provider import HitlDecisionProvider
+			provider = HitlDecisionProvider.from_env()
+			self._hitl_decision_provider_instance = provider
+		return provider
+
+	def _hitl_scenario_id(self):
+		# Match the format used at __init__:887 to name the save dir, so the
+		# JSONL log lines key the same way as on-disk artifacts.
+		routes_path = os.environ.get("ROUTES", "")
+		try:
+			return pathlib.Path(routes_path).stem or "unknown"
+		except Exception:
+			return "unknown"
+
+	def _hitl_decide_group(self, group, comm_info_list, comm_results, step, timestamp):
+		"""HITL replacement for group_negotiation.
+
+		Mirrors the state writes that group_negotiation makes after its LLM
+		loop (round_comm_complete_time, round_comm_bank, prev_comm,
+		comm_bank rebind), so the consumer at run_step:1217-1228 sees the
+		same shape as the LLM path.
+		"""
+		provider = self._hitl_provider()
+		human_timeout = float(os.environ.get("COLMDRIVER_HITL_TIMEOUT_S", "30"))
+		decisions = provider.request_group_decision(
+			scenario_id=self._hitl_scenario_id(),
+			step=int(step),
+			timestamp=float(timestamp),
+			group=[int(g) for g in group],
+			comm_info_list=list(comm_info_list),
+			timeout_s=human_timeout,
+		)
+
+		# Mirror group_negotiation's bookkeeping for the run_step consumer.
+		for ego_id in group:
+			ego_id_int = int(ego_id)
+			dec = decisions.get(ego_id_int) or decisions.get(str(ego_id_int)) or {
+				"speed": "KEEP",
+				"nav": "follow the lane",
+			}
+			comm_results[ego_id_int] = dec
+			# Single-round semantics: append once with completion = now.
+			self.round_comm_complete_time[ego_id_int].append(step * 0.05)
+			self.round_comm_bank[ego_id_int].append(dec)
+
+		# Same final rebind as group_negotiation:1052-1059.
+		self.comm_bank = self.prev_comm
+		for key, value in comm_results.items():
+			self.prev_comm[key] = value
+		for id_, comm_info in enumerate(self.comm_bank):
+			if comm_info is None:
+				self.comm_bank[id_] = self.prev_comm[id_]
+
+		# Same next_comm_time write as group_negotiation:1062-1063 (with
+		# zero "comm time" since the human is the source).
+		for car_id in group:
+			self.next_comm_time[int(car_id)] = step * 0.05
+
+		self.print_comm = (
+			f"[HITL] comm results: {self.comm_bank}, current time: {step*0.05}, "
+			f"nego_dur_time: {self.nego_dur_bank}"
+		)
+		return comm_results
+
 	def form_comm_group(self, car_data_raw, step):
 		'''construct communication graph, agent i and j will communicate if their safety score is below a threshold'''
 		if not self.negotiation_enabled:
@@ -1193,7 +1261,10 @@ class PnP_infer():
 				comm_info_list, default_order = self.comm_client.form_nego_order(group, car_data_raw, self.dir_inten_veh, self.speed_inten_veh, self.step)
 				if comm_info_list[default_order[0]] is not None:
 					print('\nConflict exist, start negotiation...')
-					comm_results = self.group_negotiation(group, comm_info_list, default_order, comm_results, total_car_data_raw, total_rsu_data_raw, step, timestamp)
+					if os.environ.get("COLMDRIVER_HITL") == "1":
+						comm_results = self._hitl_decide_group(group, comm_info_list, comm_results, step, timestamp)
+					else:
+						comm_results = self.group_negotiation(group, comm_info_list, default_order, comm_results, total_car_data_raw, total_rsu_data_raw, step, timestamp)
 					for g in group:
 						self.nego_dur_bank[g] = step + group_max_durs[gi] + 20 # wait 1s after conflict point pass
 					self.nego_group_bank.append({'group': group, 'nego_start': step})
@@ -1334,6 +1405,66 @@ class PnP_infer():
 					infer_result[attrib] = None
 
 		infer_result_clone = copy.deepcopy(infer_result)
+
+		# Stash world-frame perception predictions for the open-loop
+		# AP@IoU evaluator. Pure observation: this dict is read by the
+		# agent's OpenLoopAPHook (when --openloop is active) and ignored
+		# otherwise. Mirrors the same hook in pnp_infer_action_e2e_v2v.py
+		# so colmdriver and codriving share AP plumbing. Closed-loop
+		# behavior is unaffected — the dict is written, never read here.
+		try:
+			_meas_full = car_data_raw[0]['measurements']
+			_pred_world_corners_list = []
+			if (infer_result['pred_box_tensor'] is not None
+					and len(infer_result['pred_box_tensor']) > 0):
+				for _i in range(infer_result['pred_box_tensor'].shape[0]):
+					_world_corners = transform_2d_points(
+						infer_result['pred_box_tensor'][_i].cpu().numpy(),
+						np.pi / 2 - _meas_full["theta"],
+						_meas_full["lidar_pose_y"],
+						_meas_full["lidar_pose_x"],
+						0.0, 0.0, 0.0,  # car2 = (0, 0, 0) → output stays in world frame
+					)
+					_pred_world_corners_list.append(_world_corners)
+			_pred_world_arr = (
+				np.stack(_pred_world_corners_list, axis=0).astype(np.float32)
+				if _pred_world_corners_list
+				else np.zeros((0, 8, 3), dtype=np.float32)
+			)
+			_pred_score_arr = (
+				infer_result['pred_score'].cpu().numpy().astype(np.float32)
+				if infer_result.get('pred_score') is not None
+				else np.zeros((0,), dtype=np.float32)
+			)
+			# Raw opencood lidar-frame predictions (untransformed). The
+			# AP hook prefers this over pred_box_world because it matches
+			# the convention perception_swap_agent feeds to the AP
+			# collector (pred_frame='ego'). At this point in the function
+			# the in-place x↔y swap further down hasn't happened yet, so
+			# infer_result['pred_box_tensor'] is the raw post-process output.
+			_pred_lidar_arr = np.zeros((0, 8, 3), dtype=np.float32)
+			try:
+				_pbt = infer_result.get('pred_box_tensor')
+				if _pbt is not None and len(_pbt) > 0:
+					_pred_lidar_arr = _pbt.cpu().numpy().astype(np.float32)
+			except Exception:
+				pass
+			if not hasattr(self, '_last_perception_for_save'):
+				self._last_perception_for_save = {}
+			self._last_perception_for_save[ego_id] = {
+				'pred_box_world': _pred_world_arr,
+				'pred_box_lidar': _pred_lidar_arr,
+				'pred_score':     _pred_score_arr,
+				'lidar_pose_x':   float(_meas_full["lidar_pose_x"]),
+				'lidar_pose_y':   float(_meas_full["lidar_pose_y"]),
+				'lidar_pose_z':   float(_meas_full.get("lidar_pose_z", 0.0)),
+				'theta':          float(_meas_full["theta"]),
+				'ego_x':          float(_meas_full.get("x", 0.0)),
+				'ego_y':          float(_meas_full.get("y", 0.0)),
+			}
+		except Exception:
+			# Never let observation-stashing break the inference path.
+			pass
 
 		### filte out ego box
 		if not infer_result['pred_box_tensor'] is None:
@@ -1479,6 +1610,24 @@ class PnP_infer():
 		if self.force_global_route and route_local:
 			route_tensor = torch.tensor(route_local, dtype=predicted_waypoints.dtype, device=predicted_waypoints.device).unsqueeze(0)
 			predicted_waypoints = route_tensor
+		# Stash raw local-frame waypoints for the open-loop BEV viz path. The
+		# closed-loop planner's planning_bank uses an in-place rotation that
+		# disagrees with codriving's local frame convention; the BEV render
+		# code in colmdriver_agent.py rebuilds world coords from this raw
+		# tensor using the same axis-swap codriving applies, which avoids
+		# perturbing the closed-loop control path.
+		try:
+			if not hasattr(self, "last_predicted_waypoints_local"):
+				self.last_predicted_waypoints_local = {}
+				self.last_predicted_waypoints_step = {}
+			self.last_predicted_waypoints_local[ego_id] = (
+				np.asarray(predicted_waypoints[0].detach().cpu().numpy(), dtype=np.float64)
+				if hasattr(predicted_waypoints[0], "detach")
+				else np.asarray(predicted_waypoints[0], dtype=np.float64)
+			).copy()
+			self.last_predicted_waypoints_step[ego_id] = int(step)
+		except Exception:
+			pass
 		# predicted_waypoints: N, T_f=10, 2
 		# transform waypoints for negotiation
 		x_world = measurements['x']
@@ -1674,6 +1823,28 @@ class PnP_infer():
 			route_info['y'] = car_data_raw[ego_i]['measurements']["y"]
 			route_info['theta'] = float(car_data_raw[ego_i]['measurements']["theta"])
 			route_info['waypoints'] = route_info['waypoints'].tolist()
+			# Compute WORLD-FRAME waypoints in real CARLA meters for the
+			# open-loop ADE/FDE evaluator. The closed-loop planning_bank
+			# already rotates the model's local output through the same
+			# rotation that drives the ego correctly — we just need to
+			# anchor that rotated trajectory at the REAL CARLA world
+			# position (lidar_pose_x/y) instead of the GPS-scaled
+			# measurements['x']/measurements['y'] used internally
+			# (which produce ~13M-meter offsets). Take the planning_bank
+			# trajectory's relative motion (anchor-shifted to wp[0]=0)
+			# and re-anchor at the real CARLA lidar pose.
+			_pb = getattr(self, "planning_bank", {}) or {}
+			_pb_wps = _pb.get(ego_id)
+			if _pb_wps is not None:
+				try:
+					_pb_arr = np.asarray(_pb_wps, dtype=np.float64).reshape(-1, 2)
+					_rel = _pb_arr - _pb_arr[0:1]  # remove GPS-scaled offset
+					_lx = float(car_data_raw[ego_i]['measurements']["lidar_pose_x"])
+					_ly = float(car_data_raw[ego_i]['measurements']["lidar_pose_y"])
+					_world = _rel + np.array([[_lx, _ly]], dtype=np.float64)
+					route_info['waypoints_world'] = _world.tolist()
+				except Exception:
+					pass
 
 			tick_data[ego_i]["planning"] = route_info
 
@@ -1771,6 +1942,25 @@ class PnP_infer():
 			results_to_write.update(tick_data[ego_i]['planning'])
 			with open(folder_path / ("%04d.json" % frame), 'w') as f:
 				json.dump(results_to_write, f, indent=4)
+			# Per-frame world-frame perception predictions, parity with
+			# codriving's pnp_infer_action_e2e_v2v.py:1003. Lets
+			# carla_openloop_prototype recompute AP@50 against live CARLA
+			# actor GT without re-running inference.
+			_per = getattr(self, '_last_perception_for_save', {}).get(ego_id)
+			if _per is not None:
+				try:
+					np.savez(
+						str(folder_path / ("%04d_pred.npz" % frame)),
+						pred_box_world=_per['pred_box_world'],
+						pred_score=_per['pred_score'],
+						lidar_pose_x=_per['lidar_pose_x'],
+						lidar_pose_y=_per['lidar_pose_y'],
+						theta=_per['theta'],
+						ego_x=_per['ego_x'],
+						ego_y=_per['ego_y'],
+					)
+				except Exception:
+					pass
 		return
 
 	def _near_route_goal(self, measurements):

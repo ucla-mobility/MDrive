@@ -15,9 +15,17 @@ v2xpnp/v2xscenariosrecovereable/
 3d-bat/
 tum-traffic-dataset-dev-kit/
 
-scenarioset/llmgen_deselected/
+scenarioset/interaction_deselected/
 stats/
 benchmark_runs
+
+# Result-artifact dumps (regeneratable from eval pipeline)
+figures/
+v2xpnpfixed/
+v2xpnpnew/
+
+# Alignment pipeline diagnostics (build-time, not runtime input)
+ground_alignment_report.json
 scenario_generator/log
 scenario_generator/routes
 all_videos/
@@ -338,3 +346,22 @@ scenario_generator/debug_output/
 scenario_generator/legal_paths_test/
 scenario_generator/crop_map.json
 scenario_generator/crop_map_detailed.json
+
+# Claude Code project state
+.claude/
+
+# Third-party repos vendored alongside this one (git repos themselves)
+OpenCDA/
+V2Xverse/
+
+# Large generated/in-progress data not yet ready for tracking
+v2xpnp/dataset_new/
+v2xpnp/newroutes/
+scenarioset/v2xpnp_new/
+v2xpnp/map/carla_topdown_cache.jpg
+v2xpnp/map/carla_topdown_cache.json
+
+# Per-scenario caches written by the patch_editor / watchdog tools
+.grp_cache.json
+.scenario_review_state.json
+scenario_review_status.csv

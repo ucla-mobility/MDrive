@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-07-15-04-15_3_1" model="vehicle.ford.crown" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="2.351849" roll="-0.041565" time="0.000000" x="-44.380778" y="180.185152" yaw="-46.301177" z="6.640597" />
+    <waypoint pitch="2.351849" roll="-0.041565" time="2.400000" x="-44.380778" y="180.185152" yaw="-46.301177" z="6.640597" />
+    <waypoint pitch="2.351849" roll="-0.041565" time="15.600000" x="-44.380778" y="180.185152" yaw="-46.301177" z="-43.359403" />
+  </route>
+</routes>

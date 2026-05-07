@@ -1988,6 +1988,231 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
     lines.append("")
     return "\n".join(lines).strip() + "\n"
 
+# ---------------------------------------------------------------------------
+# Per-planner baseline sweep (--per-planner-csv)
+# ---------------------------------------------------------------------------
+
+# Buckets covered by the per-planner sweep. Interdrive is intentionally excluded
+# per user direction (its canonical list lives in _ROUTE_AGENT_SPEC, not in the
+# scenarioset/ tree, and the user is not counting it).
+PER_PLANNER_BUCKETS: Tuple[str, ...] = ("interaction", "precrash", "v2xpnp")
+
+# Bookkeeping subdirs that appear under a baseline root but are NOT planners.
+_NON_PLANNER_DIRS: frozenset = frozenset({
+    "_planner_logs", "results", "tmp", "image", "log", "scripts",
+})
+
+
+def _list_canonical_scenarios(scenarioset_root: Path, bucket: str) -> List[str]:
+    """Return the canonical scenario list for a bucket. Most buckets are
+    one level deep, but `interaction` is two levels deep — its scenarioset is
+    `<bucket>/<category>/<index>/`, so each "scenario" is the
+    `<category>/<index>` pair. We always return scenario IDs RELATIVE to
+    the bucket directory; the same path appended to the planner's bucket
+    results dir resolves to the route directory."""
+    bucket_dir = scenarioset_root / bucket
+    if not bucket_dir.is_dir():
+        return []
+    if bucket == "interaction":
+        return sorted(
+            f"{cat.name}/{idx.name}"
+            for cat in bucket_dir.iterdir()
+            if cat.is_dir() and not cat.name.startswith(".")
+            for idx in cat.iterdir()
+            if idx.is_dir() and not idx.name.startswith(".")
+        )
+    return sorted(
+        p.name for p in bucket_dir.iterdir()
+        if p.is_dir() and not p.name.startswith(".")
+    )
+
+
+# Cheap regex extractors for the `<weather ...>` element embedded in scenario
+# route XMLs. Compiled once at import. We don't need a full XML parse — the
+# only fields we read are the id (when present) or a few key parameters.
+import re as _re
+_WEATHER_TAG_RE = _re.compile(r'<weather([^/]*?)/>', _re.S)
+_WEATHER_KV_RE  = _re.compile(r'(\w+)="([^"]+)"')
+
+
+def _classify_weather_params(kv: Dict[str, str]) -> str:
+    """Map raw <weather ...> parameters back to one of the 4 named presets.
+    Used when the XML omits `id="..."` (about 35/100 interaction scenarios). The
+    rule set was derived by clustering the four distinct parameter signatures
+    that appear alongside named ids in the same dataset:
+
+        rain     →  precipitation ≥ 50
+        night    →  sun_altitude_angle < 0
+        cloudy   →  cloudiness ≥ 70
+        default  →  everything else
+    """
+    def _f(name, dflt=0.0):
+        try: return float(kv.get(name, dflt))
+        except (TypeError, ValueError): return dflt
+    if _f("precipitation") >= 50.0:
+        return "rain"
+    if _f("sun_altitude_angle") < 0.0:
+        return "night"
+    if _f("cloudiness") >= 70.0:
+        return "cloudy"
+    return "default"
+
+
+def _scenario_weather(scenarioset_root: Path, bucket: str, scenario: str) -> str:
+    """Return the weather preset name for a scenario, or "" if no <weather>
+    tag is present. Prefers the explicit `id="..."` attribute; falls back to
+    classifying the raw parameters when the id is missing.
+
+    Today only `interaction` ships weather in the route XML; precrash +
+    v2xpnp leave the column blank."""
+    scen_dir = scenarioset_root / bucket / scenario
+    if not scen_dir.is_dir():
+        return ""
+    # Top-level XMLs only — actor XMLs in `actors/` don't carry weather.
+    for xml in sorted(scen_dir.glob("*.xml")):
+        try:
+            with open(xml, "r") as f:
+                head = f.read(8192)   # weather tag is on the first line
+        except OSError:
+            continue
+        m = _WEATHER_TAG_RE.search(head)
+        if not m:
+            continue
+        kv = dict(_WEATHER_KV_RE.findall(m.group(1)))
+        if "id" in kv:
+            return kv["id"]
+        return _classify_weather_params(kv)
+    return ""
+
+
+def _scenario_category(bucket: str, scenario: str) -> str:
+    """Per-bucket category derivation:
+      - interaction: scenario id is `<category>/<index>`, so the category is the
+        leading path component (e.g. `Blocked_Lane_Obstacle`).
+      - interdrive: parsed from `r{n}_{town}_{base}_{sub}` via SCENARIO_DESCRIPTIONS.
+      - others: blank (no canonical mapping in code).
+    """
+    if bucket == "interaction":
+        return scenario.split("/", 1)[0] if "/" in scenario else ""
+    if bucket == "interdrive":
+        parts = scenario.split("_")
+        if len(parts) >= 4:
+            base, sub = parts[2], parts[3]
+            return SCENARIO_DESCRIPTIONS.get((base, sub), "")
+    return ""
+
+
+def _scores_for_route(route_dir: Path) -> Optional[Dict]:
+    """Aggregate per-ego results.json under a single scenario directory. Returns
+    None if no usable records are present (i.e. the planner never ran this
+    scenario, or its run was discarded). Reuses the exact codepath that
+    powers the per-route CSV in `analyze_results`."""
+    if not route_dir.is_dir():
+        return None
+    records = load_ego_records(str(route_dir))
+    if not records:
+        return None
+    agg = aggregate_route_records(records)
+    agg["agent_count"] = len([d for d in os.listdir(route_dir)
+                              if d.startswith("ego_vehicle")])
+    return agg
+
+
+def _format_score(val) -> str:
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return ""
+    if isinstance(val, float):
+        return f"{val:.3f}"
+    return str(val)
+
+
+def write_per_planner_baseline_csvs(
+    base_path: Path, out_dir: Path, scenarioset_root: Path,
+) -> None:
+    """One CSV per planner under <out_dir>/<planner>.csv.
+
+    Iterates `<base_path>/<planner>/<bucket>/<scenario>/` for each planner under
+    the baseline root, fills scores when records exist, leaves cells blank when
+    they don't. The canonical scenario list is read from `scenarioset/<bucket>/`
+    so unfinished routes still appear (with blank score cells)."""
+    ensure_directory(out_dir)
+    canonical: Dict[str, List[str]] = {
+        b: _list_canonical_scenarios(scenarioset_root, b) for b in PER_PLANNER_BUCKETS
+    }
+    n_total = sum(len(v) for v in canonical.values())
+    if n_total == 0:
+        print(f"[per-planner-csv] no canonical scenarios found under {scenarioset_root}; "
+              f"check --scenarioset-root")
+        return
+
+    planners = sorted(
+        d.name for d in base_path.iterdir()
+        if d.is_dir()
+        and not d.name.startswith(".")
+        and not d.name.startswith("_")
+        and d.name not in _NON_PLANNER_DIRS
+    )
+    if not planners:
+        print(f"[per-planner-csv] no planner subdirs under {base_path}")
+        return
+
+    header = [
+        "bucket", "scenario", "category", "weather", "agent_count",
+        "DS", "RC", "IS", "SR",
+        "game_time_s", "system_time_s", "ego_runs", "infractions",
+    ]
+    # Cache weather lookups — same scenario is read once per planner CSV pass,
+    # but re-reading 133 small XMLs per planner across 4+ planners adds up.
+    weather_cache: Dict[Tuple[str, str], str] = {}
+    def _weather(bucket: str, scenario: str) -> str:
+        key = (bucket, scenario)
+        if key not in weather_cache:
+            weather_cache[key] = _scenario_weather(scenarioset_root, bucket, scenario)
+        return weather_cache[key]
+
+    for planner in planners:
+        out_path = out_dir / f"{planner}.csv"
+        n_filled = 0
+        with open(out_path, "w", newline="") as fp:
+            writer = csv.writer(fp)
+            writer.writerow(header)
+            for bucket in PER_PLANNER_BUCKETS:
+                for scenario in canonical[bucket]:
+                    route_dir = base_path / planner / bucket / scenario
+                    if not route_dir.is_dir():
+                        # Fallback: flat layout `<planner>/<scenario>` (no
+                        # bucket level). Used by single-bucket reruns like
+                        # `codriving_poseerr/`. Only matches if the scenario
+                        # exists under the planner directly AND the bucket dir
+                        # itself doesn't exist (avoids cross-bucket aliasing).
+                        flat = base_path / planner / scenario
+                        if flat.is_dir() and not (base_path / planner / bucket).is_dir():
+                            route_dir = flat
+                    agg = _scores_for_route(route_dir)
+                    if agg is None:
+                        writer.writerow([
+                            bucket, scenario, _scenario_category(bucket, scenario),
+                            _weather(bucket, scenario),
+                            "", "", "", "", "", "", "", "", "",
+                        ])
+                        continue
+                    n_filled += 1
+                    writer.writerow([
+                        bucket, scenario, _scenario_category(bucket, scenario),
+                        _weather(bucket, scenario),
+                        agg.get("agent_count", ""),
+                        _format_score(agg["score_composed"]),
+                        _format_score(agg["score_route"]),
+                        _format_score(agg["score_penalty"]),
+                        _format_score(agg["success_flag"]),
+                        f"{agg['duration_game']:.2f}",
+                        f"{agg['duration_system']:.2f}",
+                        agg["ego_runs"],
+                        infractions_to_string(agg.get("infractions", {})),
+                    ])
+        print(f"[per-planner-csv] {planner}: {n_filled}/{n_total} scenarios → {out_path}")
+
+
 def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: bool):
     experiment_dir = base_dir / slugify(label) if nest else base_dir
     ensure_directory(experiment_dir)
@@ -2292,8 +2517,46 @@ def main():
         dest="markdown_path",
         help="If provided, aggregate markdown for all experiments into this single file.",
     )
+    parser.add_argument(
+        "--per-planner-csv",
+        dest="per_planner_csv",
+        help=(
+            "Baseline-sweep mode. Treat base_path as a baseline root containing "
+            "planner subdirs (tcp/, codriving/, ...). Writes one CSV per planner "
+            "into the given directory, with one row per canonical scenario across "
+            "buckets (interaction, precrash, v2xpnp); unfinished scenarios "
+            "appear as blank rows. Interdrive is intentionally excluded."
+        ),
+    )
+    parser.add_argument(
+        "--scenarioset-root",
+        dest="scenarioset_root",
+        default=None,
+        help=(
+            "Path to the canonical scenarioset/ directory (used by --per-planner-csv "
+            "to enumerate scenarios per bucket). Defaults to <repo_root>/scenarioset, "
+            "where repo_root is inferred from this script's location."
+        ),
+    )
 
     args = parser.parse_args()
+
+    if args.per_planner_csv:
+        repo_root = Path(__file__).resolve().parent.parent
+        scenarioset_root = (
+            Path(args.scenarioset_root).resolve()
+            if args.scenarioset_root else repo_root / "scenarioset"
+        )
+        base_path = Path(args.base_path).resolve()
+        if not base_path.is_dir():
+            print(f"Invalid base_path: {base_path}")
+            sys.exit(1)
+        write_per_planner_baseline_csvs(
+            base_path=base_path,
+            out_dir=Path(args.per_planner_csv).resolve(),
+            scenarioset_root=scenarioset_root,
+        )
+        return
 
     suffixes = args.suffixes if args.suffixes else [None]
     expected_multiple = len(suffixes) > 1

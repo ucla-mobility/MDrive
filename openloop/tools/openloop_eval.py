@@ -206,6 +206,22 @@ PLANNER_SPECS: Dict[str, PlannerSpec] = {
         agent="simulation/leaderboard/team_code/perception_swap_agent.py",
         agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt.yaml",
     ),
+    "perception_swap_attfuse_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_attfuse_behavior.yaml",
+    ),
+    "perception_swap_fcooper_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_fcooper_behavior.yaml",
+    ),
+    "perception_swap_disco_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_disco_behavior.yaml",
+    ),
+    "perception_swap_cobevt_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt_behavior.yaml",
+    ),
 }
 
 COLMDRIVER_VLLM_ENV_DEFAULT = "vllm"

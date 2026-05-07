@@ -2733,6 +2733,46 @@ def build_dataset(
             "[PERF] build_dataset CARLA stage overlap_postprocess: "
             f"elapsed={time.perf_counter() - t_overlap:.2f}s"
         )
+        # Pre-pass: merge duplicate-detection tracks (same physical vehicle
+        # detected by multiple sensor agents and never deduped). This must
+        # run before the residual collision resolver because the resolver
+        # operates frame-by-frame and cannot detect long-term pairwise duplication.
+        t_dup = time.perf_counter()
+        duplicate_merge_report = _merge_duplicate_vehicle_tracks(
+            tracks=tracks,
+            scenario_name=str(scenario_name),
+            verbose=bool(verbose),
+        )
+        if isinstance(duplicate_merge_report, dict):
+            n_pairs = len(duplicate_merge_report.get("duplicate_pairs", []) or [])
+            n_dropped = len(duplicate_merge_report.get("tracks_dropped", []) or [])
+            if n_pairs or n_dropped:
+                print(
+                    f"[INFO] Duplicate-track merger: {n_pairs} pair(s), "
+                    f"{n_dropped} track(s) dropped: "
+                    f"{duplicate_merge_report.get('tracks_dropped')}  "
+                    f"(elapsed {time.perf_counter() - t_dup:.2f}s)"
+                )
+
+        # Final-pass residual-collision resolver: any sustained pair overlap
+        # that survived the upstream reducer gets fixed by un-snapping toward
+        # raw (cx, cy ← x, y), or by deleting the less significant track.
+        t_residual = time.perf_counter()
+        residual_collision_report = _resolve_residual_vehicle_collisions(
+            tracks=tracks,
+            scenario_name=str(scenario_name),
+            verbose=bool(verbose),
+        )
+        if isinstance(residual_collision_report, dict):
+            n_runs = int(residual_collision_report.get("collision_runs", 0))
+            n_unsnap = int(residual_collision_report.get("frames_unsnapped", 0))
+            n_deleted = len(residual_collision_report.get("tracks_deleted_ids", []) or [])
+            if n_runs or n_unsnap or n_deleted:
+                print(
+                    f"[INFO] Residual collision resolver: {n_runs} run(s), "
+                    f"{n_unsnap} frame(s) un-snapped, {n_deleted} track(s) deleted "
+                    f"(elapsed {time.perf_counter() - t_residual:.2f}s)"
+                )
         # Final safety after overlap postprocess: some overlap repairs can
         # re-introduce low-motion teleport jumps.
         t_final_safety = time.perf_counter()
@@ -3287,6 +3327,54 @@ def parse_args() -> argparse.Namespace:
         help="Disable CARLA top-down image capture; use cache only.",
     )
     parser.set_defaults(capture_carla_image=False)
+    parser.add_argument(
+        "--carla-topdown-method",
+        type=str,
+        choices=["ortho", "tiled"],
+        default="ortho",
+        help=(
+            "How to capture the CARLA top-down image. 'ortho' (default): one wide-FOV "
+            "shot orthorectified using lane waypoints as 3D ground control points "
+            "(handles elevation exactly). 'tiled': legacy multi-tile near-orthographic "
+            "stitch (fast, but seams + ~5%% z-elevation distortion)."
+        ),
+    )
+    parser.add_argument(
+        "--carla-topdown-altitude",
+        type=float,
+        default=1500.0,
+        help="Camera altitude (m) for ortho capture.",
+    )
+    parser.add_argument(
+        "--carla-topdown-fov-deg",
+        type=float,
+        default=60.0,
+        help="Camera horizontal FOV (deg) for ortho capture.",
+    )
+    parser.add_argument(
+        "--carla-topdown-image-px",
+        type=int,
+        default=16384,
+        help="Captured camera image edge length (px) for ortho capture.",
+    )
+    parser.add_argument(
+        "--carla-topdown-waypoint-spacing-m",
+        type=float,
+        default=1.0,
+        help="Spacing (m) for the GCPs sampled from CARLA waypoints (ortho method).",
+    )
+    parser.add_argument(
+        "--carla-topdown-px-per-meter",
+        type=float,
+        default=10.0,
+        help="Output ortho image resolution (pixels per world meter).",
+    )
+    parser.add_argument(
+        "--carla-topdown-gamma",
+        type=float,
+        default=1.25,
+        help="Gamma correction applied to the captured image (>1 darkens midtones).",
+    )
     parser.add_argument(
         "--lane-correspondence-top-k",
         type=int,
@@ -4450,6 +4538,13 @@ def main() -> None:
                         raw_bounds=raw_bounds_tuple,
                         capture_enabled=bool(args.capture_carla_image),
                         carla_map_name=str(args.carla_map_name),
+                        method=str(args.carla_topdown_method),
+                        ortho_altitude=float(args.carla_topdown_altitude),
+                        ortho_fov_deg=float(args.carla_topdown_fov_deg),
+                        ortho_image_px=int(args.carla_topdown_image_px),
+                        ortho_waypoint_spacing_m=float(args.carla_topdown_waypoint_spacing_m),
+                        ortho_px_per_meter=float(args.carla_topdown_px_per_meter),
+                        ortho_gamma=float(args.carla_topdown_gamma),
                     )
                     if topdown_result is not None:
                         jpeg_bytes, img_raw_bounds = topdown_result

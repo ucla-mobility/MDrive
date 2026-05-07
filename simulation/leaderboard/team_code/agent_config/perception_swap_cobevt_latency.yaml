@@ -1,0 +1,16 @@
+# PerceptionSwapAgent — CoBEVT detector + BasicAgent planner
+# WITH communication latency ONLY (6 ticks @ 20 Hz = 300 ms).
+# See perception_swap_fcooper_latency.yaml for the methodology rationale.
+detector: cobevt
+planner: basicagent
+cooperative: true
+comm_range_m: 200
+max_cooperators: 4
+cruise_speed: 6.0
+score_threshold: 0.20
+detection_radius: 1.5
+collect_ap_metrics: true
+disable_brake: false
+log_tag: cobevt_latency
+
+comm_latency: 6

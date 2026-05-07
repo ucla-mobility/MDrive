@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-04-14-30-53_47_0" model="vehicle.volkswagen.t2" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-0.965851" roll="0.004564" time="1.300000" x="-468.192993" y="-62.126759" yaw="96.307498" z="11.218718" />
+  </route>
+</routes>

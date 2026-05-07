@@ -5263,3 +5263,722 @@ def _apply_overlap_dedup_pipeline(
         )
 
     return vehicles, vehicle_times, obj_info
+
+
+def _track_significance_score(track: Dict[str, object]) -> float:
+    """Higher = more important to keep. Used to pick a victim for deletion
+    when two vehicles collide and neither can be un-snapped without overlap."""
+    role = str(track.get("role", "")).strip().lower()
+    if role == "ego":
+        return 1e9  # never delete ego
+    n_frames = len(track.get("frames") or [])
+    parked_pen = -200.0 if _is_parked_vehicle_track_for_overlap(track) else 0.0
+    quasi_parked_pen = -80.0 if _is_quasi_parked_vehicle_track_for_overlap(track) else 0.0
+    # Long trajectories beat short ones; non-parked beats parked.
+    return float(n_frames) + parked_pen + quasi_parked_pen
+
+
+def _merge_duplicate_vehicle_tracks(
+    tracks: List[Dict[str, object]],
+    scenario_name: str = "",
+    verbose: bool = False,
+) -> Dict[str, object]:
+    """Detect and remove duplicate-detection tracks.
+
+    V2X-PnP-real often contains multiple sensor-agent detections of the same
+    physical vehicle that are propagated as separate tracks. They typically
+    overlap heavily in time and in space (center-to-center distance well
+    under one half-vehicle-length), and have correlated headings. The
+    downstream residual-collision resolver only fixes per-frame overlaps
+    — it cannot recognise that two whole tracks describe the same actor.
+
+    Heuristic: pair tracks A and B where, during their temporal overlap
+    (>=5 shared frames), median raw center-to-center distance <
+    `(L_a + L_b) * 0.45`, and median yaw difference < 35°. Drop the less
+    significant of the pair. Ego tracks are never dropped.
+    """
+    report: Dict[str, object] = {
+        "enabled": True,
+        "scenario": str(scenario_name),
+        "duplicate_pairs": [],
+        "tracks_dropped": [],
+    }
+    if _env_int("V2X_CARLA_DUPLICATE_TRACK_MERGE_ENABLED", 1, minimum=0, maximum=1) != 1:
+        report["enabled"] = False
+        return report
+
+    overlap_min_frames = _env_int(
+        "V2X_CARLA_DUPLICATE_TRACK_MIN_OVERLAP_FRAMES", 5, minimum=2, maximum=200,
+    )
+    median_dist_factor = _env_float(
+        "V2X_CARLA_DUPLICATE_TRACK_MEDIAN_DIST_FACTOR", 0.45,
+    )
+    yaw_match_deg = _env_float(
+        "V2X_CARLA_DUPLICATE_TRACK_YAW_MATCH_DEG", 35.0,
+    )
+
+    # Only consider vehicle/ego role tracks
+    vehicle_tracks: List[Dict[str, object]] = []
+    for tr in tracks:
+        if not isinstance(tr, dict):
+            continue
+        role = str(tr.get("role", "")).strip().lower()
+        if role in ("vehicle", "ego"):
+            vehicle_tracks.append(tr)
+
+    if len(vehicle_tracks) < 2:
+        return report
+
+    # Pre-extract per-track frame index → (rx, ry, ryaw, length, width)
+    def _idx_table(tr: Dict[str, object]) -> Tuple[Dict[int, Tuple[float, float, float]], float, float]:
+        out: Dict[int, Tuple[float, float, float]] = {}
+        L = float(tr.get("length", 4.5) or 4.5)
+        W = float(tr.get("width", 2.0) or 2.0)
+        frames = tr.get("frames") or []
+        for i, f in enumerate(frames):
+            if not isinstance(f, dict):
+                continue
+            rx = f.get("x"); ry = f.get("y"); ryaw = f.get("yaw")
+            try:
+                rx_v = float(rx); ry_v = float(ry); ryaw_v = float(ryaw)
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(rx_v) and math.isfinite(ry_v) and math.isfinite(ryaw_v)):
+                continue
+            # Use the frame's own time index when available (some pipelines
+            # have non-contiguous frame lists). Fall back to position.
+            t = f.get("t")
+            try:
+                key = int(round(float(t) * 100.0))  # 10ms buckets
+            except (TypeError, ValueError):
+                key = i
+            out[key] = (rx_v, ry_v, ryaw_v)
+        return out, L, W
+
+    tables: List[Tuple[Dict[str, object], Dict[int, Tuple[float, float, float]], float, float]] = []
+    for tr in vehicle_tracks:
+        tab, L, W = _idx_table(tr)
+        if tab:
+            tables.append((tr, tab, L, W))
+
+    drop_set: set = set()  # python ids of tracks to drop
+    pairs_recorded: List[Dict[str, object]] = []
+    spawn_coincident_thresh_m = _env_float(
+        "V2X_CARLA_DUPLICATE_TRACK_SPAWN_COINCIDENT_M", 1.5,
+    )
+    spawn_coincident_min_frames = _env_int(
+        "V2X_CARLA_DUPLICATE_TRACK_SPAWN_COINCIDENT_FRAMES", 3, minimum=1, maximum=20,
+    )
+    for i in range(len(tables)):
+        tr_i, tab_i, L_i, W_i = tables[i]
+        if id(tr_i) in drop_set:
+            continue
+        for j in range(i + 1, len(tables)):
+            tr_j, tab_j, L_j, W_j = tables[j]
+            if id(tr_j) in drop_set:
+                continue
+            shared_keys = set(tab_i.keys()) & set(tab_j.keys())
+            if len(shared_keys) < overlap_min_frames:
+                continue
+            sorted_shared = sorted(shared_keys)
+            dists: List[float] = []
+            yaw_diffs: List[float] = []
+            for k in sorted_shared:
+                xa, ya, yawa = tab_i[k]
+                xb, yb, yawb = tab_j[k]
+                dists.append(math.hypot(xa - xb, ya - yb))
+                d_yaw = ((yawb - yawa + 540.0) % 360.0) - 180.0
+                yaw_diffs.append(abs(d_yaw))
+            sorted_dists = sorted(dists); sorted_yaws = sorted(yaw_diffs)
+            med_d = sorted_dists[len(sorted_dists) // 2]
+            med_yaw = sorted_yaws[len(sorted_yaws) // 2]
+            threshold_dist = (L_i + L_j) * 0.5 * median_dist_factor + 0.4
+
+            # A) full-trajectory duplicate: median distance is small along the
+            #    whole shared window
+            full_dup = (med_d <= threshold_dist) and (med_yaw <= yaw_match_deg)
+
+            # B) spawn-coincident duplicate: same vehicle whose perception
+            #    track-ID flipped mid-recording — the first several frames
+            #    are near-identical, even if later they diverge.
+            n_head = min(int(spawn_coincident_min_frames + 4), len(sorted_shared))
+            head_max_d = max(dists[:n_head]) if dists[:n_head] else float("inf")
+            head_max_yaw = max(yaw_diffs[:n_head]) if yaw_diffs[:n_head] else 180.0
+            spawn_dup = (
+                head_max_d <= float(spawn_coincident_thresh_m)
+                and head_max_yaw <= yaw_match_deg
+                and len(sorted_shared) >= int(spawn_coincident_min_frames)
+            )
+            if not (full_dup or spawn_dup):
+                continue
+            # Pick which to drop. Never drop ego.
+            role_i = str(tr_i.get("role", "")).strip().lower()
+            role_j = str(tr_j.get("role", "")).strip().lower()
+            if role_i == "ego" and role_j == "ego":
+                # Different egos collocated — leave alone.
+                continue
+            if role_i == "ego":
+                drop_id = id(tr_j); keep_tr = tr_i; drop_tr = tr_j
+            elif role_j == "ego":
+                drop_id = id(tr_i); keep_tr = tr_j; drop_tr = tr_i
+            else:
+                # Higher significance score wins.
+                sig_i = _track_significance_score(tr_i)
+                sig_j = _track_significance_score(tr_j)
+                if sig_i >= sig_j:
+                    drop_id = id(tr_j); keep_tr = tr_i; drop_tr = tr_j
+                else:
+                    drop_id = id(tr_i); keep_tr = tr_j; drop_tr = tr_i
+            drop_set.add(drop_id)
+            pairs_recorded.append({
+                "keep_id": str(keep_tr.get("id", "?")),
+                "drop_id": str(drop_tr.get("id", "?")),
+                "median_dist_m": round(med_d, 3),
+                "median_yaw_diff_deg": round(med_yaw, 2),
+                "head_max_dist_m": round(head_max_d, 3),
+                "shared_frames": int(len(shared_keys)),
+                "threshold_dist_m": round(threshold_dist, 3),
+                "match_kind": "full" if full_dup else "spawn",
+            })
+
+    # C) Cross-time spawn coincidence: same vehicle re-IDed across a temporal
+    #    gap (e.g. perception lost track and re-acquired). Compares each pair's
+    #    frame[0] xy/yaw directly, regardless of t-key alignment. Only fires
+    #    when at least one of the two tracks is short (likely a re-ID sliver).
+    spawn_xy_thresh = _env_float("V2X_CARLA_DUPLICATE_TRACK_SPAWN_XY_THRESH_M", 1.2)
+    spawn_xt_yaw_deg = _env_float("V2X_CARLA_DUPLICATE_TRACK_SPAWN_XT_YAW_DEG", 35.0)
+    spawn_xt_short_max = _env_int(
+        "V2X_CARLA_DUPLICATE_TRACK_SPAWN_XT_SHORT_MAX_FRAMES",
+        25, minimum=2, maximum=200,
+    )
+    for i in range(len(tables)):
+        tr_i, tab_i, L_i, W_i = tables[i]
+        if id(tr_i) in drop_set:
+            continue
+        fi0 = (tr_i.get("frames") or [None])[0]
+        if not isinstance(fi0, dict):
+            continue
+        for j in range(i + 1, len(tables)):
+            tr_j, tab_j, L_j, W_j = tables[j]
+            if id(tr_j) in drop_set:
+                continue
+            fj0 = (tr_j.get("frames") or [None])[0]
+            if not isinstance(fj0, dict):
+                continue
+            try:
+                xa = float(fi0["x"]); ya = float(fi0["y"]); yawa = float(fi0["yaw"])
+                xb = float(fj0["x"]); yb = float(fj0["y"]); yawb = float(fj0["yaw"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            d0 = math.hypot(xa - xb, ya - yb)
+            if d0 > float(spawn_xy_thresh):
+                continue
+            dyaw0 = abs(((yawb - yawa + 540.0) % 360.0) - 180.0)
+            if dyaw0 > float(spawn_xt_yaw_deg):
+                continue
+            n_i = len(tr_i.get("frames") or [])
+            n_j = len(tr_j.get("frames") or [])
+            if min(n_i, n_j) > int(spawn_xt_short_max):
+                continue  # both long-lived → safer to leave alone
+            role_i = str(tr_i.get("role", "")).strip().lower()
+            role_j = str(tr_j.get("role", "")).strip().lower()
+            if role_i == "ego" and role_j == "ego":
+                continue
+            if role_i == "ego":
+                drop_id = id(tr_j); keep_tr = tr_i; drop_tr = tr_j
+            elif role_j == "ego":
+                drop_id = id(tr_i); keep_tr = tr_j; drop_tr = tr_i
+            else:
+                if n_i < n_j:
+                    drop_id = id(tr_i); keep_tr = tr_j; drop_tr = tr_i
+                elif n_j < n_i:
+                    drop_id = id(tr_j); keep_tr = tr_i; drop_tr = tr_j
+                else:
+                    sig_i = _track_significance_score(tr_i)
+                    sig_j = _track_significance_score(tr_j)
+                    if sig_i >= sig_j:
+                        drop_id = id(tr_j); keep_tr = tr_i; drop_tr = tr_j
+                    else:
+                        drop_id = id(tr_i); keep_tr = tr_j; drop_tr = tr_i
+            drop_set.add(drop_id)
+            pairs_recorded.append({
+                "keep_id": str(keep_tr.get("id", "?")),
+                "drop_id": str(drop_tr.get("id", "?")),
+                "frame0_dist_m": round(d0, 3),
+                "frame0_yaw_diff_deg": round(dyaw0, 2),
+                "shorter_n_frames": int(min(n_i, n_j)),
+                "match_kind": "spawn_xtime",
+            })
+
+    if drop_set:
+        # Mutate `tracks` in place: remove dropped entries.
+        kept: List[Dict[str, object]] = []
+        dropped_ids: List[str] = []
+        for tr in tracks:
+            if id(tr) in drop_set:
+                dropped_ids.append(str(tr.get("id", "?")))
+                continue
+            kept.append(tr)
+        tracks[:] = kept
+        report["tracks_dropped"] = dropped_ids
+    report["duplicate_pairs"] = pairs_recorded
+    return report
+
+
+def _resolve_residual_vehicle_collisions(
+    tracks: List[Dict[str, object]],
+    scenario_name: str = "",
+    verbose: bool = False,
+) -> Dict[str, object]:
+    """Final-pass collision resolver for vehicle/ego pairs.
+
+    After the upstream overlap reducer runs, any *remaining* sustained
+    collision is treated as a snap artifact. For each colliding pair:
+
+    1. Compute average snap displacement |(cx, cy) - (x, y)| per vehicle
+       across the colliding run. The vehicle with greater displacement is
+       furthest from its raw observation → most likely on the wrong lane.
+    2. Replace that vehicle's (cx, cy) with its raw (x, y) at those frames
+       (un-snap toward the actually-observed position).
+    3. Re-check OBB overlap. If now resolved, keep the un-snap. If still
+       overlapping (raw observations themselves were too close), delete
+       the LESS significant track.
+
+    Significance: ego >> long-trajectory moving > short moving > parked.
+    """
+    report: Dict[str, object] = {
+        "enabled": True,
+        "scenario": str(scenario_name),
+        "collision_runs": 0,
+        "frames_unsnapped": 0,
+        "tracks_unsnapped_ids": [],
+        "tracks_deleted_ids": [],
+    }
+    if _env_int("V2X_CARLA_RESIDUAL_COLLISION_RESOLVE_ENABLED", 1, minimum=0, maximum=1) != 1:
+        report["enabled"] = False
+        report["reason"] = "disabled_by_flag"
+        return report
+    if not isinstance(tracks, list) or len(tracks) < 2:
+        report["reason"] = "too_few_tracks"
+        return report
+
+    pen_thresh_m = _env_float("V2X_CARLA_RESIDUAL_PEN_THRESH_M", 0.12)
+    min_run_frames = _env_int("V2X_CARLA_RESIDUAL_MIN_COLLISION_FRAMES", 3, minimum=1, maximum=30)
+    safety_inflate_m = _env_float("V2X_CARLA_RESIDUAL_SAFETY_MARGIN_M", 0.10)
+    t_round_decimals = _env_int("V2X_CARLA_RESIDUAL_T_ROUND_DECIMALS", 2, minimum=1, maximum=4)
+    skip_parked_pairs = _env_int("V2X_CARLA_RESIDUAL_SKIP_PARKED_PAIRS", 1, minimum=0, maximum=1) == 1
+
+    # Build a per-track index (id, dims, time→frame_idx).
+    metas: List[Dict[str, object]] = []
+    for tr in tracks:
+        role = str(tr.get("role", "")).strip().lower()
+        if role not in ("vehicle", "ego"):
+            continue
+        frames = tr.get("frames") or []
+        if not frames:
+            continue
+        L, W = _vehicle_dims_for_overlap(tr)
+        L_eff = float(L) + float(safety_inflate_m)
+        W_eff = float(W) + float(safety_inflate_m)
+        t_to_fi: Dict[float, int] = {}
+        for fi, fr in enumerate(frames):
+            t_val = _safe_float(fr.get("t"), float("nan"))
+            if math.isfinite(t_val):
+                t_to_fi[round(float(t_val), int(t_round_decimals))] = int(fi)
+        metas.append({
+            "track": tr,
+            "id": str(tr.get("id", "")),
+            "role": role,
+            "L": L_eff,
+            "W": W_eff,
+            "t_to_fi": t_to_fi,
+            "n_frames": len(frames),
+            "is_parked": _is_parked_vehicle_track_for_overlap(tr),
+            "is_quasi_parked": _is_quasi_parked_vehicle_track_for_overlap(tr),
+        })
+    if len(metas) < 2:
+        report["reason"] = "fewer_than_2_vehicle_tracks"
+        return report
+
+    deleted_ids: set = set()
+
+    def _pose(meta: Dict[str, object], fi: int) -> Tuple[float, float, float, float, float]:
+        fr = meta["track"]["frames"][int(fi)]
+        cx = _safe_float(fr.get("cx"), float("nan"))
+        cy = _safe_float(fr.get("cy"), float("nan"))
+        cyaw = _safe_float(fr.get("cyaw"), _safe_float(fr.get("yaw"), 0.0))
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        # If snap missing, fall back to raw.
+        if not math.isfinite(cx) or not math.isfinite(cy):
+            cx, cy = x, y
+        return float(cx), float(cy), float(cyaw), float(x), float(y)
+
+    def _pen(ma, fi_a, mb, fi_b, *, use_raw_a=False, use_raw_b=False) -> float:
+        ax, ay, ayaw, axr, ayr = _pose(ma, fi_a)
+        bx, by, byaw, bxr, byr = _pose(mb, fi_b)
+        if use_raw_a and math.isfinite(axr) and math.isfinite(ayr):
+            ax, ay = axr, ayr
+        if use_raw_b and math.isfinite(bxr) and math.isfinite(byr):
+            bx, by = bxr, byr
+        if not all(math.isfinite(v) for v in (ax, ay, bx, by)):
+            return 0.0
+        return _obb_overlap_penetration_xyyaw(
+            ax, ay, ayaw, float(ma["L"]), float(ma["W"]),
+            bx, by, byaw, float(mb["L"]), float(mb["W"]),
+        )
+
+    def _snap_disp(meta, fi) -> float:
+        fr = meta["track"]["frames"][int(fi)]
+        cx = _safe_float(fr.get("cx"), float("nan"))
+        cy = _safe_float(fr.get("cy"), float("nan"))
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        if not all(math.isfinite(v) for v in (cx, cy, x, y)):
+            return 0.0
+        return float(math.hypot(cx - x, cy - y))
+
+    for i in range(len(metas)):
+        if metas[i]["id"] in deleted_ids:
+            continue
+        for j in range(i + 1, len(metas)):
+            if metas[i]["id"] in deleted_ids or metas[j]["id"] in deleted_ids:
+                continue
+            ma, mb = metas[i], metas[j]
+            if skip_parked_pairs and ma["is_parked"] and mb["is_parked"]:
+                continue  # parked-vs-parked is handled by upstream reducer
+
+            shared = sorted(set(ma["t_to_fi"]) & set(mb["t_to_fi"]))
+            if not shared:
+                continue
+
+            # Group consecutive collision frames into runs.
+            runs: List[List[Tuple[float, int, int]]] = []
+            cur: List[Tuple[float, int, int]] = []
+            for t_val in shared:
+                fi_a = ma["t_to_fi"][t_val]
+                fi_b = mb["t_to_fi"][t_val]
+                if _pen(ma, fi_a, mb, fi_b) >= float(pen_thresh_m):
+                    cur.append((t_val, fi_a, fi_b))
+                else:
+                    if len(cur) >= int(min_run_frames):
+                        runs.append(cur)
+                    cur = []
+            if len(cur) >= int(min_run_frames):
+                runs.append(cur)
+            if not runs:
+                continue
+
+            for run in runs:
+                report["collision_runs"] = int(report["collision_runs"]) + 1
+                # Average snap displacement → pick the more-snapped vehicle.
+                disp_a = sum(_snap_disp(ma, fa) for _, fa, _ in run) / float(len(run))
+                disp_b = sum(_snap_disp(mb, fb) for _, _, fb in run) / float(len(run))
+                # Strong preference: never modify a parked vehicle's position
+                # (it should stay locked to its static pose). If exactly one
+                # of the pair is parked, the OTHER one must absorb the fix.
+                a_parked = bool(ma["is_parked"]) or bool(ma["is_quasi_parked"])
+                b_parked = bool(mb["is_parked"]) or bool(mb["is_quasi_parked"])
+                if a_parked and not b_parked:
+                    fix_meta, fix_idx_run = mb, [fb for _, _, fb in run]
+                    keep_meta, keep_idx_run = ma, [fa for _, fa, _ in run]
+                    fix_is_a = False
+                elif b_parked and not a_parked:
+                    fix_meta, fix_idx_run = ma, [fa for _, fa, _ in run]
+                    keep_meta, keep_idx_run = mb, [fb for _, _, fb in run]
+                    fix_is_a = True
+                elif disp_a >= disp_b:
+                    fix_meta, fix_idx_run = ma, [fa for _, fa, _ in run]
+                    keep_meta, keep_idx_run = mb, [fb for _, _, fb in run]
+                    fix_is_a = True
+                else:
+                    fix_meta, fix_idx_run = mb, [fb for _, _, fb in run]
+                    keep_meta, keep_idx_run = ma, [fa for _, fa, _ in run]
+                    fix_is_a = False
+
+                # Try un-snapping: probe with raw_a / raw_b.
+                still_collide = False
+                for k, fi_fix in enumerate(fix_idx_run):
+                    fi_keep = keep_idx_run[k]
+                    if fix_is_a:
+                        pen_after = _pen(ma, fi_fix, mb, fi_keep, use_raw_a=True)
+                    else:
+                        pen_after = _pen(ma, fi_keep, mb, fi_fix, use_raw_b=True)
+                    if pen_after >= float(pen_thresh_m):
+                        still_collide = True
+                        break
+
+                if not still_collide:
+                    # Apply the un-snap to the fix vehicle's frames in this run.
+                    n_modified = 0
+                    for fi_fix in fix_idx_run:
+                        fr = fix_meta["track"]["frames"][fi_fix]
+                        x = _safe_float(fr.get("x"), float("nan"))
+                        y = _safe_float(fr.get("y"), float("nan"))
+                        if not (math.isfinite(x) and math.isfinite(y)):
+                            continue
+                        fr["cx"] = float(x)
+                        fr["cy"] = float(y)
+                        # Yaw: keep raw yaw if available; else current cyaw.
+                        raw_yaw = _safe_float(fr.get("yaw"), float("nan"))
+                        if math.isfinite(raw_yaw):
+                            fr["cyaw"] = float(raw_yaw)
+                        fr["csource"] = "collision_unsnap"
+                        fr["collision_unsnap"] = True
+                        n_modified += 1
+                    if n_modified > 0:
+                        report["frames_unsnapped"] = int(report["frames_unsnapped"]) + int(n_modified)
+                        ids_list = report["tracks_unsnapped_ids"]  # type: ignore
+                        if isinstance(ids_list, list) and fix_meta["id"] not in ids_list:
+                            ids_list.append(fix_meta["id"])
+                        # Smooth the boundary transitions back to the surrounding
+                        # snapped trajectory using shape-preserving blend.
+                        # _shape_preserving_blend is exported from runtime_projection
+                        # via the module wildcard import at file top.
+                        boundary_radius = 3
+                        fix_frames = fix_meta["track"]["frames"]
+                        s_run = int(min(fix_idx_run))
+                        e_run = int(max(fix_idx_run))
+                        if s_run - boundary_radius >= 0:
+                            _shape_preserving_blend(  # type: ignore[name-defined]
+                                fix_frames,
+                                s_run - boundary_radius,
+                                s_run,
+                                "collision_unsnap_boundary",
+                            )
+                        if e_run + boundary_radius < len(fix_frames):
+                            _shape_preserving_blend(  # type: ignore[name-defined]
+                                fix_frames,
+                                e_run,
+                                e_run + boundary_radius,
+                                "collision_unsnap_boundary",
+                            )
+                    if verbose:
+                        print(
+                            f"[COLLISION] un-snapped {fix_meta['id']} for "
+                            f"{n_modified} frame(s) (collision with {keep_meta['id']})"
+                        )
+                else:
+                    # Un-snap doesn't help → delete the less significant track.
+                    sig_a = _track_significance_score(ma["track"])
+                    sig_b = _track_significance_score(mb["track"])
+                    loser_meta = ma if sig_a < sig_b else mb
+                    deleted_ids.add(loser_meta["id"])
+                    ids_list = report["tracks_deleted_ids"]  # type: ignore
+                    if isinstance(ids_list, list):
+                        ids_list.append(loser_meta["id"])
+                    if verbose:
+                        survivor = mb if loser_meta is ma else ma
+                        print(
+                            f"[COLLISION] deleting {loser_meta['id']} "
+                            f"(collides with {survivor['id']}, un-snap insufficient, "
+                            f"sig_a={sig_a:.0f} sig_b={sig_b:.0f})"
+                        )
+                    # Move on to next pair (the loser is removed, no further runs).
+                    break
+
+    # Apply deletions.
+    if deleted_ids:
+        original_n = len(tracks)
+        tracks[:] = [t for t in tracks if str(t.get("id", "")) not in deleted_ids]
+        if verbose:
+            print(f"[COLLISION] Removed {original_n - len(tracks)} track(s) from dataset")
+
+    # Raw-teleport trim: drop frames where raw position teleports by an
+    # impossible distance in one timestep (e.g., perception track-ID mix-up
+    # where a far-away detection gets the same ID as our actor). At 10 Hz
+    # with dt=0.1 s, even 50 m/s ≈ 180 km/h is only 5 m/frame — anything
+    # over the threshold is a track confusion, not real motion.
+    if _env_int("V2X_CARLA_RESIDUAL_RAW_TELEPORT_TRIM_ENABLED", 1, minimum=0, maximum=1) == 1:
+        teleport_thresh_m = _env_float("V2X_CARLA_RESIDUAL_RAW_TELEPORT_THRESH_M", 10.0)
+        for tr in tracks:
+            role = str(tr.get("role", "")).strip().lower()
+            if role not in ("vehicle", "ego"):
+                continue
+            frames_t = tr.get("frames") or []
+            if len(frames_t) < 4:
+                continue
+            n_frames_t = len(frames_t)
+            # Find first/last frame in the longest contiguous run of "no
+            # teleports". Drop frames outside that run — preserves the
+            # main trajectory and discards any teleport-prefix or suffix.
+            best_run = (0, n_frames_t - 1)
+            best_len = 0
+            cur_start = 0
+            for i in range(1, n_frames_t):
+                f0 = frames_t[i - 1]; f1 = frames_t[i]
+                x0 = _safe_float(f0.get("x"), float("nan"))
+                y0 = _safe_float(f0.get("y"), float("nan"))
+                x1 = _safe_float(f1.get("x"), float("nan"))
+                y1 = _safe_float(f1.get("y"), float("nan"))
+                if not all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+                    continue
+                step = math.hypot(x1 - x0, y1 - y0)
+                if step > float(teleport_thresh_m):
+                    run_len = i - 1 - cur_start
+                    if run_len > best_len:
+                        best_len = run_len
+                        best_run = (cur_start, i - 1)
+                    cur_start = i
+            run_len = n_frames_t - 1 - cur_start
+            if run_len > best_len:
+                best_run = (cur_start, n_frames_t - 1)
+                best_len = run_len
+            s_run, e_run = best_run
+            if best_len < 4:
+                continue
+            # If the longest non-teleport run isn't the entire track, trim.
+            if s_run > 0 or e_run < (n_frames_t - 1):
+                tr["frames"] = frames_t[s_run : e_run + 1]
+
+    # If a track had ANY frames un-snapped to raw by the collision resolver,
+    # propagate the un-snap to the whole track. The user's principle:
+    # "collision usually means the lanes aren't what we think — the right
+    # answer is a long-term lane assumption change, not a brief jump out of
+    # a lane to dodge a single colliding frame."
+    #
+    # Only fires when the un-snapped frames represent a meaningful portion of
+    # the track (>= MIN_FRAC) and the snap is otherwise far enough from raw
+    # that the snap is genuinely contested (median snap_disp > MIN_DISP).
+    if _env_int("V2X_CARLA_RESIDUAL_PROPAGATE_UNSNAP_ENABLED", 1, minimum=0, maximum=1) == 1:
+        prop_min_frac = _env_float("V2X_CARLA_RESIDUAL_PROPAGATE_UNSNAP_MIN_FRAC", 0.05)
+        prop_min_disp_m = _env_float("V2X_CARLA_RESIDUAL_PROPAGATE_UNSNAP_MIN_DISP_M", 0.7)
+        for tr in tracks:
+            role = str(tr.get("role", "")).strip().lower()
+            if role not in ("vehicle", "ego"):
+                continue
+            frames_t = tr.get("frames") or []
+            if len(frames_t) < 6:
+                continue
+            n_un = sum(
+                1
+                for fr in frames_t
+                if str(fr.get("csource", "")).startswith("collision_unsnap")
+            )
+            if n_un == 0:
+                continue
+            if n_un < prop_min_frac * len(frames_t):
+                continue
+            # Median snap_disp guard — only propagate when snap is consistently
+            # offset from raw (otherwise we'd be erasing valid snapping).
+            disps: List[float] = []
+            for fr in frames_t:
+                cx = _safe_float(fr.get("cx"), float("nan"))
+                cy = _safe_float(fr.get("cy"), float("nan"))
+                x = _safe_float(fr.get("x"), float("nan"))
+                y = _safe_float(fr.get("y"), float("nan"))
+                if all(math.isfinite(v) for v in (cx, cy, x, y)):
+                    disps.append(math.hypot(cx - x, cy - y))
+            if not disps:
+                continue
+            sorted_disps = sorted(disps)
+            med = sorted_disps[len(sorted_disps) // 2]
+            if med < float(prop_min_disp_m):
+                continue
+            # Force the rest of the frames to raw too — long-term lane change.
+            for fr in frames_t:
+                cs = str(fr.get("csource", ""))
+                if cs.startswith("collision_unsnap"):
+                    continue
+                x = _safe_float(fr.get("x"), float("nan"))
+                y = _safe_float(fr.get("y"), float("nan"))
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    continue
+                fr["cx"] = float(x)
+                fr["cy"] = float(y)
+                raw_yaw = _safe_float(fr.get("yaw"), float("nan"))
+                if math.isfinite(raw_yaw):
+                    fr["cyaw"] = float(raw_yaw)
+                fr["csource"] = "collision_unsnap_propagated"
+                fr["collision_unsnap_propagated"] = True
+
+    # Force-to-raw fallback for tracks where snap is consistently far from raw.
+    # If median snap-displacement > threshold, the snapper picked a wrong lane
+    # entirely (no nearby CARLA lane fits the raw trajectory). The collision
+    # logic may have un-snapped a few frames but left others at the wrong
+    # offset, creating zigzag. Force-snap all to raw to keep the trajectory
+    # continuous with raw observations.
+    if _env_int("V2X_CARLA_RESIDUAL_FORCE_RAW_FOR_BAD_SNAP_ENABLED", 1, minimum=0, maximum=1) == 1:
+        force_raw_med_thresh = _env_float("V2X_CARLA_RESIDUAL_FORCE_RAW_MEDIAN_THRESH_M", 2.5)
+        for tr in tracks:
+            role = str(tr.get("role", "")).strip().lower()
+            if role not in ("vehicle", "ego"):
+                continue
+            frames_t = tr.get("frames") or []
+            if len(frames_t) < 6:
+                continue
+            disps: List[float] = []
+            for fr in frames_t:
+                cx = _safe_float(fr.get("cx"), float("nan"))
+                cy = _safe_float(fr.get("cy"), float("nan"))
+                x = _safe_float(fr.get("x"), float("nan"))
+                y = _safe_float(fr.get("y"), float("nan"))
+                if all(math.isfinite(v) for v in (cx, cy, x, y)):
+                    disps.append(math.hypot(cx - x, cy - y))
+            if len(disps) < 6:
+                continue
+            sorted_disps = sorted(disps)
+            med = sorted_disps[len(sorted_disps) // 2]
+            if med < float(force_raw_med_thresh):
+                continue
+            # Snap is consistently wrong — fall back to raw for the whole track.
+            for fr in frames_t:
+                x = _safe_float(fr.get("x"), float("nan"))
+                y = _safe_float(fr.get("y"), float("nan"))
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    continue
+                fr["cx"] = float(x)
+                fr["cy"] = float(y)
+                raw_yaw = _safe_float(fr.get("yaw"), float("nan"))
+                if math.isfinite(raw_yaw):
+                    fr["cyaw"] = float(raw_yaw)
+                fr["csource"] = "force_raw_bad_snap"
+                fr["force_raw_bad_snap"] = True
+
+    # Snap-outlier trim. If most frames have snap ≈ raw (median snap_disp
+    # below threshold), any frame whose snap_disp is much larger is a snap
+    # outlier from spawn/teardown that should match the rest of the track.
+    # Force such outliers to raw. The MEDIAN guard makes this safe for
+    # legitimately-snapped tracks (which have non-trivial median disp).
+    if _env_int("V2X_CARLA_RESIDUAL_OUTLIER_TRIM_ENABLED", 1, minimum=0, maximum=1) == 1:
+        outlier_thresh_m = _env_float("V2X_CARLA_RESIDUAL_OUTLIER_TRIM_THRESH_M", 1.5)
+        max_median_disp_m = _env_float("V2X_CARLA_RESIDUAL_OUTLIER_TRIM_MAX_MEDIAN_M", 0.4)
+        for tr in tracks:
+            role = str(tr.get("role", "")).strip().lower()
+            if role not in ("vehicle", "ego"):
+                continue
+            frames_t = tr.get("frames") or []
+            if len(frames_t) < 6:
+                continue
+            disps: List[Tuple[int, float]] = []
+            for fi, fr in enumerate(frames_t):
+                cx = _safe_float(fr.get("cx"), float("nan"))
+                cy = _safe_float(fr.get("cy"), float("nan"))
+                x = _safe_float(fr.get("x"), float("nan"))
+                y = _safe_float(fr.get("y"), float("nan"))
+                if all(math.isfinite(v) for v in (cx, cy, x, y)):
+                    disps.append((fi, math.hypot(cx - x, cy - y)))
+            if len(disps) < 6:
+                continue
+            sorted_disps = sorted(d for _, d in disps)
+            med = sorted_disps[len(sorted_disps) // 2]
+            if med >= float(max_median_disp_m):
+                continue  # most frames not on raw → not the spawn-outlier pattern
+            # Force outlier frames to raw.
+            for fi, dval in disps:
+                if dval > float(outlier_thresh_m):
+                    fr = frames_t[fi]
+                    x = _safe_float(fr.get("x"), float("nan"))
+                    y = _safe_float(fr.get("y"), float("nan"))
+                    if math.isfinite(x) and math.isfinite(y):
+                        fr["cx"] = float(x)
+                        fr["cy"] = float(y)
+                        raw_yaw = _safe_float(fr.get("yaw"), float("nan"))
+                        if math.isfinite(raw_yaw):
+                            fr["cyaw"] = float(raw_yaw)
+                        fr["csource"] = "outlier_trim_to_raw"
+                        fr["outlier_trim_to_raw"] = True
+
+    return report
+
+    return vehicles, vehicle_times, obj_info

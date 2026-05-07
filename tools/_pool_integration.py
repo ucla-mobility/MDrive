@@ -39,11 +39,29 @@ from typing import Any, Callable, Iterable, Optional, Sequence
 log = logging.getLogger(__name__)
 
 
+# Module-level registry so out-of-module watchdogs (EmergencyGuard) can
+# read pool counters without coupling to the constructor call site.
+# Mirrors the get_active_pool() pattern in tools/_carla_pool.py.
+_active_reporter: "_PoolStatusReporter | None" = None
+_active_reporter_lock = threading.Lock()
+
+
+def get_active_reporter() -> "_PoolStatusReporter | None":
+    """Return the currently-active _PoolStatusReporter, or None if the pool
+    hasn't been constructed yet (early warmup / no scenario-pool run)."""
+    with _active_reporter_lock:
+        return _active_reporter
+
+
 class _PoolStatusReporter:
     """Compact operator-facing status lines for the scenario pool."""
 
     def __init__(self, *, total_jobs: int) -> None:
         self._lock = threading.Lock()
+        # Register as the active reporter so EmergencyGuard can see us.
+        global _active_reporter
+        with _active_reporter_lock:
+            _active_reporter = self
         self._total_jobs = max(0, int(total_jobs))
         self._carla_starting = 0
         self._carla_ready = 0
@@ -99,6 +117,16 @@ class _PoolStatusReporter:
             ):
                 return
             print(self._format_line(event=event, detail=detail), flush=True)
+
+    def get_evals_ok(self) -> int:
+        """Return the current count of successful evaluator runs.
+
+        Read under the reporter lock so callers see a consistent value
+        even if the pool is mid-update on another thread. Used by
+        EmergencyGuard's no-ok-progress detector.
+        """
+        with self._lock:
+            return int(self._evals_ok)
 
     def emit_failure_breakdown(self) -> None:
         """Print a breakdown of total failure attempts by decision_reason.
@@ -1608,7 +1636,13 @@ def _tail_has_planner_route_command_none(text: str) -> bool:
 # not retried.  The matching is case-insensitive substring.
 _DETERMINISTIC_FAILURE_MARKERS: tuple[tuple[str, str], ...] = (
     # Scenario-data: the route XML could not be densified
-    ("ego route alignment failed", "scenario_data:alignment_failed"),
+    # NOTE: "ego route alignment failed" disabled — this fires on transient
+    # CARLA RPC timeouts during the pre-scenario alignment step. The basic
+    # perception_swap pool ran the same scenarioset successfully when these
+    # warnings were present. Treating it as deterministic locks out cells
+    # that would succeed on a fresh CARLA. Re-enable only if you see
+    # genuinely-broken route XMLs that fail every retry regardless of CARLA.
+    # ("ego route alignment failed", "scenario_data:alignment_failed"),
     ("dense trace too short", "scenario_data:dense_trace_too_short"),
     ("refusing to run the scenario on unaligned routes", "scenario_data:alignment_failed"),
     # Scenario-data: ego XMLs don't cover the requested ego count
@@ -1627,7 +1661,12 @@ _DETERMINISTIC_FAILURE_MARKERS: tuple[tuple[str, str], ...] = (
      "planner_code:pdm_location_typeerror"),
     # Planner environment: the planner's Python import graph is broken
     # (missing package, wrong conda env).  Retrying can't fix it.
-    ("modulenotfounderror:", "planner_env:module_not_found"),
+    # NOTE: "modulenotfounderror:" disabled — also fires when codriving's
+    # subprocess hits a CUDA-init transient that surfaces the symptom
+    # later in the import chain. Locking out blocks recoverable runs
+    # (e.g. 2023-04-04-14-33-53_50_0/codriving). Other 3 markers below
+    # remain active because they're more specific.
+    # ("modulenotfounderror:", "planner_env:module_not_found"),
     # ImportError must be more specific to avoid matching warning-level log noise
     ("importerror: cannot import name", "planner_env:import_error"),
     ("no module named ", "planner_env:module_not_found"),

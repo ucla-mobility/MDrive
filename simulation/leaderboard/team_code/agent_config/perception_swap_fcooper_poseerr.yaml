@@ -1,0 +1,39 @@
+# PerceptionSwapAgent — F-Cooper detector + BasicAgent planner
+# WITH cooperator pose error ONLY (no comm latency).
+#
+# Methodology — high end of the standard codriving / colmdriver / V2Xverse
+# noise sweep:
+#   pos_std = 0.6 m, rot_std = 0.6° Gaussian
+#   (codriving sweep MAX, see codriving/tools/inference_e2e_w_noise.py:170-171:
+#    pos_std_list = [0, 0.2, 0.4, 0.6])
+#
+# Implementation matches opencood.utils.pose_utils.add_noise_data_dict exactly:
+# every agent (primary + cooperators) gets independent Gaussian noise on its
+# [x, y, yaw] before pairwise transforms are computed; the AP collector
+# evaluates against GT using the CLEAN primary pose (so primary noise cancels
+# in the metric — only cooperator-feature warping is degraded, identical to
+# codriving's use of `lidar_pose_clean` for ground-truth alignment).
+#
+# Pair this with perception_swap_<det>_latency.yaml (separate experiment) to
+# isolate the two failure modes.
+detector: fcooper
+planner: basicagent
+cooperative: true
+comm_range_m: 200
+max_cooperators: 4
+cruise_speed: 6.0
+score_threshold: 0.20
+detection_radius: 1.5
+collect_ap_metrics: true
+disable_brake: false
+
+# Distinct log_tag so /tmp/perception_swap_* outputs don't clobber the
+# clean-baseline run's outputs in a parallel matrix.
+log_tag: fcooper_poseerr
+
+pose_error:
+  pos_std: 0.6
+  rot_std: 0.6
+  pos_mean: 0.0
+  rot_mean: 0.0
+  use_laplace: false

@@ -57,13 +57,23 @@ def _build_passthrough_route(world, locations, yaws):
     and inserts spurious lane-change/back-jump artefacts on top of the smooth
     trace produced by tools/route_alignment.align_route.
 
+    By default every dense waypoint is tagged ``RoadOption.LANEFOLLOW`` (matching
+    the original behaviour of this fast path). When ``CUSTOM_ENRICH_ROAD_OPTIONS=1``
+    is set, the dense XY trace is preserved verbatim but each waypoint is
+    re-labelled with the proper ``RoadOption`` (LEFT/RIGHT/STRAIGHT/CHANGELANE_*)
+    obtained from ``GlobalRoutePlanner.trace_route`` between adjacent input
+    locations. This restores the high-level command signal that nuScenes /
+    Bench2Drive-trained agents (UniAD, VAD) consume as a turn-anticipation
+    input. The dense XY positions and yaws produced by ``align_route`` are
+    untouched — only the discrete RoadOption tags change.
+
     locations: list[carla.Location]   from config.trajectory (per-ego)
     yaws:      list[float|None]|None  from config.multi_traj_yaws[i] / .trajectory_yaws
     """
     from leaderboard.utils.route_manipulation import _get_latlon_ref, location_route_to_gps
 
     n = len(locations)
-    route = []
+    transforms = []
     for idx, loc in enumerate(locations):
         yaw = None
         if yaws is not None and idx < len(yaws):
@@ -77,14 +87,172 @@ def _build_passthrough_route(world, locations, yaws):
                 dx = float(loc.x) - float(locations[idx - 1].x)
                 dy = float(loc.y) - float(locations[idx - 1].y)
             yaw = math.degrees(math.atan2(dy, dx)) if (dx or dy) else 0.0
-        transform = carla.Transform(
+        transforms.append(carla.Transform(
             carla.Location(x=float(loc.x), y=float(loc.y), z=float(loc.z)),
             carla.Rotation(yaw=float(yaw)),
-        )
-        route.append((transform, RoadOption.LANEFOLLOW))
+        ))
+
+    # Integration fix (default ON): without enrichment, the fast-path leaves
+    # every waypoint tagged LANEFOLLOW, so end-to-end planners (UniAD/VAD)
+    # never see turn cues at junctions and drive straight through curves.
+    # Set CUSTOM_ENRICH_ROAD_OPTIONS=0 to restore the legacy LANEFOLLOW-only
+    # behaviour (matches the broken-integration baseline state).
+    enrich_flag = os.environ.get("CUSTOM_ENRICH_ROAD_OPTIONS", "1") == "1"
+    if enrich_flag:
+        try:
+            road_options = _enrich_road_options_from_map(world, transforms, locations)
+        except Exception as exc:  # pylint: disable=broad-except
+            print(
+                "[_build_passthrough_route] RoadOption enrichment failed "
+                f"({type(exc).__name__}: {exc}); falling back to LANEFOLLOW for all "
+                f"{n} waypoints"
+            )
+            road_options = [RoadOption.LANEFOLLOW] * n
+    else:
+        road_options = [RoadOption.LANEFOLLOW] * n
+
+    route = list(zip(transforms, road_options))
     lat_ref, lon_ref = _get_latlon_ref(world)
     gps = location_route_to_gps(route, lat_ref, lon_ref)
     return gps, route
+
+
+def _enrich_road_options_from_map(world, transforms, locations):
+    """Assign proper RoadOption tags to a pre-computed dense waypoint trace,
+    using ONLY the dense trace itself + CARLA's HD map (no route planner).
+
+    Why no GRP: the whole point of the precomputed-dense path is to bypass GRP's
+    A* re-snapping. Calling GRP back here would (a) re-introduce the same
+    inconsistency we paid the bypass to avoid and (b) failed in practice on
+    smooth roundabout traces (GRP between adjacent ~2m dense waypoints stays
+    in lane and reports LANEFOLLOW even at the roundabout entry).
+
+    Strategy — purely waypoint-local, map-aware:
+      1. For each dense waypoint, query the closest map waypoint and check
+         ``carla.Waypoint.is_junction``. Junction-resident waypoints are
+         candidates for LEFT/RIGHT/STRAIGHT.
+      2. For each contiguous junction run, compute the signed yaw change
+         between the dense waypoint just BEFORE the run and the dense waypoint
+         just AFTER it. The sign+magnitude classifies the maneuver:
+            |Δyaw| < ``STRAIGHT_DEG``  →  STRAIGHT (proceed across intersection)
+            Δyaw > +``STRAIGHT_DEG``   →  LEFT     (CARLA convention: +yaw turns left)
+            Δyaw < −``STRAIGHT_DEG``   →  RIGHT
+         All waypoints inside the run get that single label.
+      3. Lane-change detection (outside junctions): if the closest map
+         waypoint's ``lane_id`` differs from the previous dense waypoint's,
+         tag a brief CHANGELANELEFT or CHANGELANERIGHT span based on the sign
+         of the lateral offset.
+      4. Everything else: LANEFOLLOW.
+
+    The resulting tag sequence on a roundabout entry typically looks like:
+        LANEFOLLOW × M  →  LEFT × K  →  LANEFOLLOW × J (circling inside)  →  LANEFOLLOW × ...
+
+    On a left turn at a regular signalized intersection:
+        LANEFOLLOW × M  →  LEFT × K  →  LANEFOLLOW × ...
+
+    Dense XY/yaw/z positions are preserved bit-exactly. Only the discrete
+    RoadOption tag changes.
+    """
+    STRAIGHT_DEG = 25.0  # |yaw change across a junction| below this is "STRAIGHT"
+
+    n = len(transforms)
+    if n == 0:
+        return []
+
+    world_map = world.get_map()
+
+    # Step 1 — per-waypoint map info
+    is_junction: List[bool] = []
+    lane_ids: List[int] = []
+    road_ids: List[int] = []
+    for tf in transforms:
+        try:
+            wp = world_map.get_waypoint(tf.location, project_to_road=True)
+            is_junction.append(bool(wp.is_junction))
+            lane_ids.append(int(wp.lane_id))
+            road_ids.append(int(wp.road_id))
+        except Exception:  # pylint: disable=broad-except
+            is_junction.append(False)
+            lane_ids.append(0)
+            road_ids.append(0)
+
+    # Step 2 — find contiguous junction runs and classify each by signed yaw change
+    out: List["RoadOption"] = [RoadOption.LANEFOLLOW] * n
+    i = 0
+    while i < n:
+        if not is_junction[i]:
+            i += 1
+            continue
+        # Find end of this junction run
+        j = i
+        while j + 1 < n and is_junction[j + 1]:
+            j += 1
+
+        # Take dense waypoints just before (i-1) and just after (j+1) the run
+        # to measure the maneuver's signed yaw change.
+        before_idx = max(0, i - 1)
+        after_idx = min(n - 1, j + 1)
+        yaw_before = float(transforms[before_idx].rotation.yaw)
+        yaw_after = float(transforms[after_idx].rotation.yaw)
+        # Wrap to (-180, 180]
+        d = (yaw_after - yaw_before + 540.0) % 360.0 - 180.0
+
+        if d > STRAIGHT_DEG:
+            opt = RoadOption.LEFT
+        elif d < -STRAIGHT_DEG:
+            opt = RoadOption.RIGHT
+        else:
+            opt = RoadOption.STRAIGHT
+
+        for k in range(i, j + 1):
+            out[k] = opt
+        i = j + 1
+
+    # Step 3 — outside junctions: detect lane-change runs by lane_id changes
+    # within a stable road_id (avoids tagging junction-internal lane numbering).
+    # We mark a single waypoint at the change with CHANGELANE_*; the surrounding
+    # dense waypoints stay LANEFOLLOW. Direction is inferred from the lateral
+    # offset between consecutive dense XY positions in the local lane frame.
+    for k in range(1, n):
+        if is_junction[k] or is_junction[k - 1]:
+            continue
+        if road_ids[k] != road_ids[k - 1]:
+            continue
+        if lane_ids[k] == lane_ids[k - 1]:
+            continue
+        # Use sign of lane_id delta. CARLA convention: lane_id increases away
+        # from road centerline in one direction; sign depends on driving side.
+        # As a robust fallback, check the lateral offset of the new dense
+        # waypoint relative to the previous one's heading.
+        prev = transforms[k - 1]
+        cur = transforms[k]
+        dx = cur.location.x - prev.location.x
+        dy = cur.location.y - prev.location.y
+        yaw = math.radians(float(prev.rotation.yaw))
+        # Lateral offset (left positive) in prev's local frame:
+        lateral = -math.sin(yaw) * dx + math.cos(yaw) * dy
+        if lateral > 0.05:
+            out[k] = RoadOption.CHANGELANELEFT
+        elif lateral < -0.05:
+            out[k] = RoadOption.CHANGELANERIGHT
+        # else: leave as LANEFOLLOW (lane_id changed without lateral motion;
+        # likely a map-side discontinuity, not a real lane change)
+
+    # Diagnostic
+    try:
+        from collections import Counter
+        c = Counter(o for o in out)
+        readable = {str(k).split(".")[-1]: v for k, v in c.items()}
+        # Also report junction span info for sanity
+        n_junc = sum(1 for j in is_junction if j)
+        print(
+            f"[_build_passthrough_route] enriched RoadOption distribution "
+            f"(n={len(out)}, n_junction_wp={n_junc}): {readable}"
+        )
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    return out
 
 
 def _resolve_ground_z(world: Optional[carla.World], location: carla.Location) -> Optional[float]:
@@ -5257,10 +5425,16 @@ class RouteScenario(BasicScenario):
             "true",
             "yes",
         )
-        log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in (
-            "1",
-            "true",
-            "yes",
+        # Ego physics disable + LogReplayFollower require BOTH env vars now.
+        # The new "frame-0 metrics + closed-loop drive" pattern sets only
+        # CUSTOM_EGO_LOG_REPLAY=1 (so per-tick prediction dump fires) but
+        # leaves CUSTOM_OPENLOOP_TELEPORT off, which kept scenario_manager's
+        # neutral-control suppression off but did NOT stop this file from
+        # disabling ego physics — the ego sat motionless under full throttle.
+        # Match scenario_manager._openloop_mode so closed-loop driving works.
+        log_replay_ego = (
+            os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
+            and os.environ.get("CUSTOM_OPENLOOP_TELEPORT", "").lower() in ("1", "true", "yes")
         )
         try:
             vehicle_ground_lift = float(os.environ.get("CUSTOM_VEHICLE_GROUND_LIFT", "0.04"))
@@ -7064,10 +7238,12 @@ class RouteScenario(BasicScenario):
         """
         scenario_trigger_distance = 1.5  # Max trigger distance between route and scenario
         behavior = []
-        log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in (
-            "1",
-            "true",
-            "yes",
+        # Same gate as line 5423 — both env vars required so the LogReplayFollower
+        # behavior tree only fires for true full-trajectory openloop, not the
+        # frame-0-metrics + closed-loop-drive pattern.
+        log_replay_ego = (
+            os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
+            and os.environ.get("CUSTOM_OPENLOOP_TELEPORT", "").lower() in ("1", "true", "yes")
         )
         normalize_ego_z = os.environ.get("CUSTOM_EGO_NORMALIZE_Z", "").lower() in (
             "1",
@@ -7338,12 +7514,27 @@ class RouteScenario(BasicScenario):
         """
         """
         criteria_all = []
-        log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in (
-            "1",
-            "true",
-            "yes",
+        # Same gate as line 5423 — criteria's terminate_on_failure flag should
+        # match the actual ego control mode (closed-loop in the new frame-0
+        # pattern, replay-only in legacy full-trajectory openloop).
+        log_replay_ego = (
+            os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
+            and os.environ.get("CUSTOM_OPENLOOP_TELEPORT", "").lower() in ("1", "true", "yes")
         )
         for ego_vehicle_id in range(len(self.list_scenarios)):
+            # GUARD: skip ego_vehicle_id if its actor reference is missing,
+            # or if attaching the collision sensor raises "parent actor not
+            # found" (CARLA `is_alive` lies after world reloads — only the
+            # spawn_actor call surfaces the truth). Without this guard, a
+            # 2nd-pass init after partial teardown crashes the whole route
+            # and the pool misclassifies it as
+            # deterministic:scenario_data:alignment_failed.
+            if ego_vehicle_id >= len(self.ego_vehicles):
+                print(f"[_create_test_criteria] skip ego_vehicle_id={ego_vehicle_id}: "
+                      f"index out of range (have {len(self.ego_vehicles)} ego refs)")
+                criteria_all.append([])
+                continue
+            _ego_ref = self.ego_vehicles[ego_vehicle_id]
             criteria = []
             route = convert_transform_to_location(self.route[ego_vehicle_id])
             if log_replay_ego and ego_vehicle_id < len(self._ego_replay_transforms):
@@ -7357,20 +7548,32 @@ class RouteScenario(BasicScenario):
                         replay_route.append((carla.Location(x=loc.x, y=loc.y, z=loc.z), RoadOption.LANEFOLLOW))
                     if len(replay_route) >= 2:
                         route = replay_route
-            collision_criterion = CollisionTest(self.ego_vehicles[ego_vehicle_id], terminate_on_failure=False)
+            try:
+                collision_criterion = CollisionTest(self.ego_vehicles[ego_vehicle_id], terminate_on_failure=False)
 
-            route_criterion = InRouteTest(self.ego_vehicles[ego_vehicle_id],
-                                        route=route,
-                                        offroad_max=30,
-                                        terminate_on_failure=not log_replay_ego)
-                                        
-            completion_criterion = RouteCompletionTest(self.ego_vehicles[ego_vehicle_id], route=route)
+                route_criterion = InRouteTest(self.ego_vehicles[ego_vehicle_id],
+                                            route=route,
+                                            offroad_max=30,
+                                            terminate_on_failure=not log_replay_ego)
 
-            outsidelane_criterion = OutsideRouteLanesTest(self.ego_vehicles[ego_vehicle_id], route=route)
+                completion_criterion = RouteCompletionTest(self.ego_vehicles[ego_vehicle_id], route=route)
 
-            red_light_criterion = RunningRedLightTest(self.ego_vehicles[ego_vehicle_id])
+                outsidelane_criterion = OutsideRouteLanesTest(self.ego_vehicles[ego_vehicle_id], route=route)
 
-            stop_criterion = RunningStopTest(self.ego_vehicles[ego_vehicle_id])
+                red_light_criterion = RunningRedLightTest(self.ego_vehicles[ego_vehicle_id])
+
+                stop_criterion = RunningStopTest(self.ego_vehicles[ego_vehicle_id])
+            except RuntimeError as _e:
+                # "unable to attach actor: parent actor not found" or similar
+                # CARLA-side error means this ego's actor is already gone.
+                # Skip its criteria — the route loop will still run for other
+                # egos. Without this guard the whole route is mislabelled
+                # deterministic:scenario_data:alignment_failed.
+                print(f"[_create_test_criteria] skip ego_vehicle_id={ego_vehicle_id}: "
+                      f"criteria attach failed ({_e}); ego_id="
+                      f"{getattr(_ego_ref,'id','?')}")
+                criteria_all.append([])
+                continue
 
             # Default kept at 30.0s — lower values false-positive on yielding
             # scenarios (Roundabout_Navigation, Unprotected_Left_Turn,

@@ -198,13 +198,16 @@ class AgentWrapper(object):
                                                      roll=sensor_spec['roll'],
                                                      yaw=sensor_spec['yaw'])
                 elif sensor_spec['type'].startswith('sensor.lidar.ray_cast_semantic'):
-                    bp.set_attribute('range', str(85))
-                    bp.set_attribute('rotation_frequency', str(20)) # default: 10, change to 20 for old lidar models
-                    bp.set_attribute('channels', str(32))
-                    bp.set_attribute('upper_fov', str(10))
-                    bp.set_attribute('lower_fov', str(-30))
-                    bp.set_attribute('points_per_second', str(250000))
-                    # bp.set_attribute('horizontal_fov', str(100))
+                    # Honor sensor_spec values if the agent provided them so the
+                    # visibility-filter ray pattern can be matched to the main
+                    # perception LiDAR (openloop AP protocol). Falls back to the
+                    # legacy hardcoded defaults when the spec is silent.
+                    bp.set_attribute('range', str(sensor_spec.get('range', 85)))
+                    bp.set_attribute('rotation_frequency', str(sensor_spec.get('rotation_frequency', 20)))
+                    bp.set_attribute('channels', str(sensor_spec.get('channels', 32)))
+                    bp.set_attribute('upper_fov', str(sensor_spec.get('upper_fov', 10)))
+                    bp.set_attribute('lower_fov', str(sensor_spec.get('lower_fov', -30)))
+                    bp.set_attribute('points_per_second', str(sensor_spec.get('points_per_second', 250000)))
                     sensor_location = carla.Location(x=sensor_spec['x'], y=sensor_spec['y'],
                                                      z=sensor_spec['z'])
                     sensor_rotation = carla.Rotation(pitch=sensor_spec['pitch'],
@@ -323,6 +326,18 @@ class AgentWrapper(object):
                 out_dir = os.path.join(str(capture_root), f"{sensor_spec['id']}_{vehicle_num}")
                 self._agent.sensor_interface.configure_image_capture(sensor_tag, out_dir)
             self._sensors_list[vehicle_num].append(sensor)
+
+        # Hook for stationary roadside / infrastructure sensors that aren't
+        # attached to a vehicle. Called BEFORE the priming world.tick() below
+        # so the new sensors' first-frame data is published at the same tick
+        # as the ego sensors. Idempotent — agents implement
+        # setup_infra_sensors() to be a no-op on repeat calls (one per ego).
+        try:
+            _hook = getattr(self._agent, "setup_infra_sensors", None)
+            if callable(_hook):
+                _hook()
+        except Exception as _exc:
+            print(f"[agent_wrapper] setup_infra_sensors hook failed: {_exc}")
 
         # Tick once to spawn the sensors
         CarlaDataProvider.get_world().tick()

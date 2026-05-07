@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-03-17-16-03-02_11_1" model="vehicle.gazelle.omafiets" role="cyclist" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="0.000000" roll="0.000000" time="0.000000" x="-430.284333" y="-158.978277" yaw="-171.097547" z="13.461840" />
+    <waypoint pitch="0.000000" roll="0.000000" time="2.300000" x="-430.284333" y="-158.978277" yaw="-171.097547" z="13.461840" />
+    <waypoint pitch="0.000000" roll="0.000000" time="10.300000" x="-430.284333" y="-158.978277" yaw="-171.097547" z="13.461840" />
+  </route>
+</routes>

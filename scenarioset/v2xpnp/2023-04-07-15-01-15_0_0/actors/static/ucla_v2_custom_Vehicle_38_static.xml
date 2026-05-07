@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-07-15-01-15_0_0" model="vehicle.audi.etron" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-0.561073" roll="0.002347" time="0.000000" x="102.576343" y="-249.898470" yaw="-78.166443" z="31.759191" />
+    <waypoint pitch="-0.563102" roll="0.002316" time="0.100000" x="102.811746" y="-251.044325" yaw="-78.166443" z="31.756266" />
+    <waypoint pitch="-0.563102" roll="0.002316" time="0.200000" x="103.059231" y="-252.248990" yaw="-78.166355" z="31.756266" />
+    <waypoint pitch="-0.566854" roll="0.002289" time="12.100000" x="103.059231" y="-252.248990" yaw="-78.166355" z="31.751472" />
+  </route>
+</routes>

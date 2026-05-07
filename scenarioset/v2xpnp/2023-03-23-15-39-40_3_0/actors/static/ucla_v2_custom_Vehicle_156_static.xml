@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-03-23-15-39-40_3_0" model="vehicle.mercedes.coupe" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-3.235483" roll="0.012712" time="3.400000" x="-424.217146" y="-34.563123" yaw="-179.933611" z="-38.377791" />
+  </route>
+</routes>

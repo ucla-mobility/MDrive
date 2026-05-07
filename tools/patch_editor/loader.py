@@ -125,6 +125,9 @@ class SceneData:
     carla_lines: List[CarlaLine]
     line_by_idx: Dict[int, CarlaLine] = field(default_factory=dict)
     track_by_id: Dict[str, ActorTrack] = field(default_factory=dict)
+    # Optional CARLA top-down underlay (only present if pipeline produced it)
+    bg_image_b64: Optional[str] = None        # raw base64 JPEG bytes
+    bg_image_bounds: Optional[Dict[str, float]] = None  # {min_x,max_x,min_y,max_y} in V2XPNP frame
 
     def __post_init__(self):
         self.line_by_idx = {cl.idx: cl for cl in self.carla_lines}
@@ -235,14 +238,36 @@ def load_from_dict(d: dict) -> SceneData:
     tracks = [_parse_track(t) for t in (d.get("tracks") or [])]
     tracks = [tr for tr in tracks if tr.frames]  # drop empty
 
-    carla_lines_raw = (d.get("carla_map") or {}).get("lines") or []
-    carla_lines = [cl for raw in carla_lines_raw if (cl := _parse_carla_line(raw)) is not None]
+    carla_map_dict = d.get("carla_map") or {}
+    carla_lines_raw = carla_map_dict.get("lines") or []
+    carla_lines = [cl for cl in (_parse_carla_line(raw) for raw in carla_lines_raw) if cl is not None]
+
+    # CARLA top-down underlay: inline (single-shot) or via image_ref → carla_images[ref]
+    bg_b64: Optional[str] = None
+    bg_bounds: Optional[Dict[str, float]] = None
+    inline_b64 = carla_map_dict.get("image_b64")
+    inline_bounds = carla_map_dict.get("image_bounds")
+    if isinstance(inline_b64, str) and inline_b64 and isinstance(inline_bounds, dict):
+        bg_b64 = inline_b64
+        bg_bounds = {k: _safe_float(inline_bounds.get(k), 0.0) for k in ("min_x", "max_x", "min_y", "max_y")}
+    else:
+        ref = carla_map_dict.get("image_ref")
+        global_imgs = d.get("carla_images") or {}
+        row = global_imgs.get(ref) if isinstance(ref, str) else None
+        if isinstance(row, dict):
+            row_b64 = row.get("image_b64")
+            row_bounds = row.get("image_bounds") or inline_bounds
+            if isinstance(row_b64, str) and row_b64 and isinstance(row_bounds, dict):
+                bg_b64 = row_b64
+                bg_bounds = {k: _safe_float(row_bounds.get(k), 0.0) for k in ("min_x", "max_x", "min_y", "max_y")}
 
     return SceneData(
         scenario_name=scenario_name,
         map_bbox=map_bbox,
         tracks=tracks,
         carla_lines=carla_lines,
+        bg_image_b64=bg_b64,
+        bg_image_bounds=bg_bounds,
     )
 
 

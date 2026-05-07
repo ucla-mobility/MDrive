@@ -2640,6 +2640,859 @@ def _smooth_carla_transition_windows(
         frames[j]["cyaw"] = float(_normalize_yaw_deg(math.degrees(math.atan2(dy, dx))))
 
 
+def _consolidate_track_two_segment(
+    frames: List[Dict[str, object]],
+    carla_context: Optional[Dict[str, object]] = None,
+    max_dist_threshold_m: float = 3.0,
+    min_segment_frames: int = 6,
+) -> bool:
+    """Try to split the track into 2 contiguous segments where each is
+    covered by a single CARLA lane. Then re-snap each segment to its line.
+
+    Used when single-line consolidation fails: catches "go straight then turn"
+    or "turn then go straight" tracks where one line covers half but not all.
+    The split point is found via grid search.
+    """
+    if not carla_context or not bool(carla_context.get("enabled", False)):
+        return False
+    n = len(frames)
+    if n < (2 * int(min_segment_frames) + 2):
+        return False
+    carla_feats = carla_context.get("carla_feats", {})
+    if not isinstance(carla_feats, dict) or not carla_feats:
+        return False
+
+    raw_xy: List[Tuple[float, float, int]] = []
+    for i, fr in enumerate(frames):
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        if math.isfinite(x) and math.isfinite(y):
+            raw_xy.append((float(x), float(y), int(i)))
+    if len(raw_xy) < (2 * int(min_segment_frames) + 2):
+        return False
+
+    # Candidate lines: union of CCLIs already chosen + bbox-overlap.
+    seen_clis: set = set()
+    for fr in frames:
+        cli = _safe_int(fr.get("ccli"), -1)
+        if cli >= 0:
+            seen_clis.add(int(cli))
+    candidates: set = set(seen_clis)
+    xs_all = [p[0] for p in raw_xy]
+    ys_all = [p[1] for p in raw_xy]
+    bx0, bx1 = min(xs_all) - 6.0, max(xs_all) + 6.0
+    by0, by1 = min(ys_all) - 6.0, max(ys_all) + 6.0
+    for li, cf in carla_feats.items():
+        if not isinstance(cf, dict):
+            continue
+        poly = cf.get("poly_xy")
+        if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+            continue
+        if poly[:, 0].max() < bx0 or poly[:, 0].min() > bx1:
+            continue
+        if poly[:, 1].max() < by0 or poly[:, 1].min() > by1:
+            continue
+        candidates.add(int(li))
+    if len(candidates) < 2:
+        return False
+
+    # Pre-compute distance from every raw point to every candidate line.
+    dist_table: Dict[int, np.ndarray] = {}
+    for li in candidates:
+        cf = carla_feats.get(int(li))
+        if not isinstance(cf, dict):
+            continue
+        poly = cf.get("poly_xy")
+        if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+            continue
+        seg_x0 = poly[:-1, 0]; seg_y0 = poly[:-1, 1]
+        seg_x1 = poly[1:, 0];  seg_y1 = poly[1:, 1]
+        sdx = seg_x1 - seg_x0
+        sdy = seg_y1 - seg_y0
+        L2 = sdx * sdx + sdy * sdy
+        denom = np.where(L2 > 1e-9, L2, 1.0)
+        dvec = np.zeros(len(raw_xy), dtype=np.float64)
+        for i, (x, y, _idx) in enumerate(raw_xy):
+            t = ((x - seg_x0) * sdx + (y - seg_y0) * sdy) / denom
+            t = np.clip(t, 0.0, 1.0)
+            cx_seg = seg_x0 + t * sdx
+            cy_seg = seg_y0 + t * sdy
+            dvec[i] = float(np.min(np.hypot(cx_seg - x, cy_seg - y)))
+        dist_table[int(li)] = dvec
+
+    if len(dist_table) < 2:
+        return False
+
+    # For each line, compute prefix-max distance and suffix-max distance.
+    # Then for each split index k, find the best (line_left, line_right) pair.
+    n_raw = len(raw_xy)
+    prefix_max: Dict[int, np.ndarray] = {}
+    suffix_max: Dict[int, np.ndarray] = {}
+    for li, dvec in dist_table.items():
+        pm = np.zeros(n_raw); sm = np.zeros(n_raw)
+        cur = 0.0
+        for i in range(n_raw):
+            if dvec[i] > cur: cur = dvec[i]
+            pm[i] = cur
+        cur = 0.0
+        for i in range(n_raw - 1, -1, -1):
+            if dvec[i] > cur: cur = dvec[i]
+            sm[i] = cur
+        prefix_max[li] = pm
+        suffix_max[li] = sm
+
+    # Best split: minimize max(prefix_max[L][k-1], suffix_max[R][k]) over k, L≠R.
+    best = (float("inf"), -1, -1, -1)  # (worst_max, k, L, R) where k is the split index in raw_xy
+    li_list = list(dist_table.keys())
+    min_seg_raw = max(2, int(min_segment_frames))
+    for k in range(min_seg_raw, n_raw - min_seg_raw + 1):
+        # Best line for left half = argmin prefix_max at k-1
+        best_left_li = min(li_list, key=lambda li: float(prefix_max[li][k - 1]))
+        best_left_d = float(prefix_max[best_left_li][k - 1])
+        # Best line for right half = argmin suffix_max at k
+        best_right_li = min(li_list, key=lambda li: float(suffix_max[li][k]))
+        best_right_d = float(suffix_max[best_right_li][k])
+        if best_left_li == best_right_li:
+            # Same line → it's the single-lane case (already tried).
+            continue
+        worst = max(best_left_d, best_right_d)
+        if worst < best[0]:
+            best = (worst, k, best_left_li, best_right_li)
+
+    if best[1] < 0 or best[0] > float(max_dist_threshold_m):
+        return False
+    _, split_k, left_li, right_li = best
+
+    # Translate raw_xy index to frames index.
+    left_frame_idx = set(raw_xy[i][2] for i in range(0, split_k))
+    right_frame_idx = set(raw_xy[i][2] for i in range(split_k, n_raw))
+
+    # Re-project each frame onto its assigned line.
+    def _reproject(fi: int, target_li: int):
+        cf_t = carla_feats.get(int(target_li))
+        if not isinstance(cf_t, dict):
+            return
+        poly = cf_t.get("poly_xy")
+        if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+            return
+        fr = frames[int(fi)]
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return
+        seg_x0 = poly[:-1, 0]; seg_y0 = poly[:-1, 1]
+        seg_x1 = poly[1:, 0];  seg_y1 = poly[1:, 1]
+        sdx = seg_x1 - seg_x0
+        sdy = seg_y1 - seg_y0
+        L2 = sdx * sdx + sdy * sdy
+        denom = np.where(L2 > 1e-9, L2, 1.0)
+        t = ((x - seg_x0) * sdx + (y - seg_y0) * sdy) / denom
+        t = np.clip(t, 0.0, 1.0)
+        cx_seg = seg_x0 + t * sdx
+        cy_seg = seg_y0 + t * sdy
+        d_arr = np.hypot(cx_seg - x, cy_seg - y)
+        k_idx = int(np.argmin(d_arr))
+        npx = float(cx_seg[k_idx]); npy = float(cy_seg[k_idx])
+        seg_dx = float(sdx[k_idx]); seg_dy = float(sdy[k_idx])
+        if math.hypot(seg_dx, seg_dy) > 1e-6:
+            new_yaw = math.degrees(math.atan2(seg_dy, seg_dx))
+        else:
+            new_yaw = _safe_float(fr.get("cyaw"), _safe_float(fr.get("yaw"), 0.0))
+        fr["cx"] = npx
+        fr["cy"] = npy
+        fr["cyaw"] = float(_normalize_yaw_deg(new_yaw))
+        fr["ccli"] = int(target_li)
+        fr["csource"] = "two_lane_consolidate"
+        fr["two_lane_consolidate"] = True
+
+    for fi in range(len(frames)):
+        if fi in left_frame_idx:
+            _reproject(fi, left_li)
+        elif fi in right_frame_idx:
+            _reproject(fi, right_li)
+    return True
+
+
+def _consolidate_track_to_single_lane(
+    frames: List[Dict[str, object]],
+    carla_context: Optional[Dict[str, object]] = None,
+    max_dist_threshold_m: float = 2.5,
+    min_improvement_m: float = 0.5,
+    consider_top_k: int = 16,
+    min_frames: int = 8,
+) -> Tuple[bool, int]:
+    """If the entire track's RAW trajectory fits a single CARLA lane within
+    `max_dist_threshold_m` AND that lane is at least `min_improvement_m` better
+    than the worst per-frame snap fit, RE-SNAP every frame to that lane.
+
+    Eliminates lane-bouncing during turns: a vehicle making a left turn
+    might snap to several straight lanes consecutively when there's a single
+    turn-lane polyline that perfectly covers the entire path. We detect that
+    case and lock the track to the turn lane.
+
+    Conservative: only fires when one lane covers the FULL track within the
+    tight threshold (default 2.5 m, less than typical lane width). Returns
+    (was_consolidated, line_index).
+    """
+    _dbg = os.environ.get("V2X_CARLA_SINGLE_LANE_CONSOLIDATE_VERBOSE_DEEP", "") == "1"
+    if not carla_context or not bool(carla_context.get("enabled", False)):
+        if _dbg: print(f"  [CONSOL-EARLY] no carla_context", flush=True)
+        return (False, -1)
+    n = len(frames)
+    if n < int(min_frames):
+        if _dbg: print(f"  [CONSOL-EARLY] n={n} < min_frames={min_frames}", flush=True)
+        return (False, -1)
+    carla_feats = carla_context.get("carla_feats", {})
+    if not isinstance(carla_feats, dict) or not carla_feats:
+        if _dbg: print(f"  [CONSOL-EARLY] no carla_feats", flush=True)
+        return (False, -1)
+
+    # Raw positions per frame (skip frames missing raw).
+    raw_xy: List[Tuple[float, float, int]] = []
+    for i, fr in enumerate(frames):
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        if math.isfinite(x) and math.isfinite(y):
+            raw_xy.append((float(x), float(y), int(i)))
+    if len(raw_xy) < int(min_frames):
+        if _dbg: print(f"  [CONSOL-EARLY] raw_xy={len(raw_xy)} < min_frames={min_frames}", flush=True)
+        return (False, -1)
+
+    # Candidate lines: union of CCLIs the snapper already chose, plus their
+    # near-neighbors (we want to consider lines that the snapper *didn't*
+    # pick but might still be a better single-line fit).
+    seen_clis: set = set()
+    for fr in frames:
+        cli = _safe_int(fr.get("ccli"), -1)
+        if cli >= 0:
+            seen_clis.add(int(cli))
+    candidates: set = set(seen_clis)
+    # Also any line that has at least one waypoint in the trajectory's bbox.
+    if raw_xy:
+        xs = [p[0] for p in raw_xy]; ys = [p[1] for p in raw_xy]
+        bx0, bx1 = min(xs) - 6.0, max(xs) + 6.0
+        by0, by1 = min(ys) - 6.0, max(ys) + 6.0
+        for li, cf in carla_feats.items():
+            if not isinstance(cf, dict):
+                continue
+            poly = cf.get("poly_xy")
+            if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+                continue
+            # quick bbox check — any segment overlap?
+            poly_xs = poly[:, 0]
+            poly_ys = poly[:, 1]
+            if poly_xs.max() < bx0 or poly_xs.min() > bx1:
+                continue
+            if poly_ys.max() < by0 or poly_ys.min() > by1:
+                continue
+            candidates.add(int(li))
+    if not candidates:
+        if _dbg: print(f"  [CONSOL-EARLY] no candidates", flush=True)
+        return (False, -1)
+
+    # For each candidate line, compute max + mean dist over all raw frames.
+    def _line_fit(li: int) -> Optional[Tuple[float, float]]:
+        cf = carla_feats.get(int(li))
+        if not isinstance(cf, dict):
+            return None
+        poly = cf.get("poly_xy")
+        if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+            return None
+        max_d = 0.0
+        sum_d = 0.0
+        for x, y, _idx in raw_xy:
+            # Cheap point-to-polyline min distance (numpy vectorized).
+            seg_x0 = poly[:-1, 0]; seg_y0 = poly[:-1, 1]
+            seg_x1 = poly[1:, 0];  seg_y1 = poly[1:, 1]
+            dx = seg_x1 - seg_x0
+            dy = seg_y1 - seg_y0
+            L2 = dx * dx + dy * dy
+            denom = np.where(L2 > 1e-9, L2, 1.0)
+            t = ((x - seg_x0) * dx + (y - seg_y0) * dy) / denom
+            t = np.clip(t, 0.0, 1.0)
+            cx = seg_x0 + t * dx
+            cy = seg_y0 + t * dy
+            d = float(np.min(np.hypot(cx - x, cy - y)))
+            if d > max_d:
+                max_d = d
+            sum_d += d
+        return (max_d, sum_d / float(len(raw_xy)))
+
+    best_li = -1
+    best_max = float("inf")
+    best_mean = float("inf")
+    for li in candidates:
+        fit = _line_fit(int(li))
+        if fit is None:
+            continue
+        mx, mn = fit
+        if mx < best_max - 1e-6:
+            best_max = mx
+            best_mean = mn
+            best_li = int(li)
+
+    if best_li < 0 or best_max > float(max_dist_threshold_m):
+        if os.environ.get("V2X_CARLA_SINGLE_LANE_CONSOLIDATE_VERBOSE_DEEP", "") == "1":
+            print(f"  [CONSOL-DBG] best_li={best_li} best_max={best_max:.2f}m thresh={max_dist_threshold_m:.2f}m candidates={len(candidates)} seen={sorted(seen_clis)}", flush=True)
+        return (False, -1)
+
+    # The per-frame snap is always close to whichever line the snapper picked
+    # (that's how snapping works). The benefit of consolidation isn't lower
+    # per-frame distance — it's eliminating discontinuous JUMPS between
+    # adjacent lines. So instead of comparing distances, we require:
+    #   (a) The track currently uses MULTIPLE distinct CCLIs (ccli runs > 1)
+    #   (b) The single-line fit is tight (best_max < threshold) — already checked above
+    # Skip consolidation for tracks already on a single CCLI: nothing to fix.
+    distinct_clis = set()
+    for fr in frames:
+        cli = _safe_int(fr.get("ccli"), -1)
+        if cli >= 0:
+            distinct_clis.add(int(cli))
+    if len(distinct_clis) <= 1:
+        if _dbg: print(f"  [CONSOL-NOFIX] only {len(distinct_clis)} distinct CCLI(s) — nothing to consolidate", flush=True)
+        return (False, -1)
+    # Also skip if the chosen consolidate-line equals the only/dominant
+    # current ccli (the snapper already locked onto it for the most part).
+    if best_li in distinct_clis:
+        # count how many frames are already on best_li
+        on_best = sum(1 for fr in frames if _safe_int(fr.get("ccli"), -1) == int(best_li))
+        if on_best >= int(0.9 * len(frames)):
+            if _dbg: print(f"  [CONSOL-DOMINANT] {on_best}/{len(frames)} frames already on best_li={best_li}", flush=True)
+            return (False, -1)
+    if _dbg: print(f"  [CONSOL-FIRE] best_li={best_li} best_max={best_max:.2f}m runs_in={len(distinct_clis)} CCLIs", flush=True)
+
+    # Re-project every frame onto best_li by direct geometric projection
+    # onto the polyline. Don't go through `_best_projection_on_carla_line`
+    # which has orientation/direction guards that can reject valid points
+    # (e.g., when the line's heading at one end opposes the vehicle motion
+    # in a turn lane). We trust the upstream max-fit check.
+    cf_best = carla_feats.get(int(best_li))
+    poly = cf_best.get("poly_xy") if isinstance(cf_best, dict) else None
+    if not isinstance(poly, np.ndarray) or poly.shape[0] < 2:
+        if _dbg: print(f"  [CONSOL-NOPOLY] best_li={best_li} has no poly", flush=True)
+        return (False, int(best_li))
+    seg_x0 = poly[:-1, 0]; seg_y0 = poly[:-1, 1]
+    seg_x1 = poly[1:, 0];  seg_y1 = poly[1:, 1]
+    sdx = seg_x1 - seg_x0
+    sdy = seg_y1 - seg_y0
+    L2 = sdx * sdx + sdy * sdy
+    denom = np.where(L2 > 1e-9, L2, 1.0)
+    n_modified = 0
+    for fi, fr in enumerate(frames):
+        x = _safe_float(fr.get("x"), float("nan"))
+        y = _safe_float(fr.get("y"), float("nan"))
+        if not (math.isfinite(x) and math.isfinite(y)):
+            continue
+        t_arr = ((x - seg_x0) * sdx + (y - seg_y0) * sdy) / denom
+        t_arr = np.clip(t_arr, 0.0, 1.0)
+        cx_arr = seg_x0 + t_arr * sdx
+        cy_arr = seg_y0 + t_arr * sdy
+        d_arr = np.hypot(cx_arr - x, cy_arr - y)
+        k = int(np.argmin(d_arr))
+        npx = float(cx_arr[k])
+        npy = float(cy_arr[k])
+        # Heading from this segment direction
+        seg_dx = float(sdx[k])
+        seg_dy = float(sdy[k])
+        if math.hypot(seg_dx, seg_dy) > 1e-6:
+            new_yaw = math.degrees(math.atan2(seg_dy, seg_dx))
+        else:
+            new_yaw = _safe_float(fr.get("cyaw"), _safe_float(fr.get("yaw"), 0.0))
+        fr["cx"] = npx
+        fr["cy"] = npy
+        fr["cyaw"] = float(_normalize_yaw_deg(new_yaw))
+        fr["ccli"] = int(best_li)
+        fr["csource"] = "single_lane_consolidate"
+        fr["single_lane_consolidate"] = True
+        n_modified += 1
+    if _dbg: print(f"  [CONSOL-DONE] modified {n_modified} frames to line={best_li}", flush=True)
+    return (n_modified > 0, int(best_li))
+
+
+def _shape_preserving_blend(
+    frames: List[Dict[str, object]],
+    s: int,
+    e: int,
+    source_label: str,
+) -> int:
+    """Replace (cx, cy) for interior frames in [s+1 .. e-1] with a blend that
+    preserves raw trajectory shape.
+
+    The snap correction `(cx - x, cy - y)` is smoothstep-interpolated between
+    the anchor frames (s and e). Each interior frame's smoothed position is
+    its RAW (x, y) plus the interpolated correction — so curving raw
+    trajectories stay curving; only the lane-snap offset transitions
+    smoothly. This avoids the bug where straight-line anchor-to-anchor
+    blending replaces curving turns with straight lines.
+
+    Returns number of frames modified. Mutates the frames in place.
+    """
+    if e <= s + 1:
+        return 0
+    n = len(frames)
+    if s < 0 or e >= n:
+        return 0
+    fa = frames[s]
+    fb = frames[e]
+    if not (_frame_has_carla_pose(fa) and _frame_has_carla_pose(fb)):
+        return 0
+    cx_s = _safe_float(fa.get("cx"), float("nan"))
+    cy_s = _safe_float(fa.get("cy"), float("nan"))
+    cx_e = _safe_float(fb.get("cx"), float("nan"))
+    cy_e = _safe_float(fb.get("cy"), float("nan"))
+    if not all(math.isfinite(v) for v in (cx_s, cy_s, cx_e, cy_e)):
+        return 0
+
+    # Anchor's raw position. Fallback to snap if raw is missing — that turns
+    # this back into the simple straight-line blend, which is at least
+    # consistent at the anchor itself.
+    x_s = _safe_float(fa.get("x"), cx_s)
+    y_s = _safe_float(fa.get("y"), cy_s)
+    x_e = _safe_float(fb.get("x"), cx_e)
+    y_e = _safe_float(fb.get("y"), cy_e)
+    corr_s_x = float(cx_s) - float(x_s)
+    corr_s_y = float(cy_s) - float(y_s)
+    corr_e_x = float(cx_e) - float(x_e)
+    corr_e_y = float(cy_e) - float(y_e)
+
+    span = e - s
+    n_modified = 0
+    for j in range(s + 1, e):
+        fr = frames[j]
+        x_j = _safe_float(fr.get("x"), float("nan"))
+        y_j = _safe_float(fr.get("y"), float("nan"))
+        if not (math.isfinite(x_j) and math.isfinite(y_j)):
+            continue
+        t = float(j - s) / float(span)
+        # Smootherstep, C2-continuous.
+        w = 6.0 * t**5 - 15.0 * t**4 + 10.0 * t**3
+        corr_x = (1.0 - w) * corr_s_x + w * corr_e_x
+        corr_y = (1.0 - w) * corr_s_y + w * corr_e_y
+        # Smoothed snap = raw + smoothly-interpolated snap correction.
+        # Raw curvature is preserved automatically.
+        fr["cx"] = float(x_j) + float(corr_x)
+        fr["cy"] = float(y_j) + float(corr_y)
+        fr["csource"] = source_label
+        fr[source_label] = True
+        n_modified += 1
+    return n_modified
+
+
+def _recompute_yaw_from_neighbors(
+    frames: List[Dict[str, object]],
+    indices,
+) -> None:
+    """Recompute cyaw from neighboring (cx, cy) deltas after positional smoothing."""
+    n = len(frames)
+    for j in sorted(set(int(i) for i in indices)):
+        if j < 0 or j >= n:
+            continue
+        if not _frame_has_carla_pose(frames[j]):
+            continue
+        prev_ok = j > 0 and _frame_has_carla_pose(frames[j - 1])
+        next_ok = (j + 1) < n and _frame_has_carla_pose(frames[j + 1])
+        if not prev_ok and not next_ok:
+            continue
+        if prev_ok and next_ok:
+            dx = float(frames[j + 1]["cx"]) - float(frames[j - 1]["cx"])
+            dy = float(frames[j + 1]["cy"]) - float(frames[j - 1]["cy"])
+        elif prev_ok:
+            dx = float(frames[j]["cx"]) - float(frames[j - 1]["cx"])
+            dy = float(frames[j]["cy"]) - float(frames[j - 1]["cy"])
+        else:
+            dx = float(frames[j + 1]["cx"]) - float(frames[j]["cx"])
+            dy = float(frames[j + 1]["cy"]) - float(frames[j]["cy"])
+        if math.hypot(dx, dy) <= 1e-6:
+            continue
+        frames[j]["cyaw"] = float(_normalize_yaw_deg(math.degrees(math.atan2(dy, dx))))
+
+
+def _smooth_fine_universal(
+    frames: List[Dict[str, object]],
+    sigma_frames: float = 0.7,
+    radius_frames: int = 2,
+    max_drift_m: float = 0.4,
+    preserve_anchors: int = 1,
+) -> int:
+    """Final fine-grain Gaussian on (cx, cy) across ALL frames (no run gating).
+
+    Catches the sub-meter / sub-frame jaggies that survive after the
+    correction-jitter smoother, including the angular kinks at intersection
+    turns where successive connector segments meet at slightly different
+    headings. Sigma=0.7 frames is essentially a 3-tap symmetric kernel so
+    legitimate motion (curves, lane changes, real turns) is preserved within
+    the `max_drift_m` cap.
+
+    `preserve_anchors` keeps the first/last N frames untouched so we don't
+    rotate the trajectory at start/end where neighbours are missing.
+    """
+    n = len(frames)
+    if n < (2 * radius_frames + 2 * preserve_anchors + 1):
+        return 0
+
+    # Gaussian kernel (1D, normalized).
+    weights: List[float] = []
+    for k in range(-int(radius_frames), int(radius_frames) + 1):
+        weights.append(math.exp(-0.5 * (float(k) / float(sigma_frames)) ** 2))
+    wsum = float(sum(weights))
+    weights = [float(w) / wsum for w in weights]
+
+    # Read sequence.
+    cx_seq = [_safe_float(frames[i].get("cx"), float("nan")) for i in range(n)]
+    cy_seq = [_safe_float(frames[i].get("cy"), float("nan")) for i in range(n)]
+
+    n_modified = 0
+    rad = int(radius_frames)
+    pa = int(preserve_anchors)
+    for j in range(pa, n - pa):
+        # Center frame must have a valid pose.
+        if not (math.isfinite(cx_seq[j]) and math.isfinite(cy_seq[j])):
+            continue
+        sx = sy = 0.0
+        wnorm = 0.0
+        for k_off, w_k in enumerate(weights):
+            idx = j + k_off - rad
+            if idx < 0 or idx >= n:
+                continue
+            cxk = cx_seq[idx]
+            cyk = cy_seq[idx]
+            if not (math.isfinite(cxk) and math.isfinite(cyk)):
+                continue
+            sx += float(w_k) * float(cxk)
+            sy += float(w_k) * float(cyk)
+            wnorm += float(w_k)
+        if wnorm <= 1e-6:
+            continue
+        new_cx = sx / wnorm
+        new_cy = sy / wnorm
+        # Drift cap: don't move a point further than max_drift_m from its
+        # original snap position. Protects legitimate turns/maneuvers.
+        drift = math.hypot(new_cx - cx_seq[j], new_cy - cy_seq[j])
+        if drift > float(max_drift_m):
+            scale = float(max_drift_m) / max(1e-6, drift)
+            new_cx = float(cx_seq[j]) + (new_cx - float(cx_seq[j])) * scale
+            new_cy = float(cy_seq[j]) + (new_cy - float(cy_seq[j])) * scale
+        frames[j]["cx"] = float(new_cx)
+        frames[j]["cy"] = float(new_cy)
+        # Don't overwrite csource here — it's a tiny per-frame nudge, not a
+        # qualitative source change. Just leave whatever was there.
+        n_modified += 1
+    return n_modified
+
+
+def _smooth_snap_correction_jitter(
+    frames: List[Dict[str, object]],
+    sigma_frames: float = 1.2,
+    radius_frames: int = 3,
+    min_run_frames: int = 6,
+    max_correction_drift_m: float = 1.5,
+) -> int:
+    """Final-pass low-pass on the *snap correction* `(cx - x, cy - y)`.
+
+    Why: CARLA polylines and V2XPNP lane geometry don't align perfectly, so
+    even within a single stable CCLI run the per-frame snap correction
+    wiggles by ~0.5-1 m. The visible (cx, cy) trajectory then has sub-2m
+    jaggies that look like fake lane changes. Smoothing the *correction*
+    (not the position itself) preserves raw curvature while killing
+    snap-induced jitter.
+
+    For each run of consecutive frames with the same CCLI, Gaussian-filter
+    the (corr_x, corr_y) sequence and write back `(cx, cy) = (x, y) + corr_smooth`.
+
+    `max_correction_drift_m` is a safety: if smoothed correction is far from
+    raw original (i.e., we'd be moving the vehicle a lot toward raw), keep
+    original. This avoids un-doing legitimate lane snapping in pathological cases.
+
+    Returns number of frames modified.
+    """
+    if radius_frames < 1 or len(frames) < (2 * radius_frames + 2):
+        return 0
+    n = len(frames)
+
+    # Build CCLI runs.
+    runs: List[Tuple[int, int]] = []
+    if n == 0:
+        return 0
+    cur_s = 0
+    cur_li = _safe_int(frames[0].get("ccli"), -999)
+    for i in range(1, n):
+        li = _safe_int(frames[i].get("ccli"), -999)
+        if li != cur_li:
+            if (i - 1 - cur_s + 1) >= int(min_run_frames):
+                runs.append((cur_s, i - 1))
+            cur_s = i
+            cur_li = li
+    if (n - cur_s) >= int(min_run_frames):
+        runs.append((cur_s, n - 1))
+    if not runs:
+        return 0
+
+    # Gaussian kernel (1D, normalized).
+    weights: List[float] = []
+    for k in range(-int(radius_frames), int(radius_frames) + 1):
+        weights.append(math.exp(-0.5 * (float(k) / float(sigma_frames)) ** 2))
+    wsum = float(sum(weights))
+    weights = [float(w) / wsum for w in weights]
+
+    n_modified = 0
+    for s, e in runs:
+        L = e - s + 1
+        if L < (2 * int(radius_frames) + 1):
+            continue
+        # Read corrections; bail if too many invalid frames.
+        corr_xs = [float("nan")] * L
+        corr_ys = [float("nan")] * L
+        cx_vals = [float("nan")] * L
+        cy_vals = [float("nan")] * L
+        x_vals = [float("nan")] * L
+        y_vals = [float("nan")] * L
+        valid = 0
+        for k_idx in range(L):
+            fi = s + k_idx
+            cx = _safe_float(frames[fi].get("cx"), float("nan"))
+            cy = _safe_float(frames[fi].get("cy"), float("nan"))
+            x_ = _safe_float(frames[fi].get("x"), float("nan"))
+            y_ = _safe_float(frames[fi].get("y"), float("nan"))
+            cx_vals[k_idx] = cx
+            cy_vals[k_idx] = cy
+            x_vals[k_idx] = x_
+            y_vals[k_idx] = y_
+            if all(math.isfinite(v) for v in (cx, cy, x_, y_)):
+                corr_xs[k_idx] = cx - x_
+                corr_ys[k_idx] = cy - y_
+                valid += 1
+        if valid < int(min_run_frames):
+            continue
+
+        # Convolve corrections with Gaussian (with edge handling).
+        smoothed_x = list(corr_xs)
+        smoothed_y = list(corr_ys)
+        rad = int(radius_frames)
+        for j in range(L):
+            sx = sy = 0.0
+            wnorm = 0.0
+            for k_off, w_k in enumerate(weights):
+                idx = j + k_off - rad
+                if idx < 0 or idx >= L:
+                    continue
+                cxk = corr_xs[idx]
+                cyk = corr_ys[idx]
+                if not (math.isfinite(cxk) and math.isfinite(cyk)):
+                    continue
+                sx += float(w_k) * float(cxk)
+                sy += float(w_k) * float(cyk)
+                wnorm += float(w_k)
+            if wnorm > 1e-6:
+                smoothed_x[j] = sx / wnorm
+                smoothed_y[j] = sy / wnorm
+
+        # Write back. Skip frames where smoothing would move the position
+        # by more than max_correction_drift_m relative to its original snap.
+        for j in range(L):
+            fi = s + j
+            x_ = x_vals[j]
+            y_ = y_vals[j]
+            cx_orig = cx_vals[j]
+            cy_orig = cy_vals[j]
+            sx = smoothed_x[j]
+            sy = smoothed_y[j]
+            if not all(math.isfinite(v) for v in (x_, y_, cx_orig, cy_orig, sx, sy)):
+                continue
+            new_cx = float(x_) + float(sx)
+            new_cy = float(y_) + float(sy)
+            drift = math.hypot(new_cx - cx_orig, new_cy - cy_orig)
+            if drift > float(max_correction_drift_m):
+                continue
+            frames[fi]["cx"] = float(new_cx)
+            frames[fi]["cy"] = float(new_cy)
+            frames[fi]["csource"] = "jitter_smooth"
+            frames[fi]["jitter_smooth"] = True
+            n_modified += 1
+    return n_modified
+
+
+def _smooth_lane_change_curves(
+    frames: List[Dict[str, object]],
+    window_radius: int = 4,
+    skip_synthetic_turn: bool = True,
+    require_semantic_change: bool = True,
+    max_window_span_frames: int = 12,
+) -> None:
+    """Spread sharp lane-change steps in (cx, cy) into smooth S-curves.
+
+    Per-frame lane snapping locks each frame's (cx, cy) to a single CARLA
+    lane centerline. At a lane change, frame i-1 sits on lane A and frame i
+    on lane B → the connecting segment is a near-perpendicular jump of
+    ~one lane width. Closed-loop replay drives that jagged.
+
+    For each detected lane change, anchor the window's first and last frames
+    and shape-preserve-blend the interior frames: each interior frame keeps
+    its RAW (x, y) curve and only the snap correction `(cx - x, cy - y)` is
+    smoothstep-interpolated between the anchors. This preserves raw
+    curvature (so a turn through a lane change stays curving), while still
+    smoothing the lane-width step.
+    """
+    if window_radius < 1:
+        return
+    n = len(frames)
+    if n < (2 * window_radius + 2):
+        return
+
+    # Find real lane-change indices first (CCLI changes at i-1 → i).
+    changes: List[int] = []
+    for i in range(1, n):
+        if not (_frame_has_carla_pose(frames[i - 1]) and _frame_has_carla_pose(frames[i])):
+            continue
+        prev_li = _safe_int(frames[i - 1].get("ccli"), -1)
+        cur_li = _safe_int(frames[i].get("ccli"), -1)
+        if prev_li < 0 or cur_li < 0 or prev_li == cur_li:
+            continue
+        if skip_synthetic_turn and (
+            bool(frames[i - 1].get("synthetic_turn", False))
+            or bool(frames[i].get("synthetic_turn", False))
+        ):
+            continue
+        if require_semantic_change:
+            sk_prev = _frame_semantic_lane_key(frames[i - 1])
+            sk_cur = _frame_semantic_lane_key(frames[i])
+            # Both must be defined and DIFFERENT to count as a real change.
+            if sk_prev is None or sk_cur is None or int(sk_prev) == int(sk_cur):
+                continue
+        changes.append(int(i))
+
+    if not changes:
+        return
+
+    # Merge overlapping windows: if two changes are within 2*W frames of each
+    # other (e.g., overtake = lane-out then lane-in), treat as one big window
+    # so we don't double-smooth — but cap the merged span so we don't blend
+    # across an entire long maneuver.
+    merged: List[Tuple[int, int]] = []
+    for ci in changes:
+        s = max(0, ci - window_radius)
+        e = min(n - 1, ci + window_radius - 1)
+        if (
+            merged
+            and s <= merged[-1][1] + 1
+            and (max(merged[-1][1], e) - merged[-1][0]) <= int(max_window_span_frames)
+        ):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    changed_idx: set = set()
+    for s, e in merged:
+        if (e - s) < 3:
+            continue
+        n_mod = _shape_preserving_blend(frames, int(s), int(e), "lane_change_blend")
+        if n_mod > 0:
+            for j in range(s + 1, e):
+                changed_idx.add(int(j))
+
+    if not changed_idx:
+        return
+
+    _recompute_yaw_from_neighbors(frames, changed_idx)
+
+
+def _smooth_snap_artifact_jumps(
+    frames: List[Dict[str, object]],
+    min_jump_m: float = 2.0,
+    raw_excess_m: float = 1.0,
+    window_radius: int = 5,
+    max_passes: int = 3,
+    max_window_span_frames: int = 14,
+) -> None:
+    """Smooth abrupt (cx, cy) jumps introduced by lane snapping at intersections.
+
+    Distinct from `_smooth_lane_change_curves` (which targets real semantic lane
+    changes). This catches the case where the snapper bounces between
+    connector lines mid-intersection: the raw query (x, y) moves smoothly but
+    the snapped (cx, cy) makes a multi-meter jump. Detection: snap step
+    exceeds the raw step by `raw_excess_m` *and* exceeds `min_jump_m` outright.
+
+    Uses shape-preserving blend: interior frames keep their RAW shape and
+    only the snap correction is smoothstep-interpolated. Critical for turns
+    that span many frames — straight-line blending would replace the curve
+    with a chord. Window merging is capped at `max_window_span_frames` so
+    very long maneuvers aren't collapsed into one blend.
+
+    Iterates up to `max_passes` times to handle cascades.
+    """
+    if window_radius < 1 or len(frames) < (2 * window_radius + 2):
+        return
+    n = len(frames)
+
+    def _raw_step(i: int) -> float:
+        if i <= 0 or i >= n:
+            return 0.0
+        a, b = frames[i - 1], frames[i]
+        ax = _safe_float(a.get("x"), float("nan"))
+        ay = _safe_float(a.get("y"), float("nan"))
+        bx = _safe_float(b.get("x"), float("nan"))
+        by = _safe_float(b.get("y"), float("nan"))
+        if math.isfinite(ax) and math.isfinite(ay) and math.isfinite(bx) and math.isfinite(by):
+            return float(math.hypot(bx - ax, by - ay))
+        qax, qay, _ = _frame_query_pose(a)
+        qbx, qby, _ = _frame_query_pose(b)
+        return float(math.hypot(qbx - qax, qby - qay))
+
+    def _snap_step(i: int) -> Optional[float]:
+        if i <= 0 or i >= n:
+            return None
+        a, b = frames[i - 1], frames[i]
+        if not (_frame_has_carla_pose(a) and _frame_has_carla_pose(b)):
+            return None
+        return float(math.hypot(
+            float(b["cx"]) - float(a["cx"]),
+            float(b["cy"]) - float(a["cy"]),
+        ))
+
+    for _pass in range(max(1, int(max_passes))):
+        # Detect jumps for this pass.
+        bad: List[int] = []
+        for i in range(1, n):
+            ss = _snap_step(i)
+            if ss is None:
+                continue
+            rs = _raw_step(i)
+            # Snap moved much more than raw → snapper introduced a discontinuity.
+            if ss >= float(min_jump_m) and ss >= rs + float(raw_excess_m):
+                bad.append(int(i))
+        if not bad:
+            return
+
+        # Merge jumps that fall within 2*W frames into a single blend window.
+        # Cap merged span so a long sequence of small jumps in a winding turn
+        # doesn't get collapsed into one chord blend.
+        merged: List[Tuple[int, int]] = []
+        for ji in bad:
+            s = max(0, ji - window_radius)
+            e = min(n - 1, ji + window_radius - 1)
+            if (
+                merged
+                and s <= merged[-1][1] + 1
+                and (max(merged[-1][1], e) - merged[-1][0]) <= int(max_window_span_frames)
+            ):
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+            else:
+                merged.append((s, e))
+
+        changed_idx: set = set()
+        for s, e in merged:
+            if (e - s) < 3:
+                continue
+            n_mod = _shape_preserving_blend(frames, int(s), int(e), "snap_jump_smooth")
+            if n_mod > 0:
+                for j in range(s + 1, e):
+                    changed_idx.add(int(j))
+
+        if not changed_idx:
+            return
+
+        _recompute_yaw_from_neighbors(frames, changed_idx)
+
+
 def _frame_semantic_lane_key(frame: Dict[str, object]) -> Optional[int]:
     v = _safe_int(frame.get("assigned_lane_id"), 0)
     if v != 0:
@@ -8822,6 +9675,131 @@ def _project_track_to_carla(
         role=str(role_norm),
         opposite_reject_deg=float(CARLA_OPPOSITE_DIRECTION_REJECT_DEG),
     )
+    # Single-lane consolidation: if the entire track fits one CARLA lane within
+    # 2.5 m, lock every frame to that lane. Eliminates the lane-bouncing where
+    # a turn vehicle's snap flips between several straight lanes and the turn
+    # lane (when the turn lane covers the full path on its own).
+    if _env_int("V2X_CARLA_SINGLE_LANE_CONSOLIDATE_ENABLED", 1, minimum=0, maximum=1) == 1:
+        _consol_ok, _consol_li = _consolidate_track_to_single_lane(
+            frames,
+            carla_context=carla_context,
+            max_dist_threshold_m=_env_float("V2X_CARLA_SINGLE_LANE_MAX_DIST_M", 2.5),
+            min_improvement_m=_env_float("V2X_CARLA_SINGLE_LANE_MIN_IMPROVEMENT_M", 0.5),
+            min_frames=_env_int("V2X_CARLA_SINGLE_LANE_MIN_FRAMES", 8, minimum=2, maximum=200),
+        )
+        # Looser pass: for tracks the strict threshold missed but that have
+        # heavy CCLI bouncing (many short runs), try a wider threshold.
+        # The per-track-many-runs guard prevents legitimate multi-lane tracks
+        # from being force-collapsed.
+        if not _consol_ok:
+            _bouncing_n_changes = 0
+            for _i in range(1, len(frames)):
+                if _safe_int(frames[_i].get("ccli"), -1) != _safe_int(frames[_i - 1].get("ccli"), -1):
+                    _bouncing_n_changes += 1
+            _bouncing_runs = _bouncing_n_changes + 1
+            # Try increasingly looser thresholds. Each one only fires when
+            # the previous tighter pass didn't and the bouncing rate justifies.
+            for _bounce_min, _bounce_max_dist in (
+                (4, _env_float("V2X_CARLA_SINGLE_LANE_BOUNCING_MAX_DIST_M", 4.0)),
+                (6, _env_float("V2X_CARLA_SINGLE_LANE_BOUNCING2_MAX_DIST_M", 5.5)),
+                (8, _env_float("V2X_CARLA_SINGLE_LANE_BOUNCING3_MAX_DIST_M", 7.0)),
+                (10, _env_float("V2X_CARLA_SINGLE_LANE_BOUNCING4_MAX_DIST_M", 9.0)),
+            ):
+                if _consol_ok or _bouncing_runs < _bounce_min:
+                    continue
+                _consol_ok2, _consol_li2 = _consolidate_track_to_single_lane(
+                    frames,
+                    carla_context=carla_context,
+                    max_dist_threshold_m=float(_bounce_max_dist),
+                    min_improvement_m=_env_float("V2X_CARLA_SINGLE_LANE_BOUNCING_MIN_IMPROVEMENT_M", 0.3),
+                    min_frames=_env_int("V2X_CARLA_SINGLE_LANE_MIN_FRAMES", 8, minimum=2, maximum=200),
+                )
+                if _consol_ok2:
+                    _consol_ok = True
+                    if _consol_li2 >= 0:
+                        _consol_li = _consol_li2
+                    break
+        # Two-lane (segmented) consolidator: DISABLED by default — was
+        # making turn-then-straight tracks worse by picking incompatible
+        # line pairs. Only enable if you're sure your scenario benefits.
+        if not _consol_ok and _env_int("V2X_CARLA_TWO_LANE_CONSOLIDATE_ENABLED", 0, minimum=0, maximum=1) == 1:
+            _consolidate_track_two_segment(
+                frames,
+                carla_context=carla_context,
+                max_dist_threshold_m=_env_float("V2X_CARLA_TWO_LANE_MAX_DIST_M", 3.0),
+                min_segment_frames=_env_int("V2X_CARLA_TWO_LANE_MIN_SEG_FRAMES", 6, minimum=2, maximum=80),
+            )
+        if _env_int("V2X_CARLA_SINGLE_LANE_CONSOLIDATE_VERBOSE", 0, minimum=0, maximum=1) == 1:
+            _track_label_dbg = str(track_meta.get("id", "?")) if isinstance(track_meta, dict) else "?"
+            print(f"[CONSOL] track={_track_label_dbg} ok={_consol_ok} line={_consol_li}", flush=True)
+    # Lane-change blend + snap-jump smooth must run LAST. Earlier smoothers
+    # (e.g., _commit_intersection_connectors, _enforce_lane_attachment_outside_intersection)
+    # hard-snap (cx, cy) to lane centerlines and would otherwise overwrite
+    # any smoothing we did upstream.
+    if _env_int("V2X_CARLA_LANE_CHANGE_BLEND_ENABLED", 1, minimum=0, maximum=1) == 1:
+        # Default require_semantic_change=False so we also catch intersection
+        # connector flips (CCLI changes within an intersection that don't
+        # change the V2XPNP semantic lane id but still produce a visible kink).
+        # Wider window (radius=6) gives smoother transitions across lane
+        # changes and connector hops — shape-preserving blend means the raw
+        # curvature is preserved so we don't oversmooth real maneuvers.
+        _smooth_lane_change_curves(
+            frames,
+            window_radius=_env_int("V2X_CARLA_LANE_CHANGE_BLEND_RADIUS", 6, minimum=1, maximum=12),
+            skip_synthetic_turn=_env_int("V2X_CARLA_LANE_CHANGE_BLEND_SKIP_SYNTHETIC_TURN", 1, minimum=0, maximum=1) == 1,
+            require_semantic_change=_env_int("V2X_CARLA_LANE_CHANGE_BLEND_REQUIRE_SEMANTIC", 0, minimum=0, maximum=1) == 1,
+        )
+    if _env_int("V2X_CARLA_SNAP_JUMP_SMOOTH_ENABLED", 1, minimum=0, maximum=1) == 1:
+        _smooth_snap_artifact_jumps(
+            frames,
+            min_jump_m=_env_float("V2X_CARLA_SNAP_JUMP_MIN_M", 1.2),
+            raw_excess_m=_env_float("V2X_CARLA_SNAP_JUMP_RAW_EXCESS_M", 0.4),
+            window_radius=_env_int("V2X_CARLA_SNAP_JUMP_WINDOW_RADIUS", 5, minimum=1, maximum=20),
+            max_passes=_env_int("V2X_CARLA_SNAP_JUMP_MAX_PASSES", 3, minimum=1, maximum=8),
+        )
+    if _env_int("V2X_CARLA_JITTER_SMOOTH_ENABLED", 1, minimum=0, maximum=1) == 1:
+        _smooth_snap_correction_jitter(
+            frames,
+            sigma_frames=_env_float("V2X_CARLA_JITTER_SIGMA_FRAMES", 1.2),
+            radius_frames=_env_int("V2X_CARLA_JITTER_RADIUS_FRAMES", 3, minimum=1, maximum=8),
+            min_run_frames=_env_int("V2X_CARLA_JITTER_MIN_RUN_FRAMES", 6, minimum=2, maximum=30),
+            max_correction_drift_m=_env_float("V2X_CARLA_JITTER_MAX_DRIFT_M", 1.5),
+        )
+    # Final fine-grain pass: small-radius Gaussian over (cx, cy) across ALL
+    # frames. Smooths the angular kinks at intersection-turn segment joins
+    # and any remaining sub-frame jaggies. Drift cap protects real maneuvers
+    # but is generous enough to round corner/connector kinks (~0.8 m).
+    # Multiple passes amplify smoothing of high-frequency noise without
+    # bleeding into low-frequency motion (Gaussian kernel iterated → wider).
+    if _env_int("V2X_CARLA_FINE_SMOOTH_ENABLED", 1, minimum=0, maximum=1) == 1:
+        for _pass in range(_env_int("V2X_CARLA_FINE_SMOOTH_PASSES", 5, minimum=1, maximum=12)):
+            _smooth_fine_universal(
+                frames,
+                sigma_frames=_env_float("V2X_CARLA_FINE_SIGMA_FRAMES", 1.2),
+                radius_frames=_env_int("V2X_CARLA_FINE_RADIUS_FRAMES", 3, minimum=1, maximum=6),
+                max_drift_m=_env_float("V2X_CARLA_FINE_MAX_DRIFT_M", 1.2),
+                preserve_anchors=_env_int("V2X_CARLA_FINE_PRESERVE_ANCHORS", 1, minimum=0, maximum=4),
+            )
+    # Detect tracks where CCLI is oscillating (e.g., snap alternating between
+    # 2 parallel lanes). Apply a stronger Gaussian to kill the bouncing.
+    # Trigger: > 10% of frames have CCLI change AND track has > 6 distinct CCLI runs.
+    if _env_int("V2X_CARLA_OSCILLATION_SMOOTH_ENABLED", 1, minimum=0, maximum=1) == 1:
+        n_frames_total = len(frames)
+        if n_frames_total > 12:
+            n_changes = 0
+            for _i in range(1, n_frames_total):
+                if _safe_int(frames[_i].get("ccli"), -1) != _safe_int(frames[_i - 1].get("ccli"), -1):
+                    n_changes += 1
+            change_rate = float(n_changes) / float(max(1, n_frames_total))
+            if change_rate >= _env_float("V2X_CARLA_OSCILLATION_RATE_THRESH", 0.08) and n_changes >= 5:
+                for _pass in range(_env_int("V2X_CARLA_OSCILLATION_PASSES", 4, minimum=1, maximum=10)):
+                    _smooth_fine_universal(
+                        frames,
+                        sigma_frames=_env_float("V2X_CARLA_OSCILLATION_SIGMA_FRAMES", 2.0),
+                        radius_frames=_env_int("V2X_CARLA_OSCILLATION_RADIUS_FRAMES", 5, minimum=1, maximum=10),
+                        max_drift_m=_env_float("V2X_CARLA_OSCILLATION_MAX_DRIFT_M", 2.5),
+                        preserve_anchors=_env_int("V2X_CARLA_OSCILLATION_PRESERVE_ANCHORS", 1, minimum=0, maximum=4),
+                    )
     # Debug lane-change audit (set V2X_CARLA_DEBUG_ACTOR_IDS=<id>,<id> or * to enable)
     import os as _os_debug
     if str(_os_debug.environ.get("V2X_CARLA_DEBUG_ACTOR_IDS", "")).strip():

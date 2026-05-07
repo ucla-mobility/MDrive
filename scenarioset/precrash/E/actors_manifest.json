@@ -1,0 +1,30 @@
+{
+  "ego": [
+    {
+      "file": "town05_custom_ego_vehicle_0.xml",
+      "kind": "ego",
+      "name": "town05_custom_ego_vehicle_0",
+      "route_id": "247",
+      "town": "Town05"
+    },
+    {
+      "file": "town05_custom_ego_vehicle_1.xml",
+      "kind": "ego",
+      "name": "town05_custom_ego_vehicle_1",
+      "route_id": "247",
+      "town": "Town05"
+    }
+  ],
+  "static": [
+    {
+      "file": "town05_custom_Truck_1_static.xml",
+      "kind": "static",
+      "name": "town05_custom_Truck_1_static",
+      "route_id": "247",
+      "town": "Town05",
+      "model": "vehicle.carlamotors.carlacola",
+      "length": "12",
+      "width": "3"
+    }
+  ]
+}

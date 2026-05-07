@@ -1,0 +1,15 @@
+# PerceptionSwapAgent — F-Cooper detector + OpenCDA BehaviorAgent planner.
+# BehaviorAgent adds overtake / lane-change / car-following on top of the
+# basic corridor brake. Its collision_manager / overtake_management /
+# car_following_manager all consume our Detection list (NOT world.get_actors),
+# so the perception-as-only-independent-variable framing is preserved.
+detector: fcooper
+planner: behavior
+cooperative: true
+comm_range_m: 200
+max_cooperators: 4
+cruise_speed: 6.0
+score_threshold: 0.20
+detection_radius: 1.5
+collect_ap_metrics: true
+disable_brake: false
