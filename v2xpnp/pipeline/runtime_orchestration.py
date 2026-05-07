@@ -3287,7 +3287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--carla-map-offset-json",
         type=str,
-        default="/data2/marco/CoLMDriver/v2xpnp/map/ucla_map_offset_carla.json",
+        default="/data2/marco/CoLMDriver/v2xpnp/map/map_offset_carla.json",
         help="Path to CARLA->V2 alignment JSON.",
     )
     parser.add_argument(

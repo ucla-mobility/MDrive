@@ -51,7 +51,7 @@ REAL_DATASET_ROOTS = [
     Path("/data/dataset/v2x-real-pnp/v2v_test"),
 ]
 CARLA_SCENARIOSET_ROOT = Path("/data2/marco/CoLMDriver/scenarioset/v2xpnp")
-CARLA_ALIGN_JSON = Path("/data2/marco/CoLMDriver/v2xpnp/map/ucla_map_offset_carla.json")
+CARLA_ALIGN_JSON = Path("/data2/marco/CoLMDriver/v2xpnp/map/map_offset_carla.json")
 CODRIVING_RESULTS_ROOT = Path(
     "/data2/marco/CoLMDriver/results/results_driving_custom/v2xpnp/codriving"
 )

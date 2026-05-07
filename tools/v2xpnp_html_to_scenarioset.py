@@ -20,7 +20,7 @@ Usage:
     python3 -m tools.v2xpnp_html_to_scenarioset \
         --html /tmp/eval_v3/2023-03-17-15-53-02_1_0.html \
         --out scenarioset/v2xpnp \
-        --map-offset-json v2xpnp/map/ucla_map_offset_carla.json
+        --map-offset-json v2xpnp/map/map_offset_carla.json
 """
 
 from __future__ import annotations
@@ -468,7 +468,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--html", nargs="+", required=True, help="HTML files produced by pipeline_runtime")
     p.add_argument("--out", required=True, help="Output root (e.g., scenarioset/v2xpnp)")
-    p.add_argument("--map-offset-json", required=True, help="ucla_map_offset_carla.json")
+    p.add_argument("--map-offset-json", required=True, help="map_offset_carla.json")
     p.add_argument("--town", default="ucla_v2")
     p.add_argument("--route-id-from", choices=["scenario_name", "html_stem"], default="scenario_name",
                    help="How to derive the route_id (default: dataset.scenario_name)")

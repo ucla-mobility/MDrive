@@ -393,7 +393,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--carla-map-offset-json",
-        default="/data2/marco/CoLMDriver/v2xpnp/map/ucla_map_offset_carla.json",
+        default="/data2/marco/CoLMDriver/v2xpnp/map/map_offset_carla.json",
         help="CARLA->V2XPNP alignment JSON (tx/ty/theta/flip_y/scale) for CARLA map layer.",
     )
     parser.add_argument(

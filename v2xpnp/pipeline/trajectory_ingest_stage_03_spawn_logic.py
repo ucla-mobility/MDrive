@@ -1639,7 +1639,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--xml-ty", type=float, default=0.0, help="Additional Y offset applied only when writing XML outputs")
     p.add_argument(
         "--coord-json",
-        default="/data2/marco/CoLMDriver/v2xpnp/map/ucla_map_offset_carla.json",
+        default="/data2/marco/CoLMDriver/v2xpnp/map/map_offset_carla.json",
         help="Optional JSON file containing transform keys like tx, ty, theta_deg/rad, flip_y; applied to all coordinates",
     )
     p.add_argument("--yaw-deg", type=float, default=0.0, help="Global yaw rotation (degrees, applied before translation)")

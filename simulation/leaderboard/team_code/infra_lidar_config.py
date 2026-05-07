@@ -2,7 +2,7 @@
 
 The two poses below were derived from the v2x-real-pnp dataset's infra LiDAR
 agents (-1 and -2) by applying the v2xpnp -> CARLA alignment transform from
-`v2xpnp/map/ucla_map_offset_carla.json`.  See the visualizations under
+`v2xpnp/map/map_offset_carla.json`.  See the visualizations under
 `/tmp/infra_lidar_*.png` for validation against real-world LiDAR returns.
 
 Activation is controlled by the env var COLMDRIVER_INFRA_COLLAB, which is set

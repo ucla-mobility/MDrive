@@ -13,7 +13,7 @@ Example:
   python3 -m v2xpnp.pipeline.correspondence_diagnostics \
     --v2-map v2xpnp/map/v2x_intersection_vector_map.pkl \
     --carla-map-cache v2xpnp/map/carla_map_cache.pkl \
-    --carla-align v2xpnp/map/ucla_map_offset_carla.json \
+    --carla-align v2xpnp/map/map_offset_carla.json \
     --out v2xpnp/map/lane_correspondence_diagnostics.html
 """
 
@@ -2180,7 +2180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--carla-align",
         type=str,
-        default="/data2/marco/CoLMDriver/v2xpnp/map/ucla_map_offset_carla.json",
+        default="/data2/marco/CoLMDriver/v2xpnp/map/map_offset_carla.json",
         help="Path to alignment config JSON for CARLA map lines.",
     )
     parser.add_argument(

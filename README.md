@@ -139,7 +139,7 @@ See [`tools/openloop_post_metrics.py`](tools/openloop_post_metrics.py) for AP/AD
 
 ### V2X-PnP with Infrastructure LiDAR
 
-Pass `--infra-collab` to enable two stationary infrastructure LiDAR sensors at UCLA Westwood / V2XPnP map intersection poses (see [`simulation/leaderboard/team_code/infra_lidar_config.py`](simulation/leaderboard/team_code/infra_lidar_config.py)). Their point clouds feed into each planner's cooperative fusion path alongside ego/RSU LiDAR. Has no effect on non-`v2xpnp` scenarios.
+Pass `--infra-collab` to enable two stationary infrastructure LiDAR sensors at V2XPnP map intersection poses (see [`simulation/leaderboard/team_code/infra_lidar_config.py`](simulation/leaderboard/team_code/infra_lidar_config.py)). Their point clouds feed into each planner's cooperative fusion path alongside ego/RSU LiDAR. Has no effect on non-`v2xpnp` scenarios.
 
 ```bash
 python tools/run_custom_eval.py \
@@ -463,7 +463,7 @@ Part of **MDrive-Toolbox**. Lets a human expert take over one or more CAVs in a 
 Code: [`tools/hitl_run.py`](tools/hitl_run.py) (launcher), [`simulation/leaderboard/team_code/hitl_agent.py`](simulation/leaderboard/team_code/hitl_agent.py) (agent).
 
 ```bash
-conda activate colmdrivermarco2
+conda activate colmdriver
 python -m tools.hitl_run --eval-route scenarioset/interaction/Highway_On-Ramp_Merge/1
 ```
 
@@ -483,6 +483,6 @@ Code: [`v2xpnp/pipeline/`](v2xpnp/pipeline/), entry point [`v2xpnp/pipeline/entr
 python -m v2xpnp.pipeline.entrypoint <log-dir> \
     --map-pkl v2xpnp/map/v2x_intersection_vector_map.pkl \
     --carla-map-cache v2xpnp/map/carla_map_cache.pkl \
-    --carla-map-offset-json v2xpnp/map/ucla_map_offset_carla.json \
+    --carla-map-offset-json v2xpnp/map/map_offset_carla.json \
     --out /tmp/output.html
 ```

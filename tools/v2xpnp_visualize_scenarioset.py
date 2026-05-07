@@ -366,7 +366,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scenarios", required=True, help="Root containing per-scenario subdirs")
     p.add_argument("--map-pkl", default=None, help="Optional v2x map pickle for lane polylines")
-    p.add_argument("--map-offset-json", default=None, help="Optional ucla_map_offset_carla.json (transforms PKL→CARLA)")
+    p.add_argument("--map-offset-json", default=None, help="Optional map_offset_carla.json (transforms PKL→CARLA)")
     p.add_argument("--out", required=True, help="Output directory for PNGs / GIFs")
     p.add_argument("--gif", action="store_true", help="Also render animated GIFs (slower)")
     p.add_argument("--gif-fps", type=int, default=10)
