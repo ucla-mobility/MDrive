@@ -1,0 +1,1 @@
+<?xml version='1.0' encoding='utf-8'?><routes>  <route id="247" town="Town01" role="static" model="vehicle.carlamotors.carlacola" length="12" width="3">    <waypoint x="145.784000" y="55.493000" z="0.0" yaw="0.000000" />  </route></routes>

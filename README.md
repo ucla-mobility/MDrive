@@ -1,27 +1,35 @@
 # MDrive: A Cooperative Driving Benchmark for End-to-End Closed-loop Multi-Agent System
 A benchmark for multi-agent, multi-granular cooperative driving. Focus on end-to-end closed-loop systems to improve safety and coordination in complex urban environments.
+                         
+<p align="center">
+  <img src="figure/MDrive_overview.png" alt="MDrive Overview" width="100%">
+</p>
 
-For information on our challenge, please visit: 
-https://mdrive-challenge.github.io/
+## Overview
 
-## Repository Structure and Scope
+MDrive is a closed-loop cooperative driving benchmark for end-to-end multi-agent systems. It targets two cooperative paradigms that are otherwise hard to evaluate together: **perception sharing** (CAVs and infrastructure share complementary detections to mitigate occlusion and extend range) and **decision negotiation** (CAVs negotiate intent at conflict points for proactive coordination).
 
-This repository implements **MDrive**, a multi-agent driving benchmark.  
-It was originally built on top of **CoLMDriver**; CoLMDriver is now one of multiple models in the repository, and the benchmark infrastructure has been built on top of it.
+The benchmark comprises **225 scenarios** across three complementary buckets:
 
-MDrive provides:
-- Benchmark infrastructure (CARLA integration, scenarios, evaluation, analysis)
-- Multiple baseline and LLM-based driving models (TCP, CoDriving, LMDrive, UniAD, CoLMDriver, and VAD)
-- Training code for CoLMDriver components
+- **MDrive-V2XPnP** (67) — Real2Sim reconstructions from real-world V2X driving logs, with realistic background traffic.
+- **MDrive-Interaction** (112) — interaction-rich scenarios with reactive background traffic. Comprises 100 agentic-generated scenarios across 10 interaction categories (highway on-ramp merge, intersection deadlock, roundabout, pedestrian crosswalk, work zones, etc.) plus 12 pre-crash scenarios grounded in NHTSA pre-crash typologies.
+- **MDrive-InterDrive** (46) — multi-agent negotiation scenarios from the InterDrive benchmark, used as in-domain reference.
+
+Alongside the benchmark, we release the **MDrive-Toolbox**: a Real2Sim conversion pipeline, an agentic scenario generation pipeline, and a human-in-the-loop simulation interface. See [MDrive Toolbox](#mdrive-toolbox) below.
 
 ---
 
 ## Table of Contents
 - [Quickstart](#quickstart)
+- [Running Evaluations](#running-evaluations)
+  - [Planners](#planners)
+  - [Scenario Buckets](#scenario-buckets)
+  - [Open-Loop Evaluation](#open-loop-evaluation)
+  - [V2X-PnP with Infrastructure LiDAR](#v2x-pnp-with-infrastructure-lidar)
+  - [Scenario Pool (Parallel Runs)](#scenario-pool-parallel-runs)
 - [Results Analysis and Visualization](#results-analysis-and-visualization)
   - [Results Analysis](#results-analysis)
   - [Visualizing Results](#visualizing-results)
-- [Challenge Submission Instructions](#challenge-submission-instructions)
 - [Baseline Evaluation Setup](#baseline-evaluation-setup)
   - [Evaluation of baselines](#evaluation-of-baselines)
   - [TCP Environment Setup](#tcp-environment-setup)
@@ -31,7 +39,10 @@ MDrive provides:
   - [VAD Environment Setup](#vad-environment-setup)
   - [CoLMDriver Environment Setup](#colmdriver-environment-setup)
   - [CoLMDriver Model Setup](#colmdriver-model-setup)
-- [Full Benchmark Evaluation (Internal)](#full-benchmark-evaluation-internal)
+- [MDrive Toolbox](#mdrive-toolbox)
+  - [Agentic Scenario Generation Pipeline](#agentic-scenario-generation-pipeline)
+  - [Human-in-the-Loop Simulation Interface](#human-in-the-loop-simulation-interface)
+  - [Real2Sim Pipeline](#real2sim-pipeline)
 
 ---
 ## Quickstart
@@ -44,41 +55,116 @@ Use the setup script below. It applies compatibility fixes, so start CARLA from 
 export CARLA_ROOT=$PWD/carla912
 ```
 
-### 2) Create baseline eval environment
+### 2) (Custom planner only) Create baseline eval environment
+
+Only needed if you're developing your own planner submission. For the built-in planners (CoLMDriver, CoDriving, TCP, etc.), activate the planner-specific env from [Baseline Evaluation Setup](#baseline-evaluation-setup) instead.
+
 ```bash
 conda env create -f model_envs/run_custom_eval_baseline.yaml --solver libmamba
 conda activate run_custom_eval_baseline
 ```
 
-### 3) Start CARLA manually (fixed port)
+### 3) Start CARLA (manual or auto)
+
+Either start CARLA in its own terminal:
 ```bash
-# terminal A
 $CARLA_ROOT/CarlaUE4.sh --world-port=2014 -RenderOffScreen
 ```
 
-### 4) Run benchmark scenarios with your custom planner
-Run LLM-Generated and OpenCDA and Interdrive Scenarios:
+Or skip this step and pass `--start-carla` to `run_custom_eval.py` in step 4 — it will launch CARLA from `CARLA_ROOT/carla912` for you.
+
+### 4) Run benchmark scenarios
+
+Pick a planner with `--planner` (see [Planners](#planners)) and a scenario bucket with `--routes-dir`. The four buckets live under `scenarioset/`:
+
 ```bash
-# terminal B
 python tools/run_custom_eval.py \
-  --routes-dir scenarioset/nonreplay \
-  --agent /abs/path/to/agents.py \
-  --agent-config /abs/path/to/agent_config.yaml
+  --planner colmdriver \
+  --routes-dir scenarioset/interaction
 ```
 
-Run V2X-PnP Real-to-Sim Scenarios:
+For parallelization, open-loop mode, and infrastructure LiDAR, see [Running Evaluations](#running-evaluations).
+
+---
+
+## Running Evaluations
+
+### Planners
+
+Pick a planner with `--planner <name>`. Pass the flag multiple times to run several planners on the same scenarios in one command. Each planner has a default agent file and config; see [`tools/run_custom_eval.py`](tools/run_custom_eval.py) (`PLANNER_SPECS`) for the full list.
+
+| Planner | What it is |
+|---|---|
+| `colmdriver`, `colmdriver_rulebase` | LLM-based negotiation (CoLMDriver) and its rule-based ablation |
+| `codriving` | Cooperative perception + planning (CoDriving / V2Xverse) |
+| `tcp`, `lmdrive`, `uniad`, `vad` | Single-agent baselines |
+| `perception_swap_{fcooper,attfuse,disco,cobevt}` | Swap-detector cooperative perception variants for the perception study |
+
+The `perception_swap_*` agents come in two local-planner variants. The default wraps CARLA's `BasicAgent`. The `_behavior` variants (e.g., `perception_swap_attfuse_behavior`) use the OpenCDA-derived `BehaviorAgent` for richer lane-keeping and obstacle avoidance.
+
 ```bash
-# terminal B
 python tools/run_custom_eval.py \
+  --planner perception_swap_attfuse_behavior \
+  --routes-dir scenarioset/interaction
+```
+
+### Scenario Buckets
+
+The four bucket directories under `scenarioset/`:
+
+| Directory | Count | Description |
+|---|---|---|
+| `scenarioset/interdrive` | 46 | InterDrive multi-agent negotiation (in-domain reference) |
+| `scenarioset/interaction` | 112 | Agentic-generated interaction scenarios (10 categories × 10) + 12  NHTSA-grounded pre-crash scenarios|
+| `scenarioset/v2xpnp` | 67 | Real2Sim from V2X-PnP logs |
+
+Run a bucket by passing its directory to `--routes-dir`:
+ 
+```bash
+python tools/run_custom_eval.py --planner colmdriver --routes-dir scenarioset/v2xpnp
+```
+
+### Open-Loop Evaluation
+
+Pass `--openloop` to collect open-loop perception (AP) and planning (ADE, collision rate) metrics.
+
+```bash
+python tools/run_custom_eval.py \
+  --planner perception_swap_attfuse \
   --routes-dir scenarioset/v2xpnp \
-  --agent /abs/path/to/agents.py \
-  --agent-config /abs/path/to/agent_config.yaml \
-  --custom-actor-control-mode replay \
-  --log-replay-actors
+  --openloop
 ```
 
+See [`tools/openloop_post_metrics.py`](tools/openloop_post_metrics.py) for AP/ADE/CR aggregation.
 
-Warmup outputs are written to `results/results_driving_custom/warmupscenarios/<scenario_name>/`.
+### V2X-PnP with Infrastructure LiDAR
+
+Pass `--infra-collab` to enable two stationary infrastructure LiDAR sensors at UCLA Westwood / V2XPnP map intersection poses (see [`simulation/leaderboard/team_code/infra_lidar_config.py`](simulation/leaderboard/team_code/infra_lidar_config.py)). Their point clouds feed into each planner's cooperative fusion path alongside ego/RSU LiDAR. Has no effect on non-`v2xpnp` scenarios.
+
+```bash
+python tools/run_custom_eval.py \
+  --planner colmdriver \
+  --routes-dir scenarioset/v2xpnp \
+  --infra-collab
+```
+
+### Scenario Pool (Parallel Runs)
+
+For sweeping many planners or buckets on a multi-GPU box, add `--scenario-pool`. The orchestrator maintains a pool of long-lived CARLA instances (sized dynamically by VRAM) and dispatches scenarios concurrently across them with town-affinity reuse — much faster than the per-planner serial default.
+
+```bash
+python tools/run_custom_eval.py \
+  --planner colmdriver \
+  --planner perception_swap_attfuse \
+  --planner codriving \
+  --routes-dir scenarioset/interaction \
+  --gpus 0,1,2,3 \
+  --scenario-pool
+```
+
+Recommended whenever you're running more than ~10 scenarios or more than one planner.
+
+---
 
 ## Results Analysis and Visualization
 
@@ -113,38 +199,6 @@ Optional flags include `--fps`, `--width`, `--height`, and `--font-scale`.
 
 ---
 
-## Challenge Submission Instructions
-To ensure your model is evaluated accurately, you must submit a single .zip file containing your model and code.
-
-### Required ZIP File Structure
-Your ZIP file must be organized as follows:
-```
-team_name.zip
-├── agents.py           # Main agent class (must inherit from BaseAgent)
-├── config/             # Folder containing all .yaml or .py configs
-├── src/                # Folder containing model architecture & utilities
-├── weights/            # Folder containing all trained checkpoints (.pth/.ckpt)
-└── model_env.yaml      # Conda environment specification
-```
-
-### Environment Specification
-MDrive supports two methods of environment provisioning. To ensure 100% reproducibility, we strongly recommend providing a Dockerfile.
-
-1. ***Docker (Primary):*** Your Dockerfile should be based on a stable CUDA image (e.g., nvidia/cuda:11.3.1-devel-ubuntu20.04). It must install all necessary libraries so that the agent can run immediately upon container launch.
-
-2. ***Conda (Fallback):*** If no Dockerfile is provided, we will build a dedicated environment using your model_env.yaml.
-Note: Your code must be compatible with Python 3.7 to interface with the CARLA 0.9.12 API.
-Do not include CARLA in your environment files; the evaluation server will automatically link the standardized CARLA 0.9.12 build.
-
-### Evaluation Protocol
-Our team will manually verify your submission using the following pipeline:
-
-1. Env Build: The evaluator prioritizes the Dockerfile. If missing, it builds the Conda environment from model_env.yaml.
-2. Path Injection: Standardized CARLA 0.9.12 PythonAPI will be appended to your PYTHONPATH.
-3. Execution: Your agent will be run through a batch of closed-loop scenarios (OpenCDA, InterDrive, and Safety-critical).
-4. Scoring: We will record the Driving Score (DS) and Success Rate (SR) as the official leaderboard metrics.
-
----
 ## Baseline Evaluation Setup
 
 ### Evaluation of baselines
@@ -386,132 +440,13 @@ Note: make sure that the selected ports (1111,8888) are not occupied by other se
 
 ---
 
-## Full Benchmark Evaluation (Internal)
-This section is for internal/lab benchmark operations (manual evaluation workflow and submission verification).
-
-### Evaluation Metrics
-MDrive Leaderboard evaluates on two metrics:
-1. **Driving Score (DS)**: Score of route completion adjusted by infraction penalties
-2. **Success Rate (SR)**: The percentage of routes completed without failure.
-
-#### Evaluation Scenarios
-A full evaluation consists of three distinct benchmarks:
-***OpenCDA (12 Scenarios):*** Uses ZIP-based scenario loading. Ensure all 12 ZIPs (including Scenes A, D, G, J) are in the `precrash/` folder.
-***InterDrive (Full Suite):*** Cooperative driving evaluated via the `Interdrive_all` set.
-***Safety-Critical:*** Pre-crash scenarios.
-
-### Evaluation Workflow
-Evaluation consists of 3 main phases: Submission Retrieval, Environment Setup, and Checkpoint Evaluation.
-
-Before internal evaluation, ensure CARLA and required model-specific environments are prepared (see Quickstart and Baseline Evaluation Setup).
-
-1. Verify CARLA 0.9.12 is installed and the egg is linked.
-2. Ensure model-specific environments are functional (for CoLMDriver: `vllm` for inference and `colmdriver` for simulation).
-3. Confirm model-specific dependencies are installed where required (for CoLMDriver/TCP/CoDriving stacks: `spconv` and `pypcd`).
-
-#### 1. Submission Retrieval
-To transfer participant submissions from Hugging Face to the lab's local evaluation server:
-
-***Step A:*** Download and unzip the participant's `.zip` file from the submission portal into the `submissions/` directory.
-```
-unzip Team-A_submission.zip -d submissions/Team-A
-```
-
-***Step B:*** Verify structure. Ensure the unzipped folder contains the following files:
-```
-agents.py
-config/
-src/
-weights/
-model_env.yaml
-```
-
-***Step C:*** Symbolic linking. Point the evaluation suite to the new submission.
-```
-# Remove previous link and point to the current team
-rm -rf simulation/leaderboard/team_code
-ln -s ${PWD}/submissions/Team-A simulation/leaderboard/team_code
-```
-
-#### 2. Environment Setup
-To prevent discrepancies caused by library version mismatches, build a fresh environment for every team.
-```
-# Build the team's specific environment
-conda env create -f submissions/Test-Team/model_env.yaml -n mdrive_eval_test
-conda activate mdrive_eval_test
-```
-
-#### 3. Checkpoint Evaluation
-***Step A:*** Inject the standardized CARLA paths into the active team environment.
-```
-export CARLA_ROOT=${CARLA_ROOT:-$PWD/carla912}
-export PYTHONPATH=$PYTHONPATH:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.12-py3.7-linux-x86_64.egg
-```
-
-***Step B:*** Running VLM, LLM (from repository root)
-```
-# Enter conda ENV
-conda activate vllm
-# VLM on call
-CUDA_VISIBLE_DEVICES=6 vllm serve ckpt/colmdriver/VLM --port 1111 --max-model-len 8192 --trust-remote-code --enable-prefix-caching
-
-# LLM on call (in new terminal, with vllm env activated)
-CUDA_VISIBLE_DEVICES=7 vllm serve ckpt/colmdriver/LLM --port 8888 --max-model-len 4096 --trust-remote-code --enable-prefix-caching
-```
-
-Make sure `CUDA_VISIBLE_DEVICES` is set to an available GPU (`nvidia-smi`).
-If you use ports other than `1111`/`8888`, update `comm_client` and `vlm_client` in `simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml`.
-
-***Step C:*** Run evaluation
-```
-# ==============================================================================
-# BATCH 1: OpenCDA Scenarios (12 ZIPs)
-# ==============================================================================
-echo ">>> [BATCH 1/3] Running OpenCDA Scenarios..."
-SCENARIO_DIR="precrash"
-for zipfile in "$SCENARIO_DIR"/*.zip; do
-    name=$(basename "$zipfile" .zip)
-    $RUN_CMD tools/run_custom_eval.py \
-      --zip "$zipfile" \
-      --scenario-name "$name" \
-      --results-tag "${name}_${TEAM_NAME}" \
-      --agent "$SUB_DIR/agents.py" \
-      --agent-config "$SUB_DIR/config/submission_config.yaml" \
-      --port $PORT
-done
-
-# ==============================================================================
-# BATCH 2: InterDrive Benchmark (Full Suite)
-# ==============================================================================
-echo ">>> [BATCH 2/3] Running InterDrive All..."
-# Note: eval_mode.sh must be present in your scripts/eval directory
-bash scripts/eval/eval_mode.sh $GPU $PORT $TEAM_NAME ideal Interdrive_all
-
-# ==============================================================================
-# BATCH 3: Warmup Scenarios
-# ==============================================================================
-echo ">>> [BATCH 3/3] Running Warmup Scenarios..."
-$RUN_CMD tools/run_custom_eval.py \
-    --routes-dir "warmupscenarios" \
-    --agent "$SUB_DIR/agents.py" \
-    --agent-config "$SUB_DIR/config/submission_config.yaml" \
-    --port $PORT \
-    --results-tag "warmup_${TEAM_NAME}"
-
-echo "Evaluation Complete for $TEAM_NAME."
-```
-
-***Step D:*** Record DS and SR. Extract the Driving Score (DS) and Success Rate (SR) from the generated `summary.json`. Verify logs manually if the score is unexpectedly low to ensure no simulator glitches occurred.
-
----
-
 ## MDrive Toolbox
 
 ### Agentic Scenario Generation Pipeline
 
 Part of **MDrive-Toolbox**. A language agent emits a structured *scenario description* (topology, behavior arrangement, actor instantiation) grounded in human instructions and in-context expert demonstrations. Proposals are validated via deterministic rules in CARLA, and outputs are exported as CARLA-format scenario directories ready for closed-loop evaluation.
 
-The pipeline ships with 10 interaction categories (highway on-ramp merge, intersection deadlock, roundabout, pedestrian crosswalk, work zones, etc.) yielding the 100-scenario `MDrive-Interaction` bucket, and is **extensible**: new categories can be added by extending [`scenario_generator/scenario_generator/capabilities.py`](scenario_generator/scenario_generator/capabilities.py) with new topology features and interaction primitives.
+The pipeline ships with 10 interaction categories (highway on-ramp merge, intersection deadlock, roundabout, pedestrian crosswalk, work zones, etc.) yielding 100 of the 112 scenarios in the `MDrive-Interaction` bucket (the remaining 12 are the NHTSA pre-crash scenarios in `scenarioset/precrash/`). The pipeline is **extensible**: new categories can be added by extending [`scenario_generator/scenario_generator/capabilities.py`](scenario_generator/scenario_generator/capabilities.py) with new topology features and interaction primitives.
 
 Code: [`scenario_generator/`](scenario_generator/), entry point [`scenario_generator/start_pipeline.py`](scenario_generator/start_pipeline.py).
 
@@ -523,7 +458,7 @@ Stop early at any of the 10 pipeline stages via `--stop-after <stage>`. See [`sc
 
 ### Human-in-the-Loop Simulation Interface
 
-Part of **MDrive-Toolbox**. Lets a human expert take over one or more CAVs in a running scenario while the remaining CAVs and background actors continue executing their assigned policies. Human inputs are mapped to the same throttle/brake/steering channels planners use, so human-driven and policy-driven rollouts are directly comparable.
+Part of **MDrive-Toolbox**. Lets a human expert take over one or more CAVs in a running scenario. Human inputs are mapped to the same throttle/brake/steering channels planners use, so human-driven and policy-driven rollouts are directly comparable.
 
 Code: [`tools/hitl_run.py`](tools/hitl_run.py) (launcher), [`simulation/leaderboard/team_code/hitl_agent.py`](simulation/leaderboard/team_code/hitl_agent.py) (agent).
 

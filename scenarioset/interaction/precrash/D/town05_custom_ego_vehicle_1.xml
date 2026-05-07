@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes><route id="247" model="vehicle.lincoln.mkz2017" role="ego" town="Town05"><waypoint pitch="360.000000" roll="0.000000" x="-95.638000" y="87.957000" yaw="-179.934519" z="0.000000" /><waypoint pitch="360.000000" roll="0.000000" x="-127.290000" y="104.642000" yaw="89.489756" z="0.000000" /></route></routes>

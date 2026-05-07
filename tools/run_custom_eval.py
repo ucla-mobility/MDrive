@@ -12161,6 +12161,7 @@ def _rewrite_ego_xml_with_dense_grp_trace(
     grp: Any,
     hop_resolution: float,
     min_spacing_m: float = 0.0,
+    source_routes_dir: "Path | None" = None,
 ) -> "tuple[int, int]":
     """
     Rewrite an ego route XML so its <waypoint> elements are the dense,
@@ -12231,6 +12232,25 @@ def _rewrite_ego_xml_with_dense_grp_trace(
     if min_spacing_m > 0:
         dense_pts = _subsample_dense_route(dense_pts, min_spacing_m=min_spacing_m)
 
+    # Interdrive source XMLs ship a placeholder yaw (~0°) on every waypoint
+    # regardless of route direction, so the aligner copies it verbatim and
+    # the ego spawns 180° wrong on west/south-bound routes. Recompute yaws
+    # from leg geometry, but ONLY for interdrive — other scenariosets carry
+    # valid per-waypoint yaws and must be left alone. The xml_path here
+    # points into a per-run /tmp clone, so we test the original
+    # source_routes_dir provided by the caller.
+    if (source_routes_dir is not None
+            and "interdrive" in str(source_routes_dir).lower()
+            and len(dense_pts) >= 2):
+        import math
+        for idx in range(len(dense_pts)):
+            j = idx + 1 if idx < len(dense_pts) - 1 else idx
+            i = idx if idx < len(dense_pts) - 1 else idx - 1
+            dx = dense_pts[j]["x"] - dense_pts[i]["x"]
+            dy = dense_pts[j]["y"] - dense_pts[i]["y"]
+            if abs(dx) > 1e-6 or abs(dy) > 1e-6:
+                dense_pts[idx]["yaw"] = math.degrees(math.atan2(dy, dx))
+
     # Replace XML waypoints with the aligned dense route.
     for wp in wp_elems:
         route_elem.remove(wp)
@@ -12253,6 +12273,7 @@ def align_ego_routes_in_directory(
     carla_port: int,
     sampling_resolution: float,
     min_spacing_m: float = 0.0,
+    source_routes_dir: "Path | None" = None,
 ) -> None:
     """
     Rewrite each ego route XML in `routes_dir` so its waypoints are the
@@ -12364,6 +12385,7 @@ def align_ego_routes_in_directory(
                     grp=grp,
                     hop_resolution=float(sampling_resolution),
                     min_spacing_m=float(min_spacing_m),
+                    source_routes_dir=source_routes_dir,
                 )
                 print(
                     f"[INFO] Dense-aligned {xml_path.name}: {orig} -> {dense} waypoints"
@@ -16083,6 +16105,7 @@ def main() -> None:
                                 carla_port=int(align_port),
                                 sampling_resolution=float(args.align_ego_sampling_resolution),
                                 min_spacing_m=float(args.align_ego_min_spacing_m),
+                                source_routes_dir=routes_dir,
                             )
                         else:
                             print("[WARN] Ego route alignment requested, but no ego XMLs found to infer town.")
