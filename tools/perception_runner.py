@@ -40,11 +40,23 @@ from opencood.utils.transformation_utils import x_to_world, x1_to_x2
 
 # Map a friendly detector name to its checkpoint dir + best-val .pth filename.
 # Add CoBEVT here once the SwapFusion port lands.
+# All four detectors now point at the OPV2V `lidar` HuggingFace variant
+# (HeterBaseline_opv2v_lidar_<det>_*.zip from yifanlu/HEAL). Heads were
+# trained without expecting cameras, so feeding LiDAR-only matches their
+# training distribution and gives ~+7 pts AP@.50 on OPV2V test vs the
+# `lidarcamera` variants. The original lidarcamera ckpts are still on
+# disk under ckpt/heter_baseline/<det>/ if needed for an ablation.
 _DETECTORS = {
-    "attfuse": ("ckpt/heter_baseline/attfuse",  "net_epoch_bestval_at19.pth"),
-    "fcooper": ("ckpt/heter_baseline/fcooper",  "net_epoch_bestval_at17.pth"),
-    "disco":   ("ckpt/heter_baseline/disco",    "net_epoch_bestval_at15.pth"),
-    "cobevt":  ("ckpt/heter_baseline/cobevt",   "net_epoch_bestval_at27.pth"),
+    "attfuse": ("ckpt/heter_baseline/attfuse_lidaronly", "net_epoch_bestval_at15.pth"),
+    "fcooper": ("ckpt/heter_baseline/fcooper_lidaronly", "net_epoch_bestval_at23.pth"),
+    "disco":   ("ckpt/heter_baseline/disco_lidaronly",   "net_epoch_bestval_at23.pth"),
+    "cobevt":  ("ckpt/heter_baseline/cobevt_lidaronly",  "net_epoch_bestval_at39.pth"),
+    # Aliases preserved so the openloop-gated auto-switch remains a no-op
+    # rather than an error if anything still references the _lidar suffix.
+    "attfuse_lidar": ("ckpt/heter_baseline/attfuse_lidaronly", "net_epoch_bestval_at15.pth"),
+    "fcooper_lidar": ("ckpt/heter_baseline/fcooper_lidaronly", "net_epoch_bestval_at23.pth"),
+    "disco_lidar":   ("ckpt/heter_baseline/disco_lidaronly",   "net_epoch_bestval_at23.pth"),
+    "cobevt_lidar":  ("ckpt/heter_baseline/cobevt_lidaronly",  "net_epoch_bestval_at39.pth"),
 }
 
 
@@ -67,6 +79,20 @@ class PerceptionRunner:
         device: Optional[str] = None,
         score_threshold: Optional[float] = None,
     ):
+        # Openloop runs (--openloop sets CUSTOM_EGO_LOG_REPLAY=1) feed only
+        # LiDAR to the model. The default lidarcamera checkpoints have heads
+        # trained on m1+m2 fused features and lose ~7pts AP@.50 when starved
+        # of camera input. Auto-prefer the lidaronly variant in openloop if
+        # one is registered (e.g. "fcooper" → "fcooper_lidar"). Closed-loop
+        # behavior unchanged. Override with PERCEPTION_SWAP_FORCE_DETECTOR=...
+        if (os.environ.get("CUSTOM_EGO_LOG_REPLAY", "0") == "1"
+                and not os.environ.get("PERCEPTION_SWAP_FORCE_DETECTOR")):
+            lidar_alias = f"{detector}_lidar"
+            if lidar_alias in _DETECTORS:
+                print(f"[perception_runner] openloop detected → using "
+                      f"{lidar_alias} (lidar-only ckpt) instead of {detector}")
+                detector = lidar_alias
+
         if detector not in _DETECTORS:
             raise ValueError(
                 f"unknown detector {detector!r}; available: {sorted(_DETECTORS)}"
@@ -115,6 +141,109 @@ class PerceptionRunner:
         ).to(self.device)
 
         self._max_cav = int(self.config["train_params"]["max_cav"])
+        # Cache m2 (camera) preprocessing config if the model has it. Only
+        # used by detect_multimodal(); harmless to leave attached otherwise.
+        try:
+            self._m2_cfg = self.config["heter"]["modality_setting"]["m2"]
+            self._has_m2 = True
+        except (KeyError, TypeError):
+            self._m2_cfg = None
+            self._has_m2 = False
+
+        # OPV2V test pcds don't ship depth maps; disable depth_supervision so
+        # the m2 encoder doesn't try to read a 4th depth channel from the
+        # input image (lss_submodule.py:122 indexes x[:, 3, :, :] when
+        # depth_supervision is True). Inference uses the predicted depth path.
+        if self._has_m2 and hasattr(self.model, "encoder_m2"):
+            enc_m2 = self.model.encoder_m2
+            if hasattr(enc_m2, "depth_supervision"):
+                enc_m2.depth_supervision = False
+            if hasattr(enc_m2, "camencode"):
+                ce = enc_m2.camencode
+                if hasattr(ce, "depth_supervision"):
+                    ce.depth_supervision = False
+                if hasattr(ce, "use_gt_depth"):
+                    ce.use_gt_depth = False
+        # Model-level supervision flag must also be off; otherwise
+        # heter_model_baseline.py:188 tries to read encoder.depth_items
+        # which we no longer populate.
+        if self._has_m2 and hasattr(self.model, "depth_supervision_m2"):
+            self.model.depth_supervision_m2 = False
+
+    @torch.no_grad()
+    def detect_multimodal(self, pcd_np: np.ndarray, m2_inputs: dict) -> "Detections":
+        """Run a `lidarcamera` HeterBaseline checkpoint with both modalities
+        for a single ego CAV.
+
+        m2_inputs must contain (already-preprocessed, on CPU as torch tensors):
+          - imgs       (Ncam, 3, fH, fW)  — normalize_img'd RGB
+          - intrins    (Ncam, 3, 3)
+          - rots       (Ncam, 3, 3)        — R_lidar_camera (3x3)
+          - trans      (Ncam, 3)           — T_lidar_camera (3,)
+          - extrinsics (Ncam, 4, 4)        — full T_lidar_camera
+          - post_rots  (Ncam, 3, 3)        — image-augmentation rotation
+          - post_trans (Ncam, 3)           — image-augmentation translation
+
+        See `intermediate_heter_fusion_dataset.py:177-241` for the canonical
+        builder. The model treats m1 and m2 of the same CAV as TWO virtual
+        agent slots in record_len, so we set agent_modality_list=["m1","m2"]
+        and record_len=[2]."""
+        if not self._has_m2:
+            raise RuntimeError("This checkpoint config has no m2 modality "
+                               "setting; use detect() / detect_cooperative() instead.")
+
+        if pcd_np.dtype != np.float32:
+            pcd_np = pcd_np.astype(np.float32, copy=False)
+        v = self.preprocessor.preprocess(pcd_np)
+        coords = np.concatenate(
+            [np.zeros((v["voxel_coords"].shape[0], 1), dtype=v["voxel_coords"].dtype),
+             v["voxel_coords"]],
+            axis=1,
+        )
+        inputs_m1 = {
+            "voxel_features":   torch.from_numpy(v["voxel_features"]).float().to(self.device),
+            "voxel_coords":     torch.from_numpy(coords).int().to(self.device),
+            "voxel_num_points": torch.from_numpy(v["voxel_num_points"]).int().to(self.device),
+        }
+        # m2 model expects (B, Ncam, 3, H, W) — add the batch dim (B=1).
+        inputs_m2 = {k: v.unsqueeze(0).to(self.device) if torch.is_tensor(v) else v
+                     for k, v in m2_inputs.items()}
+
+        data_dict = {
+            "agent_modality_list": ["m1", "m2"],
+            "record_len":          torch.tensor([2], dtype=torch.int).to(self.device),
+            # 2 virtual slots, identity transform between them (same physical CAV).
+            "pairwise_t_matrix":   torch.eye(4).view(1, 1, 1, 4, 4)
+                                          .repeat(1, self._max_cav, self._max_cav, 1, 1).to(self.device),
+            "inputs_m1":           inputs_m1,
+            "inputs_m2":           inputs_m2,
+        }
+
+        out = self.model(data_dict)
+
+        proc_in = {
+            "ego": {
+                "transformation_matrix": torch.eye(4).to(self.device),
+                "anchor_box":            self._anchor_box,
+            }
+        }
+        proc_out = {"ego": {k: v for k, v in out.items()
+                            if k in ("cls_preds", "reg_preds", "dir_preds")}}
+        pred_boxes, pred_scores = self.postprocessor.post_process(proc_in, proc_out)
+        if pred_boxes is None or len(pred_boxes) == 0:
+            return Detections(
+                corners=np.zeros((0, 8, 3), dtype=np.float32),
+                scores=np.zeros((0,), dtype=np.float32),
+                centers_xy=np.zeros((0, 2), dtype=np.float32),
+                P=0,
+            )
+        corners = pred_boxes.cpu().numpy()
+        scores = pred_scores.cpu().numpy()
+        centers_xy = corners.mean(axis=1)[:, :2]
+        return Detections(corners=corners.astype(np.float32),
+                          scores=scores.astype(np.float32),
+                          centers_xy=centers_xy.astype(np.float32),
+                          P=int(corners.shape[0]))
 
     @torch.no_grad()
     def detect(self, pcd_np: np.ndarray) -> Detections:

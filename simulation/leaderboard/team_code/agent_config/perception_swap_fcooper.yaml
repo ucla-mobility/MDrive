@@ -1,7 +1,8 @@
-# PerceptionSwapAgent — F-Cooper detector + rule-based planner.
+# PerceptionSwapAgent — F-Cooper detector + BasicAgent planner.
 detector: fcooper
+planner: basicagent           # CARLA BasicAgent (lateral PID lane-following + emergency stop)
 cooperative: true             # multi-ego cross-agent feature fusion (the model's design)
-comm_range_m: 70              # HEAL config default
+comm_range_m: 200             # bumped from 70m so v2xpnp 2-ego scenes (max ~250m) stay in range
 max_cooperators: 4
 cruise_speed: 6.0
 score_threshold: 0.20

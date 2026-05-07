@@ -416,6 +416,35 @@ class PnP_infer():
 		self.perception_dataloader = perception_dataloader
 		self.device=device
 
+		# Optional perception backbone swap & BEV-feature ablation. Both flags
+		# default OFF, so closed-loop and openloop runs of the regular
+		# `codriving` planner are bit-identical to before. Enabled via the
+		# variant YAML configs (`pnp_config_codriving_5_10_{attfuse,fcooper,
+		# disco,cobevt,zerofeat}.yaml`) — see `perception.backbone` and
+		# `perception.zero_bev_feature` keys.
+		_perc_cfg = (self.config or {}).get('perception', {}) or {}
+		self._perception_backbone = str(_perc_cfg.get('backbone', 'codriving')).strip().lower()
+		self._zero_bev_feature = bool(_perc_cfg.get('zero_bev_feature', False))
+		# LiDAR mount yaw — used by the HEAL helper to decide whether to
+		# software-rotate the input cloud. Default -90 matches codriving's
+		# legacy mount; HEAL variants override to 0 in their YAML.
+		self._lidar_mount_yaw = float(_perc_cfg.get('lidar_mount_yaw', -90.0))
+		self._heal_perception = None
+		_VALID_BACKBONES = ('codriving', 'attfuse', 'fcooper', 'disco', 'cobevt')
+		if self._perception_backbone not in _VALID_BACKBONES:
+			raise ValueError(
+				"perception.backbone={!r} not recognized; expected one of: {}".format(
+					self._perception_backbone, ', '.join(_VALID_BACKBONES)))
+		if self._perception_backbone != 'codriving':
+			# Lazy import: only paid when a HEAL backbone is selected, so
+			# default codriving runs are unaffected if perception_runner has
+			# any import-time side-effects.
+			from tools.perception_runner import PerceptionRunner
+			self._heal_perception = PerceptionRunner(detector=self._perception_backbone)
+			print('[PnP_infer] HEAL perception backbone active: {}'.format(self._perception_backbone))
+		if self._zero_bev_feature:
+			print('[PnP_infer] BEV feature path zeroed (perception.zero_bev_feature=true)')
+
 		self.perception_memory_bank = [[{}] for _ in range(self.ego_vehicles_num)]
 
 		self.controller = [V2X_Controller(self.config['control']) for _ in range(self.ego_vehicles_num)]
@@ -455,6 +484,117 @@ class PnP_infer():
 			self.save_path = pathlib.Path(SAVE_PATH) / string
 			self.save_path.mkdir(parents=True, exist_ok=False)
 			(self.save_path / "meta").mkdir(parents=True, exist_ok=False)
+
+	def _run_heal_perception_single_agent(self, car_data_raw):
+		"""Run a HEAL HeterBaseline detector on the ego LiDAR.
+
+		Returns ``(corners, scores)`` where ``corners`` is a ``(P, 8, 3)``
+		torch tensor on ``self.device`` and ``scores`` is a ``(P,)`` torch
+		tensor — same convention as codriving's own ``pred_box_tensor`` /
+		``pred_score`` BEFORE the in-place x↔y swap, so the existing
+		downstream LiDAR→ego transform pipeline applies unchanged.
+
+		Single-agent path — degenerate vs codriving's cooperative
+		perception, but enough for the detector-quality ablation.
+		Cooperative HEAL inference would need world-frame poses for all
+		agents (see perception_swap_agent.py for the pattern); deferred
+		because codriving's `measurements` dict and CARLA's transform
+		convention need a bridge that isn't done yet.
+
+		Yaw-mount compensation: codriving mounts the LiDAR at yaw=-90°
+		relative to the actor (pnp_agent_e2e_v2v.py:279), so a vehicle
+		ahead of the actor lands at -y in the raw point cloud. HEAL's
+		HeterBaseline checkpoints were trained on OPV2V data where the
+		LiDAR is mounted at yaw=0° (vehicles ahead → +x). Without
+		compensation HEAL sees a 90°-rotated scene and produces near-zero
+		detections (matches perception_swap's earlier yaw=90 bug, fixed
+		there by remounting at yaw=0 — not an option here because
+		codriving's perception was trained on the yaw=-90 mount).
+		Workaround: rotate the input cloud +90° around z before HEAL so
+		the model sees a yaw=0-equivalent scene, then rotate predictions
+		-90° back into codriving's lidar frame so the downstream
+		``transform_2d_points`` LiDAR→ego pipeline applies unchanged.
+		"""
+		_pcd = car_data_raw[0]['lidar']
+		if not isinstance(_pcd, np.ndarray):
+			_pcd = np.asarray(_pcd)
+		_pcd = _pcd.astype(np.float32, copy=False)
+		# HEAL voxelizer expects (N, 4) [x, y, z, intensity]. Pad with a
+		# zero-intensity column when the upstream lidar is xyz-only.
+		if _pcd.ndim != 2 or _pcd.shape[-1] < 3:
+			# Empty or malformed cloud; return no detections.
+			_empty_corners = torch.zeros((0, 8, 3), dtype=torch.float32, device=self.device)
+			_empty_scores = torch.zeros((0,), dtype=torch.float32, device=self.device)
+			return _empty_corners, _empty_scores
+		if _pcd.shape[-1] == 3:
+			_pad = np.zeros((_pcd.shape[0], 1), dtype=np.float32)
+			_pcd = np.concatenate([_pcd, _pad], axis=-1)
+		elif _pcd.shape[-1] > 4:
+			_pcd = _pcd[:, :4]
+
+		# Compensate for the LiDAR mount yaw so HEAL sees a yaw=0-equivalent
+		# point cloud (vehicles ahead at +x), matching its OPV2V training
+		# distribution.
+		#   • lidar_mount_yaw = -90 (codriving default): rotate -90° CW,
+		#     i.e. (x, y) → (y, -x).
+		#   • lidar_mount_yaw = 0 (perception_swap-style native mount):
+		#     no rotation needed.
+		# Either way, HEAL outputs in actor body frame, which is what
+		# codriving's downstream pipeline (X↔Y swap + transform_2d_points
+		# + rasterization + AP collector) expects pre-X↔Y-swap.
+		if abs(self._lidar_mount_yaw - 0.0) < 1e-3:
+			_pcd_rot = _pcd
+		elif abs(self._lidar_mount_yaw - (-90.0)) < 1e-3:
+			_pcd_rot = _pcd.copy()
+			_pcd_rot[:, 0] =  _pcd[:, 1]
+			_pcd_rot[:, 1] = -_pcd[:, 0]
+		else:
+			# Generic case: rotate by -lidar_mount_yaw around z.
+			_yaw_rad = math.radians(-self._lidar_mount_yaw)
+			_c, _s = math.cos(_yaw_rad), math.sin(_yaw_rad)
+			_pcd_rot = _pcd.copy()
+			_pcd_rot[:, 0] = _c * _pcd[:, 0] - _s * _pcd[:, 1]
+			_pcd_rot[:, 1] = _s * _pcd[:, 0] + _c * _pcd[:, 1]
+
+		_det = self._heal_perception.detect(_pcd_rot)
+
+		# Diagnostic: print detection count + score range on the first ~5
+		# calls per process so we can confirm HEAL is firing (and at what
+		# confidence) rather than returning empty silently. Cheap; only
+		# prints to the planner log a handful of times.
+		if not hasattr(self, "_heal_diag_count"):
+			self._heal_diag_count = 0
+		if self._heal_diag_count < 5:
+			self._heal_diag_count += 1
+			_n_pts = int(_pcd_rot.shape[0])
+			_x_rng = (float(_pcd_rot[:, 0].min()), float(_pcd_rot[:, 0].max())) if _n_pts else (0.0, 0.0)
+			_y_rng = (float(_pcd_rot[:, 1].min()), float(_pcd_rot[:, 1].max())) if _n_pts else (0.0, 0.0)
+			if _det.P > 0:
+				_s = _det.scores
+				_sc_rng = (float(_s.min()), float(_s.max()), float(_s.mean()))
+				print(f"[PnP_infer/HEAL] call#{self._heal_diag_count} "
+				      f"backbone={self._perception_backbone} pts={_n_pts} "
+				      f"x∈[{_x_rng[0]:.1f},{_x_rng[1]:.1f}] "
+				      f"y∈[{_y_rng[0]:.1f},{_y_rng[1]:.1f}] "
+				      f"P={_det.P} scores=min/max/mean={_sc_rng[0]:.3f}/{_sc_rng[1]:.3f}/{_sc_rng[2]:.3f}")
+			else:
+				print(f"[PnP_infer/HEAL] call#{self._heal_diag_count} "
+				      f"backbone={self._perception_backbone} pts={_n_pts} "
+				      f"x∈[{_x_rng[0]:.1f},{_x_rng[1]:.1f}] "
+				      f"y∈[{_y_rng[0]:.1f},{_y_rng[1]:.1f}] "
+				      f"P=0 (no detections above threshold)")
+
+		if _det.P == 0:
+			_empty_corners = torch.zeros((0, 8, 3), dtype=torch.float32, device=self.device)
+			_empty_scores = torch.zeros((0,), dtype=torch.float32, device=self.device)
+			return _empty_corners, _empty_scores
+
+		# No output rotation. HEAL's output (given yaw=0-equivalent input)
+		# is already in actor body frame, which is what codriving's
+		# downstream pipeline expects pred_box_tensor to be in pre-X↔Y-swap.
+		_corners = torch.from_numpy(np.ascontiguousarray(_det.corners)).float().to(self.device)
+		_scores = torch.from_numpy(np.ascontiguousarray(_det.scores)).float().to(self.device)
+		return _corners, _scores
 
 	def get_action_from_list_multi_vehicle(self, car_data_raw, rsu_data_raw, step, timestamp):
 		control_all = []
@@ -569,6 +709,21 @@ class PnP_infer():
 		if not os.path.exists(folder_path):
 			os.mkdir(folder_path)
 
+		# Optional: replace codriving's perception output with HEAL detector
+		# boxes. Single-agent inference path — HEAL's cooperative pose
+		# convention isn't yet bridged to codriving's `measurements` dict,
+		# so v1 uses ego-only detections (a clean detector-quality ablation
+		# even though it's degenerate vs codriving's cooperative perception).
+		# `output_dict['ego']['fused_feature']` is left untouched so that the
+		# downstream feature-path is either (a) used as-is when the user
+		# wants codriving features + HEAL detections, or (b) zeroed below
+		# at the feature stash step (default for the variant configs).
+		if self._heal_perception is not None:
+			heal_corners, heal_scores = self._run_heal_perception_single_agent(car_data_raw)
+			infer_result['pred_box_tensor'] = heal_corners
+			infer_result['pred_score'] = heal_scores
+			# gt_box_tensor is GT (used for vis only); leave as codriving's GT.
+
 		infer_result_clone = copy.deepcopy(infer_result)
 
 		### filte out ego box
@@ -623,14 +778,29 @@ class PnP_infer():
 		                   if _pred_world_corners_list else np.zeros((0, 8, 3), dtype=np.float32))
 		_pred_score_arr = (infer_result['pred_score'].cpu().numpy().astype(np.float32)
 		                   if infer_result.get('pred_score') is not None else np.zeros((0,), dtype=np.float32))
+		# Raw opencood lidar-frame predictions (unmodified output of the
+		# perception post-processor, before the in-place x↔y swap above).
+		# This is the same convention perception_swap_agent.py feeds to its
+		# CarlaGTApCollector.update(pred_frame='ego', ...) — pulling it from
+		# infer_result_clone (taken before the swap) makes the AP collector
+		# input frame-consistent across perception_swap / codriving / colmdriver.
+		_pred_lidar_arr = np.zeros((0, 8, 3), dtype=np.float32)
+		try:
+			_pbt_clone = infer_result_clone.get('pred_box_tensor')
+			if _pbt_clone is not None and len(_pbt_clone) > 0:
+				_pred_lidar_arr = _pbt_clone.cpu().numpy().astype(np.float32)
+		except Exception:
+			pass
 		if not hasattr(self, '_last_perception_for_save'):
 			self._last_perception_for_save = {}
 		_meas_full = car_data_raw[0]['measurements']
 		self._last_perception_for_save[ego_id] = {
 			'pred_box_world': _pred_world_arr,
+			'pred_box_lidar': _pred_lidar_arr,
 			'pred_score': _pred_score_arr,
 			'lidar_pose_x': float(_meas_full["lidar_pose_x"]),
 			'lidar_pose_y': float(_meas_full["lidar_pose_y"]),
+			'lidar_pose_z': float(_meas_full.get("lidar_pose_z", 0.0)),
 			'theta': float(_meas_full["theta"]),
 			'ego_x': float(_meas_full.get("x", 0.0)),
 			'ego_y': float(_meas_full.get("y", 0.0)),
@@ -658,6 +828,12 @@ class PnP_infer():
 		fused_feature_2 = perception_results['fused_feature'].permute(0,1,3,2) #  ([2, 128, 96, 288]) -> ([2, 128, 288, 96])
 		fused_feature_3 = torch.flip(fused_feature_2, dims=[2])
 		feature = fused_feature_3[:,:,:192,:]
+		# Optional ablation: zero the BEV feature path so the planner runs on
+		# rasterized detections only. Used by the codriving_zerofeat sanity
+		# baseline and the codriving_<heal> variants (which want zero
+		# influence from codriving's perception backbone).
+		if self._zero_bev_feature:
+			feature = torch.zeros_like(feature)
 		############################################################
 
 		self.perception_memory_bank[ego_id].pop(0)

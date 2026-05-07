@@ -51,6 +51,7 @@ from leaderboard.envs.sensor_interface import SensorInterface, SensorConfigurati
 from leaderboard.autoagents.agent_wrapper import  AgentWrapper, AgentError
 from leaderboard.utils.statistics_manager import StatisticsManager
 from leaderboard.utils.route_indexer import RouteIndexer
+from leaderboard.utils.route_parser import RouteParser
 from leaderboard.recovery.recovery_manager import RecoveryManager
 
 try:
@@ -1810,15 +1811,32 @@ class LeaderboardEvaluator(object):
             if "actors" not in os.path.normpath(x).split(os.sep)
         ]
         
+        # Separate the dense REPLAY XMLs (used for open-loop ego teleport) from
+        # the sparse route XMLs (used by the planner as its target route).
+        #
+        # Filename conventions used by the v2xpnp dataset:
+        #   ucla_v2_custom_ego_vehicle_<N>.xml         -> sparse route (4-8 waypoints, no `time`)
+        #   ucla_v2_custom_ego_vehicle_<N>_REPLAY.xml  -> dense replay (~123 waypoints, `time` per waypoint)
+        #
+        # Previously the suffix-stripping logic mapped "..._0_REPLAY.xml" to
+        # ego_id_str="REPLAY" and the dense trajectory was silently filtered
+        # out at the usable_keys step below. That broke the LogReplayEgo
+        # follower (it only fires when `trajectory_times` is fully populated)
+        # and made --openloop effectively closed-loop for the ego.
+        replay_path_dict = {}  # ego_id_str -> path/to/<...>_REPLAY.xml
         for xml_path in xml_files:
-            # Extract the ego_id from the filename (last part before .xml)
-            # e.g., "town05_vehicle_1_0.xml" -> "0"
             filename = os.path.basename(xml_path)
-            ego_id_str = filename.split('.')[0].split('_')[-1]
-            
-            # Only add if not already present (in case of duplicates across scenarios)
-            if ego_id_str not in route_path_dict:
-                route_path_dict[ego_id_str] = xml_path
+            stem = filename.split('.')[0]
+            is_replay = stem.endswith("_REPLAY")
+            base_stem = stem[: -len("_REPLAY")] if is_replay else stem
+            ego_id_str = base_stem.split('_')[-1]
+
+            if is_replay:
+                if ego_id_str not in replay_path_dict:
+                    replay_path_dict[ego_id_str] = xml_path
+            else:
+                if ego_id_str not in route_path_dict:
+                    route_path_dict[ego_id_str] = xml_path
 
         if not route_path_dict:
             message = f"No route XML files found under {args.routes_dir}"
@@ -1874,6 +1892,24 @@ class LeaderboardEvaluator(object):
                         str(i): route_path_dict[remapped_keys[i]]
                         for i in range(args.ego_num)
                     }
+                    # Mirror the same remap onto replay_path_dict so the
+                    # openloop teleport path can find the dense REPLAY XML by
+                    # the new (contiguous) ego_id keys. Without this, v2xpnp
+                    # scenarios where the only ego file is "..._1.xml" would
+                    # have route_path_dict['0'] (after remap) but
+                    # replay_path_dict['1'] (no remap), causing
+                    # `replay_path_dict.get(str(0))` at the multi_replay_*
+                    # build site to return None and OpenLoopRuntime to never
+                    # construct → openloop runs would silently degrade to
+                    # closed-loop. Closed-loop runs are unaffected because
+                    # replay_path_dict is only consumed in the openloop branch.
+                    replay_remapped = {
+                        str(i): replay_path_dict[remapped_keys[i]]
+                        for i in range(args.ego_num)
+                        if remapped_keys[i] in replay_path_dict
+                    }
+                    if replay_remapped:
+                        replay_path_dict = replay_remapped
             for ego_id in range(args.ego_num):
                 if str(ego_id) not in route_path_dict:
                     message = (
@@ -1946,11 +1982,58 @@ class LeaderboardEvaluator(object):
                 self.statistics_manager[i].clear_record(args.checkpoint)
             route_indexer.save_state(args.checkpoint)
 
+        # Parse a REPLAY XML once and return a single RouteScenarioConfiguration
+        # exposing the dense trajectory + per-waypoint times. Returns None if the
+        # path is missing or unparseable so callers can fall back gracefully.
+        def _load_replay_config(replay_xml_path):
+            if not replay_xml_path or not os.path.isfile(replay_xml_path):
+                return None
+            try:
+                # parse_routes_file expects (routes_file, scenarios_file, ...)
+                # — a non-empty scenarios_file is required even though we don't
+                # consume scenario triggers from the REPLAY XML.
+                replay_configs = RouteParser.parse_routes_file(
+                    replay_xml_path, args.scenarios, False
+                )
+            except Exception as exc:
+                print(f"[OPENLOOP] Failed to parse replay XML {replay_xml_path}: {exc}")
+                return None
+            if not replay_configs:
+                return None
+            return replay_configs[0]
+
         print("Start Running!")
         while route_indexer.peek():
             try:
                 # setup, load config of the next route
                 config = route_indexer.next()
+                # ----- Open-loop replay attachments (all egos) -----
+                # Always populate `multi_replay_*` even with ego_num == 1, so
+                # downstream code (scenario_manager openloop teleport, viz, etc)
+                # has a single source of truth regardless of ego count.
+                config.multi_replay_traj = []
+                config.multi_replay_yaws = []
+                config.multi_replay_pitches = []
+                config.multi_replay_rolls = []
+                config.multi_replay_times = []
+                config.multi_replay_xml_path = []
+                for ego_id in range(max(1, int(args.ego_num))):
+                    rxml = replay_path_dict.get(str(ego_id))
+                    rconfig = _load_replay_config(rxml)
+                    if rconfig is None:
+                        config.multi_replay_traj.append(None)
+                        config.multi_replay_yaws.append(None)
+                        config.multi_replay_pitches.append(None)
+                        config.multi_replay_rolls.append(None)
+                        config.multi_replay_times.append(None)
+                        config.multi_replay_xml_path.append(None)
+                        continue
+                    config.multi_replay_traj.append(getattr(rconfig, "trajectory", None))
+                    config.multi_replay_yaws.append(getattr(rconfig, "trajectory_yaws", None))
+                    config.multi_replay_pitches.append(getattr(rconfig, "trajectory_pitches", None))
+                    config.multi_replay_rolls.append(getattr(rconfig, "trajectory_rolls", None))
+                    config.multi_replay_times.append(getattr(rconfig, "trajectory_times", None))
+                    config.multi_replay_xml_path.append(rxml)
                 if args.ego_num > 1:
                     config.multi_traj = [config.trajectory]
                     config.multi_traj_yaws = [getattr(config, "trajectory_yaws", None)]

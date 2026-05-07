@@ -374,6 +374,16 @@ class CollisionTest(Criterion):
             return
 
         actor_location = CarlaDataProvider.get_location(self.actor)
+        if actor_location is None:
+            # Ego actor was destroyed (e.g. between event-fire and callback
+            # dispatch on a CARLA tick boundary). Skip — there's no valid
+            # location to attribute the collision to. Without this guard,
+            # we crash with AttributeError: 'NoneType' object has no
+            # attribute 'x' on every collision sensor event after teardown,
+            # which surfaces as "Agent crashed" + 1-tick scenario failures
+            # on scenarios with partial actor spawn (the collision sensor
+            # gets attached but the ego ref goes stale during init retry).
+            return
 
         # Ignore the current one if it is the same id as before
         if self.last_id == event.other_actor.id:

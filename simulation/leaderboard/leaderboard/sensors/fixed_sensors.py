@@ -578,6 +578,42 @@ class SensorUnit(object):
         # Tick must be suspended.
         # CarlaDataProvider.get_world().tick()
 
+    def move_to(self, spawn_point):
+        """Teleport every existing sensor in this unit to a new RSU base
+        location WITHOUT destroying / respawning the actors.
+
+        Equivalent to ``cleanup() + setup_sensors(spawn_point=...)`` in
+        terms of per-sensor world poses (each sensor lands at
+        ``sensor_spec[xyz] + spawn_point[xyz]`` with the spec's rotation),
+        but reuses the existing actors so that:
+          - sensor streams stay open (no streaming-open-race),
+          - sensor_interface tags stay stable (no register/unregister churn),
+          - CARLA actor count stays constant per RSU (no spawn pressure).
+
+        Caller contract: the unit must currently be a populated RSU (i.e.
+        ``setup_sensors`` ran successfully and ``_sensors_list`` is non-
+        empty). For empty / placeholder units, the agent must replace the
+        entire RoadSideUnit instance instead of calling this — see
+        ``pnp_agent_e2e_v2v.py:spawn_rsu``.
+        """
+        self._rsu_loc = spawn_point
+        for sensor_spec, sensor in zip(self.sensors(), self._sensors_list):
+            if sensor is None:
+                continue
+            new_transform = carla.Transform(
+                carla.Location(
+                    x=sensor_spec['x'] + spawn_point.x,
+                    y=sensor_spec['y'] + spawn_point.y,
+                    z=sensor_spec['z'] + spawn_point.z,
+                ),
+                carla.Rotation(
+                    pitch=sensor_spec['pitch'],
+                    yaw=sensor_spec['yaw'],
+                    roll=sensor_spec['roll'],
+                ),
+            )
+            sensor.set_transform(new_transform)
+
     def _get_3d_bbs(self, max_distance=50):
         bounding_boxes = {
             "traffic_lights": [],
@@ -691,10 +727,22 @@ class SensorUnit(object):
 
     def del_sensors(self):
         """
-        Remove sensor tags of one rsu
+        Remove sensor tags of one rsu.
+
+        IMPORTANT: tag format must match how setup_sensors() registers them
+        in CallBack at line 573:
+            ``self.name + "_{}_".format(self.id) + sensor_spec['id']``
+        i.e. ``"<name>_<id>_<sensor_id>"`` (e.g. ``"rsu_1000_lidar"``).
+        Earlier this method used ``"<name>_<sensor_id>_<id>"`` which never
+        matched any registered tag, so unregister_sensor was effectively a
+        no-op and stale entries leaked into the SensorInterface. The leak
+        was harmless under the original spawn_rsu() behaviour (which
+        discarded the entire RoadSideUnit + its SensorInterface every
+        rotation), but it surfaces as 'Duplicated sensor tag' if the
+        RoadSideUnit is reused across rotations (set_transform path).
         """
         for sensor_spec in self.sensors():
-            sensor_tag = self.name + '_' + sensor_spec['id'] + "_{}".format(self.id)
+            sensor_tag = self.name + "_{}_".format(self.id) + sensor_spec['id']
             try:
                 _log_sensor_event("SENSOR_LISTENER_DETACH", sensor_tag=sensor_tag, status="begin")
             except Exception:
@@ -1214,3 +1262,116 @@ class RoadSideUnit(SensorUnit):
         corner_area = cv2_subpixel(corners[:, :2])
 
         return corner_area
+
+
+class InfraLiDARUnit(RoadSideUnit):
+    """RoadSideUnit variant anchored to a fixed full-6DoF world Transform.
+
+    The base RoadSideUnit hardcodes lidar yaw=-90° in pose_def() and writes
+    theta=π/2 in process(). For v2xpnp infra-LiDARs we have arbitrary world
+    yaws (-138.5° / +2.6°) and small roll/pitch, so we override pose_def()
+    so the spawned sensor faces the right direction in world frame, and
+    override process() so the registered lidar_pose theta matches the actual
+    world yaw (in the model's RH-CCW radian convention).
+    """
+
+    def __init__(self, world_transform, save_path=None, id=0, use_semantic=False):
+        super().__init__(save_path=save_path, id=id, is_None=False, use_semantic=use_semantic)
+        self._world_transform = world_transform
+        # Note: the callback tag uses self.name + "_" + self.id, but
+        # RoadSideUnit.process() reads input_data with hardcoded "rsu_" prefix
+        # — so we MUST keep self.name == "rsu". Tag uniqueness is guaranteed
+        # by callers passing distinct ids (e.g. 900000+, well outside the
+        # range used by ego-tracking RSUs in this codebase).
+
+    def pose_def(self):
+        # Populate camera_*_pose etc. via the base implementation, then
+        # override lidar_pose so the LiDAR sensor is spawned with the desired
+        # world rotation. Camera poses keep their default orientations
+        # relative to the unit; cameras don't feed cooperative fusion in
+        # this codebase so their absolute world orientation isn't critical.
+        super().pose_def()
+        rot = self._world_transform.rotation
+        self.lidar_pose = carla.Transform(
+            carla.Location(x=0.0, y=0.0, z=0.0),
+            carla.Rotation(roll=rot.roll, pitch=rot.pitch, yaw=rot.yaw),
+        )
+
+    def sensors(self, results=None):
+        """Override RoadSideUnit.sensors(): only spawn the LiDAR.
+
+        Reasons:
+          1) Cooperative fusion uses LiDAR only — cameras / semantic LiDAR
+             are dead weight here.
+          2) Each extra sensor adds a queue to the unit's SensorInterface,
+             and ``tick()`` waits on EVERY queue. A single slow/failing
+             camera at this infra mount (z=2.5m–4.1m can clip into walls
+             or geometry that doesn't render properly) hangs the whole
+             get_data() with "A sensor took too long to send their data",
+             dropping the LiDAR payload along with it.
+          3) Spawning 4 cameras × 2 units adds 8 RGB streams per scenario
+             that nothing reads.
+        """
+        if not isinstance(results, list):
+            results = []
+        self.pose_def()
+        results.append(
+            {
+                "type": "sensor.lidar.ray_cast",
+                "x": self.lidar_pose.location.x,
+                "y": self.lidar_pose.location.y,
+                "z": self.lidar_pose.location.z,
+                "roll": self.lidar_pose.rotation.roll,
+                "pitch": self.lidar_pose.rotation.pitch,
+                "yaw": self.lidar_pose.rotation.yaw,
+                "id": "lidar",
+            }
+        )
+        return results
+
+    def setup_sensors(self, parent=None, spawn_point=None):
+        # Always spawn at our world transform's location. We ignore any
+        # caller-supplied spawn_point so the unit is locked to its world pose.
+        super().setup_sensors(parent=None, spawn_point=self._world_transform.location)
+
+    def move_to(self, spawn_point):
+        # Infrastructure is stationary — block accidental teleports.
+        return
+
+    def process(self, input_data, is_train=False):
+        """LiDAR-only payload + measurements, no camera reads.
+
+        RoadSideUnit.process() reads ``input_data["rsu_<id>_rgb_<pos>"]`` for
+        4 cameras and would KeyError here since we only spawn the LiDAR.
+        Build the output dict directly with the same shape downstream
+        cooperative-fusion code expects:
+        ``{"lidar": ..., "measurements": {lidar_pose_x/y/z, theta, ...}}``.
+        """
+        try:
+            lidar = input_data["rsu_{0}_lidar".format(self.id)][1]
+        except Exception:
+            return None
+        cur_lidar_pose = carla.Location(
+            x=self.lidar_pose.location.x + self._rsu_loc.x,
+            y=self.lidar_pose.location.y + self._rsu_loc.y,
+            z=self.lidar_pose.location.z + self._rsu_loc.z,
+        )
+        yaw_deg = float(self._world_transform.rotation.yaw)
+        return {
+            "lidar": lidar,
+            "measurements": {
+                "gps_x": -self._rsu_loc.y,
+                "gps_y": self._rsu_loc.x,
+                "x": self._rsu_loc.x,
+                "y": self._rsu_loc.y,
+                # theta in the model's RH-CCW radian convention. RoadSideUnit
+                # writes π/2 here (matching its hardcoded yaw=-90); we pin it
+                # to the actual world yaw so pairwise transforms come out right.
+                "theta": -yaw_deg * np.pi / 180.0,
+                "lidar_pose_x": cur_lidar_pose.x,
+                "lidar_pose_y": cur_lidar_pose.y,
+                "lidar_pose_z": cur_lidar_pose.z,
+                "lidar_pose_gps_x": -cur_lidar_pose.y,
+                "lidar_pose_gps_y": cur_lidar_pose.x,
+            },
+        }

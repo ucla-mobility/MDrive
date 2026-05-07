@@ -1,0 +1,37 @@
+# PerceptionSwapAgent — F-Cooper detector + BasicAgent planner
+# WITH communication latency ONLY (no pose error).
+#
+# Methodology:
+#   comm_latency = 6 ticks @ 20 Hz CARLA = 300 ms
+#   This matches the colmdriver_action.py:1326 inline reference
+#   ("6 frames past (6*50ms = 300ms)") and represents a typical real-world
+#   DSRC / C-V2X operating point. Codriving's published sweep is
+#   {200, 400, 600} ms (codriving/tools/inference_e2e_latency.py:170);
+#   300 ms sits in the same regime but is the value the colmdriver code
+#   itself calls out, and it leaves more headroom than 600 ms (which
+#   saturates these detectors near the AP floor — verified empirically).
+#
+# Implementation: a per-tick ring buffer keyed by tick index. The primary's
+# slot is always served fresh data (each ego acts as its own primary in its
+# own forward pass — primary always knows its own state at t, so there is no
+# self-comm). All cooperator slots (peer egos + infra LiDARs if --infra-collab)
+# are served the snapshot from `tick - 6`. Same convention as
+# colmdriver_action.py:1326-1343 (ring keyed by step number, only non-primary
+# slots substituted).
+#
+# Pair this with perception_swap_<det>_poseerr.yaml (separate experiment) to
+# isolate the two failure modes.
+detector: fcooper
+planner: basicagent
+cooperative: true
+comm_range_m: 200
+max_cooperators: 4
+cruise_speed: 6.0
+score_threshold: 0.20
+detection_radius: 1.5
+collect_ap_metrics: true
+disable_brake: false
+
+log_tag: fcooper_latency
+
+comm_latency: 6

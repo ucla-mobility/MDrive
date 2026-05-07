@@ -35,6 +35,10 @@ from leaderboard.autoagents.agent_wrapper import AgentWrapper, AgentError
 from leaderboard.scenarios.tick_forensics import make_forensics
 from leaderboard.envs.sensor_interface import SensorReceivedNoData
 from leaderboard.utils.result_writer import ResultOutputProvider
+from leaderboard.scenarios.openloop_runtime import (
+    OpenLoopRuntime,
+    OpenLoopIntegrityError,
+)
 
 
 DASHBOARD_STATUS_ENV = "RUN_CUSTOM_EVAL_STATUS_FILE"
@@ -130,6 +134,25 @@ class ScenarioManager(object):
         self.pdm_world_trace = []
         self._pdm_last_world_time = None
         self.pdm_tl_polygons = {}
+
+        # ----- Open-loop replay enforcement (single source of truth) -----
+        # Originally: when CUSTOM_EGO_LOG_REPLAY=1 (set by --openloop) the
+        # manager force-teleports every ego from the parsed REPLAY XML each
+        # tick. We've moved to a frame-0-only metrics model: the agent dumps
+        # its tick-0 perception + planner waypoints, and ADE / AP / CR are
+        # computed offline from that snapshot vs the REPLAY XML. Closed-loop
+        # driving runs normally for DS/RC scoring. Teleport stays disabled
+        # by default; opt back in for legacy full-trajectory open-loop with
+        # CUSTOM_OPENLOOP_TELEPORT=1.
+        self._openloop_mode: bool = (
+            self._env_flag("CUSTOM_EGO_LOG_REPLAY", False)
+            and self._env_flag("CUSTOM_OPENLOOP_TELEPORT", False)
+        )
+        self._openloop_runtime: Optional[OpenLoopRuntime] = None
+        self._openloop_terminated: bool = False
+        # CARLA fixed delta_seconds (read on first tick, used to compute the
+        # next-tick sim time when force-teleporting at end of current tick).
+        self._openloop_dt: float = 0.05
 
         # record simulation time cost
         self.time_record = []
@@ -863,6 +886,42 @@ class ScenarioManager(object):
         self._pdm_last_world_time = None
         self.pdm_tl_polygons = {}
 
+        # ----- Open-loop runtime (only when --openloop / CUSTOM_EGO_LOG_REPLAY=1) -----
+        # We rebuild per scenario because each scenario has its own dense
+        # REPLAY XML attached as `config.multi_replay_*` by
+        # leaderboard_evaluator_parameter.py.
+        self._openloop_runtime = None
+        self._openloop_terminated = False
+        if self._openloop_mode:
+            try:
+                self._openloop_runtime = OpenLoopRuntime.from_scenario_config(
+                    scenario.config
+                )
+            except Exception as exc:
+                print(f"[OPENLOOP] failed to build runtime: {exc}")
+                self._openloop_runtime = None
+            if self._openloop_runtime is None:
+                print(
+                    "[OPENLOOP] WARN: CUSTOM_EGO_LOG_REPLAY=1 set but no usable "
+                    "_REPLAY.xml trajectory was found in scenario config "
+                    f"({scenario.config.name}). Ego will run closed-loop — "
+                    "this is the bug --openloop is supposed to prevent."
+                )
+            else:
+                stats = self._openloop_runtime.stats()
+                print(
+                    f"[OPENLOOP] runtime ready: "
+                    f"egos_with_plan={stats['n_egos_with_plan']}/{self.ego_vehicles_num}"
+                )
+            try:
+                world = CarlaDataProvider.get_world()
+                if world is not None:
+                    settings = world.get_settings()
+                    if getattr(settings, "fixed_delta_seconds", None):
+                        self._openloop_dt = float(settings.fixed_delta_seconds)
+            except Exception:
+                pass
+
         # To print the scenario tree uncomment the next line
         # py_trees.display.render_dot_tree(self.scenario_tree)
 
@@ -993,6 +1052,24 @@ class ScenarioManager(object):
             GameTime.on_carla_tick(timestamp)
             CarlaDataProvider.on_carla_tick()
             self._save_overhead_tick_image(timestamp)
+            # ----- Open-loop correctness check (top of tick, post-physics) -----
+            # Verify that the actor pose CARLA just integrated matches what
+            # the REPLAY XML says it should be at this sim_t. Catches any
+            # leak (planner control that snuck through, broken set_transform,
+            # behavior-tree ordering bug) within ONE tick instead of letting
+            # the trajectory silently drift. Tunable thresholds:
+            #   OPENLOOP_POSE_WARN_M   (default 0.05 m)
+            #   OPENLOOP_POSE_ABORT_M  (default 1.00 m)  -> raises
+            if self._openloop_mode and self._openloop_runtime is not None:
+                try:
+                    self._openloop_runtime.check_pose(
+                        self.ego_vehicles, float(timestamp.elapsed_seconds)
+                    )
+                except OpenLoopIntegrityError as exc:
+                    print(f"[OPENLOOP] FATAL: {exc}")
+                    self._openloop_terminated = True
+                    self._running = False
+                    raise
             _tick_t1 = time.time()  # end of world-tick phase (GameTime + CarlaDataProvider + overhead)
 
             if os.environ.get("CUSTOM_LOG_REPLAY_DEBUG", "").lower() in ("1", "true", "yes"):
@@ -1051,7 +1128,7 @@ class ScenarioManager(object):
                         )
                         if loc is not None:
                             self._log_replay_prev_locs[vehicle_num] = loc
-                    if os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes"):
+                    if self._openloop_mode:
                         for idx in range(self.ego_vehicles_num):
                             try:
                                 done_key = f"log_replay_done_ego_{idx}"
@@ -1138,6 +1215,23 @@ class ScenarioManager(object):
                         )
                     self._runtime_dead_ego_cleanup_done.add(vehicle_num)
 
+            # ----- Open-loop control suppression -----
+            # In --openloop the planner's (steer, throttle, brake) MUST NOT
+            # reach the actuator. We replace each ego_action with a neutral
+            # control (0/0/0) when an OpenLoopRuntime plan exists for the
+            # ego. The agent's run_step still ran above, so per-tick
+            # predictions / *.json / *_pred.npz are still emitted.
+            if self._openloop_mode and self._openloop_runtime is not None:
+                neutral = carla.VehicleControl()
+                neutral.steer = 0.0
+                neutral.throttle = 0.0
+                neutral.brake = 0.0
+                neutral.hand_brake = False
+                neutral.manual_gear_shift = False
+                for vehicle_num in range(self.ego_vehicles_num):
+                    if self._openloop_runtime.has_plan_for(vehicle_num):
+                        ego_action[vehicle_num] = neutral
+
             # Execute driving control signal
             for vehicle_num in range(self.ego_vehicles_num):
                 try:
@@ -1171,12 +1265,65 @@ class ScenarioManager(object):
                 except Exception:
                     pass
 
+            # ----- Open-loop force-teleport (end of tick) -----
+            # AFTER apply_control + scenario_tree.tick_once: pin every ego to
+            # its replay pose for the NEXT physics frame. This makes the
+            # planner's controls (already queued via apply_control above) a
+            # no-op because we overwrite the pose and zero the velocity that
+            # the next world.tick() would integrate against. With the control
+            # also forced to neutral upstream, this is belt-and-braces.
+            #
+            # We target sim_t_next = current sim_t + dt because that is the
+            # pose the actor will be observed at by the agent on the next
+            # tick. (The next tick's pose check verifies the actor actually
+            # ended up there.)
+            if self._openloop_mode and self._openloop_runtime is not None:
+                try:
+                    sim_t_next = float(timestamp.elapsed_seconds) + self._openloop_dt
+                    self._openloop_runtime.ensure_pose(self.ego_vehicles, sim_t_next)
+                    if self._openloop_runtime.all_exhausted(sim_t_next):
+                        if not self._openloop_runtime.consume_tail_tick():
+                            print(
+                                f"[OPENLOOP] replay exhausted at sim_t_next="
+                                f"{sim_t_next:.3f}s (all egos past end of REPLAY.xml). "
+                                f"Terminating cleanly."
+                            )
+                            self._openloop_terminated = True
+                            self._running = False
+                            for ego_idx in range(self.ego_vehicles_num):
+                                self._termination_path[ego_idx] = "openloop_replay_complete"
+                except OpenLoopIntegrityError as exc:
+                    # Bubble out of the tick loop. The launcher catches this
+                    # and writes _run_status.json with failure_kind so the
+                    # regression is loudly visible instead of silent drift.
+                    print(f"[OPENLOOP] FATAL: {exc}")
+                    self._openloop_terminated = True
+                    self._running = False
+                    raise
+                except Exception as exc:
+                    print(f"[OPENLOOP] non-fatal teleport error: {exc}")
+
             _tick_t4 = time.time()  # end of scenario_tree phase
             # Accumulate per-tick timing
             self.c_time_record.append(_tick_t1 - _tick_t0)   # world tick (GameTime + CarlaDataProvider)
             self.a_time_record.append(_tick_t2 - _tick_t1)   # agent call (sensor read + inference)
             self.time_record.append(_tick_t3 - _tick_t2)     # apply_control + PDM sample
             self.sc_time_record.append(_tick_t4 - _tick_t3)  # scenario_tree tick_once
+
+            # ----- Early-exit hook (frame-0 openloop debug) -----
+            # CUSTOM_EARLY_EXIT_TICKS=N terminates the scenario cleanly after
+            # N ticks. Use case: --openloop runs only need tick 0 for frame-0
+            # metrics; the rest of the closed-loop drive is wasted compute.
+            # Clean termination = scenario-pool sees success returncode=0 =
+            # NO retry. The openloop post-process script still fires after
+            # scenario end and processes whatever pred files were written.
+            _early_n = int(os.environ.get("CUSTOM_EARLY_EXIT_TICKS", "0") or "0")
+            if _early_n > 0 and len(self.a_time_record) >= _early_n:
+                print(f"[EARLY-EXIT] ticks={len(self.a_time_record)} reached "
+                      f"CUSTOM_EARLY_EXIT_TICKS={_early_n}; terminating cleanly.")
+                self._running = False
+                for ego_idx in range(self.ego_vehicles_num):
+                    self._termination_path.setdefault(ego_idx, "early_exit_first_frame")
 
             self._maybe_update_dashboard_progress()
 
@@ -1203,7 +1350,15 @@ class ScenarioManager(object):
 
             # destroy ego if it is not in RUNNING status or not alive
             stop_flag = 0
-            log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
+            # Use the unified openloop gate (both CUSTOM_EGO_LOG_REPLAY=1 AND
+            # CUSTOM_OPENLOOP_TELEPORT=1). The legacy single-env check broke
+            # the new "frame-0 metrics + closed-loop drive" pattern: with
+            # CUSTOM_EGO_LOG_REPLAY=1 alone, this code waited forever for
+            # the LogReplayFollower's blackboard key, but no LogReplayFollower
+            # is created in that mode, so even after timeout/criteria fired,
+            # `continue` at L~1389 prevented stop_flag from incrementing
+            # and the scenario never ended.
+            log_replay_ego = self._openloop_mode
             missing_egos = []
             nonrunning_egos = []
             dead_egos = []
@@ -1341,8 +1496,9 @@ class ScenarioManager(object):
                         )
                     )
 
-            # terminate route scenarios once all egos are either completed OR blocked
-            log_replay_ego = os.environ.get("CUSTOM_EGO_LOG_REPLAY", "").lower() in ("1", "true", "yes")
+            # terminate route scenarios once all egos are either completed OR blocked.
+            # Same unified gate as the destroy block above.
+            log_replay_ego = self._openloop_mode
             all_egos_done = True
             done_details = None
             if self.ego_vehicles_num == 0:

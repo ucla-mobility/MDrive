@@ -839,6 +839,29 @@ class PnP_infer():
 		self.perception_dataloader = perception_dataloader
 		self.device=device
 
+		# Optional perception backbone swap & BEV-feature ablation. Both flags
+		# default OFF, so the regular `colmdriver_rulebase` planner is
+		# bit-identical to before. Enabled via the variant YAML configs
+		# (`colmdriver_rulebase_{attfuse,fcooper,disco,cobevt}.yaml`) — see
+		# `perception.backbone` and `perception.zero_bev_feature` keys.
+		# Mirrors the pattern in pnp_infer_action_e2e_v2v.py.
+		_perc_cfg = (self.config or {}).get('perception', {}) or {}
+		self._perception_backbone = str(_perc_cfg.get('backbone', 'codriving')).strip().lower()
+		self._zero_bev_feature = bool(_perc_cfg.get('zero_bev_feature', False))
+		self._heal_perception = None
+		_VALID_BACKBONES = ('codriving', 'attfuse', 'fcooper', 'disco', 'cobevt')
+		if self._perception_backbone not in _VALID_BACKBONES:
+			raise ValueError(
+				"perception.backbone={!r} not recognized; expected one of: {}".format(
+					self._perception_backbone, ', '.join(_VALID_BACKBONES)))
+		if self._perception_backbone != 'codriving':
+			# Lazy import: only paid when a HEAL backbone is selected.
+			from tools.perception_runner import PerceptionRunner
+			self._heal_perception = PerceptionRunner(detector=self._perception_backbone)
+			print('[PnP_infer:rulebase] HEAL perception backbone active: {}'.format(self._perception_backbone))
+		if self._zero_bev_feature:
+			print('[PnP_infer:rulebase] BEV feature path zeroed (perception.zero_bev_feature=true)')
+
 		self.perception_memory_bank = [[{}] for _ in range(self.ego_vehicles_num)]
 
 		self.controller = [V2X_Controller(self.config['control']) for _ in range(self.ego_vehicles_num)]
@@ -1144,6 +1167,39 @@ class PnP_infer():
 			group[:] = [i for i in group if car_data_raw[i] is not None]
 		return nego_groups, group_max_durs
 
+	def _run_heal_perception_single_agent(self, car_data_raw):
+		"""Run a HEAL HeterBaseline detector on the ego LiDAR.
+
+		Returns ``(corners, scores)`` where ``corners`` is a ``(P, 8, 3)``
+		torch tensor on ``self.device`` and ``scores`` is a ``(P,)`` torch
+		tensor — same convention as codriving's own ``pred_box_tensor`` /
+		``pred_score`` BEFORE the in-place x↔y swap. Single-agent path
+		(degenerate vs codriving's cooperative perception, but enough for
+		the detector-quality ablation). Mirrors the v2v helper so the
+		downstream LiDAR→ego transform applies unchanged.
+		"""
+		_pcd = car_data_raw[0]['lidar']
+		if not isinstance(_pcd, np.ndarray):
+			_pcd = np.asarray(_pcd)
+		_pcd = _pcd.astype(np.float32, copy=False)
+		if _pcd.ndim != 2 or _pcd.shape[-1] < 3:
+			_empty_corners = torch.zeros((0, 8, 3), dtype=torch.float32, device=self.device)
+			_empty_scores = torch.zeros((0,), dtype=torch.float32, device=self.device)
+			return _empty_corners, _empty_scores
+		if _pcd.shape[-1] == 3:
+			_pad = np.zeros((_pcd.shape[0], 1), dtype=np.float32)
+			_pcd = np.concatenate([_pcd, _pad], axis=-1)
+		elif _pcd.shape[-1] > 4:
+			_pcd = _pcd[:, :4]
+		_det = self._heal_perception.detect(_pcd)
+		if _det.P == 0:
+			_empty_corners = torch.zeros((0, 8, 3), dtype=torch.float32, device=self.device)
+			_empty_scores = torch.zeros((0,), dtype=torch.float32, device=self.device)
+			return _empty_corners, _empty_scores
+		_corners = torch.from_numpy(np.ascontiguousarray(_det.corners)).float().to(self.device)
+		_scores = torch.from_numpy(np.ascontiguousarray(_det.scores)).float().to(self.device)
+		return _corners, _scores
+
 	def get_action_from_list_multi_vehicle(self, car_data_raw, rsu_data_raw, step, timestamp):
 		# keys(['gps_x', 'gps_y', 'x', 'y', 'theta', 'speed', 'compass', 'command', 'target_point'])
 		print('step infer time: ', (step+1)*0.05, self.vlm_next_infer_time, self.next_comm_time)
@@ -1326,7 +1382,79 @@ class PnP_infer():
 				else:
 					infer_result[attrib] = None
 
+		# Optional: replace codriving's perception output with HEAL detector
+		# boxes. Single-agent inference path. `output_dict['ego']['fused_feature']`
+		# is left untouched here so the feature-stash step can either keep it
+		# (if zero_bev_feature is False) or zero it (default for the variant
+		# configs). HEAL is single-class (vehicle), so we also reset
+		# perception_num to all zeros — it's used downstream to bucket
+		# detections into self.perception_info[0/1/2] for the LLM context.
+		if self._heal_perception is not None:
+			heal_corners, heal_scores = self._run_heal_perception_single_agent(car_data_raw)
+			infer_result['pred_box_tensor'] = heal_corners
+			infer_result['pred_score'] = heal_scores
+			# gt_box_tensor is GT (used for vis only); leave as codriving's GT.
+			perception_num = [0] * (heal_corners.shape[0] if heal_corners is not None else 0)
+
 		infer_result_clone = copy.deepcopy(infer_result)
+
+		# Stash world-frame perception predictions for the open-loop
+		# AP@IoU evaluator. Pure observation: the agent's OpenLoopAPHook
+		# reads this dict (when --openloop is active) and ignores it
+		# otherwise. Mirrors the pnp_infer_action_e2e_v2v.py / colmdriver_action.py
+		# pattern so all three planners share AP plumbing. Closed-loop
+		# behavior is unaffected — the dict is written, never read here.
+		try:
+			_meas_full = car_data_raw[0]['measurements']
+			_pred_world_corners_list = []
+			if (infer_result['pred_box_tensor'] is not None
+					and len(infer_result['pred_box_tensor']) > 0):
+				for _i in range(infer_result['pred_box_tensor'].shape[0]):
+					_world_corners = transform_2d_points(
+						infer_result['pred_box_tensor'][_i].cpu().numpy(),
+						np.pi / 2 - _meas_full["theta"],
+						_meas_full["lidar_pose_y"],
+						_meas_full["lidar_pose_x"],
+						0.0, 0.0, 0.0,  # car2 = (0, 0, 0) → output stays in world frame
+					)
+					_pred_world_corners_list.append(_world_corners)
+			_pred_world_arr = (
+				np.stack(_pred_world_corners_list, axis=0).astype(np.float32)
+				if _pred_world_corners_list
+				else np.zeros((0, 8, 3), dtype=np.float32)
+			)
+			_pred_score_arr = (
+				infer_result['pred_score'].cpu().numpy().astype(np.float32)
+				if infer_result.get('pred_score') is not None
+				else np.zeros((0,), dtype=np.float32)
+			)
+			# Raw opencood lidar-frame predictions (untransformed). The
+			# AP hook prefers this over pred_box_world because it matches
+			# perception_swap_agent's pred_frame='ego' convention. The
+			# in-place x↔y swap below hasn't happened yet at this point.
+			_pred_lidar_arr = np.zeros((0, 8, 3), dtype=np.float32)
+			try:
+				_pbt = infer_result.get('pred_box_tensor')
+				if _pbt is not None and len(_pbt) > 0:
+					_pred_lidar_arr = _pbt.cpu().numpy().astype(np.float32)
+			except Exception:
+				pass
+			if not hasattr(self, '_last_perception_for_save'):
+				self._last_perception_for_save = {}
+			self._last_perception_for_save[ego_id] = {
+				'pred_box_world': _pred_world_arr,
+				'pred_box_lidar': _pred_lidar_arr,
+				'pred_score':     _pred_score_arr,
+				'lidar_pose_x':   float(_meas_full["lidar_pose_x"]),
+				'lidar_pose_y':   float(_meas_full["lidar_pose_y"]),
+				'lidar_pose_z':   float(_meas_full.get("lidar_pose_z", 0.0)),
+				'theta':          float(_meas_full["theta"]),
+				'ego_x':          float(_meas_full.get("x", 0.0)),
+				'ego_y':          float(_meas_full.get("y", 0.0)),
+			}
+		except Exception:
+			# Never let observation-stashing break the inference path.
+			pass
 
 		### filte out ego box
 		if not infer_result['pred_box_tensor'] is None:
@@ -1384,6 +1512,11 @@ class PnP_infer():
 		fused_feature_2 = perception_results['fused_feature'].permute(0,1,3,2) #  ([2, 128, 96, 288]) -> ([2, 128, 288, 96])
 		fused_feature_3 = torch.flip(fused_feature_2, dims=[2])
 		feature = fused_feature_3[:,:,:192,:]
+		# Optional ablation: zero the BEV feature path so the planner runs on
+		# rasterized detections only. Default for the colmdriver_rulebase_<heal>
+		# variants (zero influence from codriving's perception backbone).
+		if self._zero_bev_feature:
+			feature = torch.zeros_like(feature)
 
 		self.perception_memory_bank[ego_id].pop(0)
 		if len(self.perception_memory_bank[ego_id])<5:
@@ -1468,6 +1601,20 @@ class PnP_infer():
 
 		predicted_waypoints = self.planning_model(planning_input) # [1, 10, 2]
 		predicted_waypoints = predicted_waypoints['future_waypoints']
+		# Stash raw local-frame waypoints for the open-loop BEV viz path
+		# (see colmdriver_action.py for rationale).
+		try:
+			if not hasattr(self, "last_predicted_waypoints_local"):
+				self.last_predicted_waypoints_local = {}
+				self.last_predicted_waypoints_step = {}
+			self.last_predicted_waypoints_local[ego_id] = (
+				np.asarray(predicted_waypoints[0].detach().cpu().numpy(), dtype=np.float64)
+				if hasattr(predicted_waypoints[0], "detach")
+				else np.asarray(predicted_waypoints[0], dtype=np.float64)
+			).copy()
+			self.last_predicted_waypoints_step[ego_id] = int(step)
+		except Exception:
+			pass
 		# predicted_waypoints: N, T_f=10, 2
 		# transform waypoints for negotiation
 		x_world = measurements['x']
@@ -1663,6 +1810,19 @@ class PnP_infer():
 			route_info['y'] = car_data_raw[ego_i]['measurements']["y"]
 			route_info['theta'] = float(car_data_raw[ego_i]['measurements']["theta"])
 			route_info['waypoints'] = route_info['waypoints'].tolist()
+			# See colmdriver_action.py for rationale.
+			_pb = getattr(self, "planning_bank", {}) or {}
+			_pb_wps = _pb.get(ego_id)
+			if _pb_wps is not None:
+				try:
+					_pb_arr = np.asarray(_pb_wps, dtype=np.float64).reshape(-1, 2)
+					_rel = _pb_arr - _pb_arr[0:1]
+					_lx = float(car_data_raw[ego_i]['measurements']["lidar_pose_x"])
+					_ly = float(car_data_raw[ego_i]['measurements']["lidar_pose_y"])
+					_world = _rel + np.array([[_lx, _ly]], dtype=np.float64)
+					route_info['waypoints_world'] = _world.tolist()
+				except Exception:
+					pass
 
 			tick_data[ego_i]["planning"] = route_info
 
@@ -1760,6 +1920,25 @@ class PnP_infer():
 			results_to_write.update(tick_data[ego_i]['planning'])
 			with open(folder_path / ("%04d.json" % frame), 'w') as f:
 				json.dump(results_to_write, f, indent=4)
+			# Per-frame world-frame perception predictions, parity with
+			# codriving's pnp_infer_action_e2e_v2v.py:1003. Lets
+			# carla_openloop_prototype recompute AP@50 against live CARLA
+			# actor GT without re-running inference.
+			_per = getattr(self, '_last_perception_for_save', {}).get(ego_id)
+			if _per is not None:
+				try:
+					np.savez(
+						str(folder_path / ("%04d_pred.npz" % frame)),
+						pred_box_world=_per['pred_box_world'],
+						pred_score=_per['pred_score'],
+						lidar_pose_x=_per['lidar_pose_x'],
+						lidar_pose_y=_per['lidar_pose_y'],
+						theta=_per['theta'],
+						ego_x=_per['ego_x'],
+						ego_y=_per['ego_y'],
+					)
+				except Exception:
+					pass
 		return
 
 

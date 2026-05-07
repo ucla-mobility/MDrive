@@ -1,7 +1,8 @@
-# PerceptionSwapAgent — DiscoNet detector + rule-based planner.
+# PerceptionSwapAgent — DiscoNet detector + BasicAgent planner.
 detector: disco
+planner: basicagent          # CARLA BasicAgent (lateral PID lane-following + emergency stop)
 cooperative: true
-comm_range_m: 70
+comm_range_m: 200            # bumped from 70m so v2xpnp 2-ego scenes (max ~250m) stay in range
 max_cooperators: 4
 cruise_speed: 6.0
 score_threshold: 0.20

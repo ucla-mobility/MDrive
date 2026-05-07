@@ -228,7 +228,14 @@ COLMDRIVER_LLM_MODEL_DEFAULT = "ckpt/colmdriver/LLM"
 COLMDRIVER_VLM_MAX_MODEL_LEN_DEFAULT = 8192
 COLMDRIVER_LLM_MAX_MODEL_LEN_DEFAULT = 4096
 COLMDRIVER_VLLM_STARTUP_TIMEOUT_DEFAULT = 300.0
-COLMDRIVER_VLLM_PLANNERS = frozenset({"colmdriver", "colmdriver_rulebase"})
+COLMDRIVER_VLLM_PLANNERS = frozenset({
+    "colmdriver",
+    "colmdriver_rulebase",
+    "colmdriver_poseerr",
+    "colmdriver_rulebase_poseerr",
+    "colmdriver_latency",
+    "colmdriver_rulebase_latency",
+})
 AUTO_WORKERS_PER_GPU_SETTLE_TIMEOUT_DEFAULT = 20.0
 AUTO_WORKERS_PER_GPU_MIN_FREE_MIB_DEFAULT = 6144
 AUTO_WORKERS_PER_GPU_STABLE_SAMPLES_DEFAULT = 2
@@ -278,6 +285,27 @@ PLANNER_VRAM_ESTIMATE_MIB: Dict[str, int] = {
     "lmdrive": 17000,     # observed max ~15146 MB (live confirmed, 12% slack)
     "colmdriver": 6000,
     "colmdriver_rulebase": 6000,
+    "colmdriver_poseerr": 6000,
+    "colmdriver_rulebase_poseerr": 6000,
+    "colmdriver_latency": 6000,
+    "colmdriver_rulebase_latency": 6000,
+    "codriving_poseerr": 7000,
+    "codriving_latency": 7000,
+    # codriving_zerofeat is a pure ablation — no HEAL detector loaded —
+    # so VRAM matches plain codriving. The four HEAL variants load the
+    # codriving perception model AND a HEAL HeterBaseline forward pass on
+    # the same GPU. Live OOM observed at 9000 MiB cap: HEAL's first
+    # forward pass tried to allocate 8.19 GiB on top of codriving's ~5 GB
+    # working set, and the scheduler had co-admitted 4 variants onto the
+    # same 44 GB GPU — leaving only 8.4 GB free at the moment of HEAL
+    # init. Bump to 16000 so the scheduler caps co-admission at ~2-3 per
+    # 44 GB GPU instead of 4-5. Tune lower if a per-planner peak survey
+    # says we're being too conservative.
+    "codriving_zerofeat": 7000,
+    "codriving_attfuse": 16000,
+    "codriving_fcooper": 16000,
+    "codriving_disco": 16000,
+    "codriving_cobevt": 16000,
 }
 PLANNER_VRAM_DEFAULT_FALLBACK_MIB = 8000
 PLANNER_RETRY_LIMIT_DEFAULT = 3
@@ -623,6 +651,65 @@ PLANNER_SPECS: dict[str, PlannerSpec] = {
         agent="simulation/leaderboard/team_code/perception_swap_agent.py",
         agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt.yaml",
     ),
+    # Perturbed-mode variants for the cross-model robustness study. Two
+    # axes — pose error and comm latency — kept separate so each result
+    # attributes to a single failure mode. Values match the high end of
+    # codriving's published sweep (pos_std=rot_std=0.6, latency=12 ticks
+    # = 600 ms). Only meaningful on multi-ego scenarios where both egos
+    # come within comm_range_m=200 (see scenarioset/v2xpnp_inrange/).
+    "perception_swap_fcooper_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_fcooper_poseerr.yaml",
+    ),
+    "perception_swap_attfuse_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_attfuse_poseerr.yaml",
+    ),
+    "perception_swap_disco_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_disco_poseerr.yaml",
+    ),
+    "perception_swap_cobevt_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt_poseerr.yaml",
+    ),
+    "perception_swap_fcooper_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_fcooper_latency.yaml",
+    ),
+    "perception_swap_attfuse_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_attfuse_latency.yaml",
+    ),
+    "perception_swap_disco_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_disco_latency.yaml",
+    ),
+    "perception_swap_cobevt_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt_latency.yaml",
+    ),
+    # OpenCDA BehaviorAgent variants — overtake / lane-change / car-following
+    # rewired to consume our Detection list. See
+    # docs/opencda_behavior_planner_integration.md and
+    # simulation/leaderboard/team_code/behavior_agent_planner.py for the
+    # methodology and the fairness argument across detector swaps.
+    "perception_swap_attfuse_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_attfuse_behavior.yaml",
+    ),
+    "perception_swap_fcooper_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_fcooper_behavior.yaml",
+    ),
+    "perception_swap_disco_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_disco_behavior.yaml",
+    ),
+    "perception_swap_cobevt_behavior": PlannerSpec(
+        agent="simulation/leaderboard/team_code/perception_swap_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_cobevt_behavior.yaml",
+    ),
     # GT-perception oracle: same agent, but the detection forward pass is
     # bypassed and the planner is fed Detections derived from
     # world.get_actors() (the "control row" of the perception-vs-planning
@@ -632,6 +719,69 @@ PLANNER_SPECS: dict[str, PlannerSpec] = {
     "perception_swap_gt": PlannerSpec(
         agent="simulation/leaderboard/team_code/perception_swap_agent.py",
         agent_config="simulation/leaderboard/team_code/agent_config/perception_swap_gt.yaml",
+    ),
+    # Pose-error / comm-latency variants of the 3 driving planners. The
+    # underlying agents already read `perception.pose_error` and
+    # `simulation.comm_latency` from config (colmdriver_agent.py:125,
+    # colmdriver_action.py:1327, pnp_agent_e2e_v2v.py:117,
+    # colmdriver_action_rulebase.py:1249). These specs swap in YAMLs that
+    # set those blocks: pos_std=rot_std=0.6, comm_latency=6 ticks (300 ms
+    # @ 20 Hz). Mirrors perception_swap_*_poseerr / _latency convention.
+    "colmdriver_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_poseerr.yaml",
+    ),
+    "colmdriver_rulebase_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_rulebase_poseerr.yaml",
+    ),
+    "codriving_poseerr": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_poseerr.yaml",
+    ),
+    "colmdriver_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_latency.yaml",
+    ),
+    "colmdriver_rulebase_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_rulebase_latency.yaml",
+    ),
+    "codriving_latency": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_latency.yaml",
+    ),
+    # Detector-quality ablation: codriving's planner driven by HEAL
+    # HeterBaseline detections (AttFuse / F-Cooper / DiscoNet / CoBEVT)
+    # instead of codriving's own perception. Each variant config sets
+    # `perception.backbone=<detector>` and `perception.zero_bev_feature=true`
+    # so the planner sees only rasterized HEAL detections — no influence
+    # from codriving's joint-trained perception backbone. Single-agent
+    # HEAL inference (cooperative pose-bridge is a follow-up); see
+    # _run_heal_perception_single_agent in pnp_infer_action_e2e_v2v.py.
+    # `codriving_zerofeat` is the apples-to-apples sanity baseline:
+    # codriving's own detections, but the BEV feature path is zeroed.
+    # Compare against vanilla `codriving` to gauge how much planning
+    # signal flows through the feature map vs. the rasterized boxes.
+    "codriving_zerofeat": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_zerofeat.yaml",
+    ),
+    "codriving_attfuse": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_attfuse.yaml",
+    ),
+    "codriving_fcooper": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_fcooper.yaml",
+    ),
+    "codriving_disco": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_disco.yaml",
+    ),
+    "codriving_cobevt": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10_cobevt.yaml",
     ),
 }
 
@@ -920,6 +1070,19 @@ def parse_args() -> argparse.Namespace:
             "<planner> or [<planner>,<conda_env>]. "
             f"Available planners: {', '.join(sorted(PLANNER_SPECS.keys()))}. "
             f"Defaults to {DEFAULT_PLANNER} if not set."
+        ),
+    )
+    parser.add_argument(
+        "--infra-collab",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable infrastructure-LiDAR collaboration on v2xpnp scenarios. When set, "
+            "the runner spawns two stationary LiDAR sensors at the validated UCLA "
+            "Westwood intersection poses (see simulation/leaderboard/team_code/"
+            "infra_lidar_config.py) and routes their point clouds into each planner's "
+            "native cooperative fusion path (alongside ego/RSU LiDAR). Has no effect "
+            "on non-v2xpnp scenarios — they run identically with or without this flag."
         ),
     )
     parser.add_argument(
@@ -2090,6 +2253,44 @@ def parse_args() -> argparse.Namespace:
         help="Also evaluate with CARLA's random traffic/pedestrians enabled.",
     )
     parser.add_argument(
+        "--openloop",
+        action="store_true",
+        help=(
+            "Open-loop evaluation mode. The agent's run_step still fires every "
+            "tick (perception forward pass + planning + per-tick prediction "
+            "files), but its emitted (steer, throttle, brake) is discarded — "
+            "the ego is teleported each tick to its REPLAY.xml pose. NPCs / "
+            "walkers were already replay-mode for v2xpnp scenes, so the entire "
+            "scene is now playback-driven and the planner's outputs are pure "
+            "per-frame *open-loop* predictions. "
+            "Equivalent to setting CUSTOM_EGO_LOG_REPLAY=1 and "
+            "PERCEPTION_SWAP_WRITE_PRED_FILES=1 before launch — this flag just "
+            "wires both at once and prints a banner. Closed-loop driving "
+            "metrics (DS/SR/DAC) are not meaningful in this mode; the per-tick "
+            "*.json / *_pred.npz files are what you want, and ADE/FDE/AP@multi "
+            "can be computed post-run via "
+            "openloop.tools.carla_openloop_prototype.compute_metrics_from_run_dir."
+        ),
+    )
+    parser.add_argument(
+        "--no-visibility-filter",
+        dest="no_visibility_filter",
+        action="store_true",
+        help=(
+            "Disable the per-pipeline visibility filter for AP scoring (sets "
+            "OPENLOOP_DISABLE_VISIBILITY_FILTER=1 for every child evaluator). "
+            "By default --openloop turns on each agent's native filter — "
+            "codriving uses the v2x-real-pnp dataset YAML annotations, "
+            "perception_swap uses live semantic-LiDAR ≥10-ray-hits. Different "
+            "filter sources mean the codriving and perception_swap AP numbers "
+            "aren't directly comparable. Pass --no-visibility-filter to score "
+            "AP against EVERY CARLA vehicle in the eval range (140×80 m by "
+            "default), unifying methodology across pipelines. Required for "
+            "perception-quality correlation studies that mix codriving + "
+            "perception_swap on the same plot."
+        ),
+    )
+    parser.add_argument(
         "--npc-scenario-parameter",
         default=DEFAULT_NPC_PARAMETER,
         help=(
@@ -2299,6 +2500,88 @@ def parse_args() -> argparse.Namespace:
     if _quality in ("low", "epic") and not _has_quality_level_arg(args.carla_arg):
         _quality_value = "Low" if _quality == "low" else "Epic"
         args.carla_arg.append(f"-quality-level={_quality_value}")
+    # --openloop wiring: set the two env vars the leaderboard + agent already
+    # respect. Subprocesses inherit os.environ, so this flips both ego-replay
+    # mode and per-tick prediction-file output for every child evaluator.
+    # Idempotent: explicit env values from the user take precedence.
+    # Always export the routes_dir as OPENLOOP_SCENARIOSET_DIR when it points
+    # at a v2xpnp scenario (or its parent). The agent-side OpenLoopAPHook
+    # uses this to load REPLAY.xml + visible-id filter for the per-scene
+    # AP/ADE evaluation. Without this, the hook walks up SAVE_PATH looking
+    # for scenarioset/v2xpnp/<scene>/ — which fails because SAVE_PATH at
+    # agent init time is the planner-level image dir, not the per-scene
+    # subdir (the per-scene dir is created LATER inside the action module).
+    try:
+        _routes = getattr(args, "routes_dir", None) or getattr(args, "zip", None)
+        if _routes:
+            _routes_str = os.path.abspath(str(_routes))
+            if "scenarioset" in _routes_str and "v2xpnp" in _routes_str:
+                # If routes_dir IS the scene leaf, use it directly.
+                if os.path.isdir(_routes_str) and any(
+                    f.endswith(".xml") and "ego_vehicle" in f
+                    for f in os.listdir(_routes_str)
+                ):
+                    os.environ.setdefault("OPENLOOP_SCENARIOSET_DIR", _routes_str)
+    except Exception:
+        pass
+
+    if getattr(args, "openloop", False):
+        # NOTE: do NOT set CUSTOM_EGO_LOG_REPLAY=1 here. That env var triggers
+        # ego-teleport-every-tick (route_scenario.py:5171, openloop_runtime.py)
+        # which is a legacy mode — it disables real closed-loop driving so
+        # the agent's controls are discarded and ego just snaps to REPLAY
+        # poses. The intent of --openloop is "first-frame open-loop metrics
+        # alongside normal closed-loop driving": agent drives normally,
+        # per-tick predictions are dumped, and the post-metrics tool computes
+        # ADE/FDE/AP for the first frame's predicted trajectory vs REPLAY GT.
+        # User can opt back into the legacy teleport mode by exporting
+        # CUSTOM_EGO_LOG_REPLAY=1 explicitly before launch.
+        os.environ.setdefault("PERCEPTION_SWAP_WRITE_PRED_FILES", "1")
+        # Keep the LogReplayFollower intelligent_guard ENABLED in openloop so
+        # recorded NPCs yield to ego when a TTC violation is imminent. This
+        # matches closed-loop default behavior and prevents collisions where a
+        # rigid replay actor would otherwise T-bone ego (e.g. perpendicular
+        # approaches with no plausible ego pace that avoids the recorded
+        # trajectory). User can override before launch by exporting
+        # CUSTOM_LOG_REPLAY_INTELLIGENT_GUARD=0.
+        os.environ.setdefault("CUSTOM_LOG_REPLAY_INTELLIGENT_GUARD", "1")
+        # Lift the rule planner's cruise speed to ego.speed each tick so its
+        # constant-velocity rollout tracks recorded ego pace (ADE wouldn't
+        # otherwise pick up a constant linear-in-time speed-gap penalty).
+        os.environ.setdefault("OPENLOOP_CRUISE_FROM_EGO_SPEED", "1")
+        # AP is evaluated against the actors the real-world ego saw (per
+        # v2x-real-pnp YAML visible-actor lists). User can disable with
+        # PERCEPTION_SWAP_GT_FROM_REAL_DATASET=0 before launch (e.g. for the
+        # all-CARLA-vehicle baseline column of an A/B comparison).
+        os.environ.setdefault("PERCEPTION_SWAP_GT_FROM_REAL_DATASET", "1")
+        # --no-visibility-filter overrides everything above and forces
+        # OPENLOOP_DISABLE_VISIBILITY_FILTER=1 for every child evaluator.
+        # Both pipelines (codriving via openloop_helpers and perception_swap
+        # via its own AP collector) honor this flag and skip visibility
+        # filtering entirely, scoring AP against every in-range CARLA
+        # vehicle. Sets a unified methodology so codriving_<detector> AP and
+        # perception_swap_<detector> AP are directly comparable on the same
+        # scene.
+        if getattr(args, "no_visibility_filter", False):
+            os.environ["OPENLOOP_DISABLE_VISIBILITY_FILTER"] = "1"
+            print(
+                "[INFO] --no-visibility-filter: AP scored against ALL CARLA "
+                "vehicles in eval range (no dataset / sem-LiDAR filter). "
+                "Cross-pipeline AP comparable."
+            )
+        print(
+            "[INFO] --openloop: closed-loop driving (agent's controls drive "
+            "the ego normally) WITH per-tick prediction dumps "
+            "(*.json + *_pred.npz). LogReplayFollower intelligent_guard "
+            "ENABLED (recorded NPCs yield to ego on imminent TTC violations); "
+            "visible-actor-filtered "
+            "AP enabled. Full ADE/FDE/CR + AP summary auto-computed post-run "
+            "(openloop_metrics.json + openloop_overview.png per run dir). "
+            "Closed-loop scores (DS/SR/DAC) ARE meaningful and produced. "
+            "Set CUSTOM_EGO_LOG_REPLAY=1 explicitly to opt into legacy "
+            "ego-teleport-every-tick mode.",
+            flush=True,
+        )
     if args.carla_rootcause and not args.start_carla:
         parser.error("--carla-rootcause requires --start-carla.")
     if int(args.carla_rootcause_diag_interval) <= 0:
@@ -2380,6 +2663,93 @@ def parse_args() -> argparse.Namespace:
 
     setattr(args, "_normalized_argv", normalized_argv)
     return args
+
+
+def _run_openloop_post_metrics(args, planner_results_root, planner_requests, repo_root):
+    """Auto-invoke tools/openloop_post_metrics for every prediction directory
+    written during this --openloop run.
+
+    Walks ``<results-root>/<results-tag>/<planner>/<scene>/image/<runtag>/ego_vehicle_<i>/``
+    and writes ``openloop_metrics.json`` + ``openloop_overview.png`` next to
+    each. AP file is paired by ego index from the agent's per-scene output
+    (``<run_dir.parent>/perception_swap_ap_ego{N}.json``); falls back to the
+    legacy /tmp path for older runs that pre-date the per-scene fix.
+    Failures are logged but don't abort the parent.
+    """
+    try:
+        from pathlib import Path as _P
+        _root = _P(planner_results_root) if planner_results_root else _P(args.results_tag).parent
+        runs = []
+        for ego_dir in _root.glob("**/ego_vehicle_*"):
+            if not ego_dir.is_dir():
+                continue
+            if not any(p.is_file() and p.stem.isdigit() for p in ego_dir.glob("*.json")):
+                continue
+            runs.append(ego_dir)
+        if not runs:
+            print("[openloop-post] no per-tick prediction dirs found; skipping post-metrics")
+            return
+        print(f"[openloop-post] found {len(runs)} ego prediction dir(s); computing post-metrics …",
+              flush=True)
+        scenarioset_root = _P(repo_root) / "scenarioset" / "v2xpnp"
+        for run_dir in runs:
+            scene = None
+            for parent in run_dir.parents:
+                if (scenarioset_root / parent.name).is_dir():
+                    scene = parent.name
+                    break
+            if scene is None:
+                print(f"[openloop-post] {run_dir.name}: could not match scene to scenarioset; skipping")
+                continue
+            ego_slot_str = run_dir.name.split("_")[-1]
+            try:
+                ego_slot = int(ego_slot_str)
+            except ValueError:
+                ego_slot = 0
+            # Skip ego dirs whose scenarioset has no REPLAY for this slot —
+            # single-ego scenes (e.g., ones manifested with only ego_1) still
+            # produce stub ego_0 output dirs from the leaderboard harness.
+            replay_xml = (
+                scenarioset_root / scene
+                / f"ucla_v2_custom_ego_vehicle_{ego_slot}_REPLAY.xml"
+            )
+            if not replay_xml.is_file():
+                print(
+                    f"[openloop-post] {scene}/ego{ego_slot}: no REPLAY XML "
+                    f"({replay_xml.name}); skipping (single-ego scenarioset?)"
+                )
+                continue
+            planner_alias = None
+            for parent in run_dir.parents:
+                if parent.name.startswith("perception_swap_"):
+                    planner_alias = parent.name
+                    break
+            log_tag = (
+                "gt" if planner_alias == "perception_swap_gt"
+                else (planner_alias.split("perception_swap_", 1)[1] if planner_alias else None)
+            )
+            # Per-scene AP path (preferred): the agent now writes
+            # <SAVE_PATH>/perception_swap_ap_ego{N}.json co-located with the
+            # ego_vehicle_<i> directory. Fall back to the legacy /tmp path
+            # for runs from before that fix landed.
+            ap_candidates = [run_dir.parent / f"perception_swap_ap_ego{ego_slot}.json"]
+            if log_tag is not None:
+                ap_candidates.append(_P("/tmp") / f"perception_swap_ap_{log_tag}_ego{ego_slot}.json")
+            ap_json = next((p for p in ap_candidates if p.is_file()), None)
+            cmd = [
+                sys.executable, str(_P(repo_root) / "tools" / "openloop_post_metrics.py"),
+                "--run-dir", str(run_dir),
+                "--scenarioset-dir", str(scenarioset_root / scene),
+                "--ego-slot", str(ego_slot),
+            ]
+            if ap_json is not None:
+                cmd += ["--ap-json", str(ap_json)]
+            try:
+                subprocess.run(cmd, check=False)
+            except Exception as exc:
+                print(f"[openloop-post] {run_dir}: {exc}")
+    except Exception as exc:
+        print(f"[openloop-post] post-metrics sweep failed: {exc}")
 
 
 def is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -3920,6 +4290,10 @@ def _enable_core_dumps_best_effort() -> tuple[bool, str]:
 
 def _build_runtime_env(args: argparse.Namespace, base_env: Dict[str, str]) -> Dict[str, str]:
     env = dict(base_env)
+    if getattr(args, "infra_collab", False):
+        # Agents read this env var and additionally check the loaded CARLA map
+        # so non-v2xpnp scenarios (different town) silently skip infra spawn.
+        env["COLMDRIVER_INFRA_COLLAB"] = "1"
     if not args.carla_forensics:
         # The local CARLA wrapper enables diagnostics/strace by default.
         # Disable that for normal evaluation runs so launcher-managed CARLA stays lightweight.
@@ -5942,17 +6316,25 @@ class EmergencyGuard:
     """
 
     # Defaults; all overridable via env vars below.
-    # Last run timeline mapping (b2d_zoo): 21K threads correlated with 22
-    # CARLAs (-24% from peak) and ~88% success — DEGRADED but FUNCTIONAL.
-    # The cascade accelerated between 21K-25K threads, with master crashing
-    # uncontrollably around 32K (Linux per-process thread cap).
-    # WARN=22K gives ~5 min of runway before cascade hardens; CRITICAL=25K
-    # is the last safety net. The other detectors (evict-storm,
-    # CARLA-collapse, CARLA-floor) typically fire earlier and trigger
-    # restart before threads cross WARN — so these thresholds are really
-    # just backstop for cases where those detectors miss.
-    DEFAULT_THREAD_CRITICAL = 25000     # immediate trigger
-    DEFAULT_THREAD_WARN = 22000         # sustained trigger (bumped from 20k)
+    # Thread-count thresholds are GIL-pressure backstops, not OS-limit
+    # backstops. The actual Linux thread cap on this machine is
+    # kernel.threads-max=6.2M and RLIMIT_NPROC=3.1M — orders of magnitude
+    # above anything we'll hit. The real failure mode is GIL contention
+    # starving the master's RPC verify-thread, which feedback-loops into
+    # the recycle storm. The CARLA-degradation detectors (evict-storm,
+    # CARLA-collapse, CARLA-floor) are the primary signal; thread count
+    # is a coarse proxy. Threshold history:
+    #   v1: 22K warn / 25K critical — too eager, fired while pool was
+    #       degraded-but-functional (~88% success at 21K threads).
+    #   v2: 28K warn / 30K critical — fired at ~29.5K under sustained
+    #       load even when the pool was still producing oks. Annoyingly
+    #       conservative when the user knows the run is making progress.
+    #   v3 (current): 35K warn / 40K critical — leaves the cascade
+    #       detectors as the primary signal; thread count only fires as
+    #       a final tripwire if cascade detectors miss it. Override via
+    #       env if you want the older behaviour.
+    DEFAULT_THREAD_CRITICAL = 40000     # immediate trigger
+    DEFAULT_THREAD_WARN = 35000         # sustained trigger
     DEFAULT_SUSTAINED_S = 300           # 5 min sustained for warn
     DEFAULT_EVICT_RATE_PER_MIN = 20     # sustained recycle-storm trigger
     DEFAULT_EVICT_RATE_WINDOW_S = 300   # 5 min window for evict rate
@@ -5980,6 +6362,18 @@ class EmergencyGuard:
     DEFAULT_CARLA_FLOOR_PER_GPU = 1     # min CARLAs per GPU
     DEFAULT_CARLA_FLOOR_WARMUP_S = 600  # 10 min warmup grace (CARLA spawn is slow)
     DEFAULT_CARLA_FLOOR_SUSTAINED_S = 300  # must hold 5 min
+    # No-ok-progress detector. Reads _PoolStatusReporter._evals_ok via the
+    # active-reporter registry. Triggers when the success counter has not
+    # increased for the entire window — i.e., the pool is grinding compute
+    # but producing no completed scenarios. Distinct from carla_collapse
+    # (which detects pool-size cliff) because the pool can be intact and
+    # still produce zero successes (e.g., every run failing terminally).
+    # Warmup grace must exceed expected first-success latency: longest
+    # observed legitimate runtime in this codebase is ~80 min (codriving
+    # interaction Construction_Zone), so 60 min warmup is safe — by then a
+    # healthy pool has produced multiple oks at any reasonable parallelism.
+    DEFAULT_NO_OK_WINDOW_S = 3600       # 1 hr of zero ok-progress
+    DEFAULT_NO_OK_WARMUP_S = 3600       # 1 hr warmup before this can fire
     # Bulletproof watchdog: a detached helper subprocess that kicks in
     # after this delay if we somehow haven't restarted ourselves cleanly.
     DEFAULT_WATCHDOG_DELAY_S = 300      # 5 min absolute deadline
@@ -6019,12 +6413,21 @@ class EmergencyGuard:
             "COLMDRIVER_EMERGENCY_CARLA_FLOOR_WARMUP_S", self.DEFAULT_CARLA_FLOOR_WARMUP_S))
         self.carla_floor_sustained_s = float(os.environ.get(
             "COLMDRIVER_EMERGENCY_CARLA_FLOOR_SUSTAINED_S", self.DEFAULT_CARLA_FLOOR_SUSTAINED_S))
+        self.no_ok_window_s = float(os.environ.get(
+            "COLMDRIVER_EMERGENCY_NO_OK_WINDOW_S", self.DEFAULT_NO_OK_WINDOW_S))
+        self.no_ok_warmup_s = float(os.environ.get(
+            "COLMDRIVER_EMERGENCY_NO_OK_WARMUP_S", self.DEFAULT_NO_OK_WARMUP_S))
         self.watchdog_delay_s = float(os.environ.get(
             "COLMDRIVER_EMERGENCY_WATCHDOG_DELAY_S", self.DEFAULT_WATCHDOG_DELAY_S))
 
         self._thread_history: list[tuple[float, int]] = []  # (ts, count)
         self._evict_history: list[tuple[float, int]] = []   # (ts, evicts)
         self._carla_history: list[tuple[float, int]] = []   # (ts, count)
+        # Rolling history of (timestamp, _evals_ok) samples. The no-ok
+        # detector compares the current ok count to the count from
+        # ``no_ok_window_s`` ago — if delta == 0 over a full window AND
+        # warmup has elapsed, it triggers.
+        self._ok_history: list[tuple[float, int]] = []
         self._carla_floor_first_seen_at: float | None = None  # first time below floor
         self._carla_drop_first_seen_at: float | None = None   # first time below drop threshold
         self._guard_started_at = time.monotonic()
@@ -6033,6 +6436,24 @@ class EmergencyGuard:
         self._our_gpus: set[int] = set()  # populated from --gpus arg
         self._our_argv = list(sys.argv)
         self._restart_count = int(os.environ.get(self.RESTART_COUNT_ENV, "0"))
+
+        # The carla_floor trigger reads CarlaPool's _instances bookkeeping,
+        # which is only populated in --scenario-pool mode. In other modes
+        # (single-shot, multi-planner without pool), CARLAs spawned via
+        # CarlaUE4.sh are reparented to init by the GDB-detach RPC patch
+        # and never registered with the pool, so the floor count reads 0
+        # and the guard trips even when CARLA is healthy. Auto-disable the
+        # floor in non-pool mode unless the user explicitly opts in.
+        _floor_env = os.environ.get(
+            "COLMDRIVER_EMERGENCY_CARLA_FLOOR_ACTIVE", "").lower()
+        if _floor_env in ("1", "true", "yes"):
+            self._carla_floor_active = True
+        elif _floor_env in ("0", "false", "no"):
+            self._carla_floor_active = False
+        else:
+            self._carla_floor_active = bool(
+                "--scenario-pool" in self._our_argv
+            )
 
     # --- public API ---
 
@@ -6067,6 +6488,9 @@ class EmergencyGuard:
             f"[EMERGENCY_GUARD] armed: thread_critical={self.thread_critical} "
             f"thread_warn={self.thread_warn} sustained={self.sustained_s:.0f}s "
             f"evict_rate={self.evict_rate_per_min:.0f}/min "
+            f"no_ok_window={self.no_ok_window_s:.0f}s "
+            f"no_ok_warmup={self.no_ok_warmup_s:.0f}s "
+            f"carla_floor={'on' if self._carla_floor_active else 'off (non-pool mode)'} "
             f"our_gpus={sorted(self._our_gpus) if self._our_gpus else 'all'}",
             flush=True,
         )
@@ -6108,6 +6532,23 @@ class EmergencyGuard:
                 return int(_CARLA_PROBE_CACHE_STATS.get("evictions", 0))
         except Exception:
             return 0
+
+    def _current_ok_count(self) -> int | None:
+        """Read _evals_ok from the active pool reporter. Returns None if
+        the pool reporter isn't active yet (pre-warmup) or if the import
+        fails — in either case the no-ok detector treats the sample as
+        absent and won't fire."""
+        try:
+            from tools._pool_integration import get_active_reporter
+        except Exception:
+            return None
+        rep = get_active_reporter()
+        if rep is None:
+            return None
+        try:
+            return rep.get_evals_ok()
+        except Exception:
+            return None
 
     def _check_triggers(self) -> str | None:
         now = time.monotonic()
@@ -6168,12 +6609,49 @@ class EmergencyGuard:
             else:
                 self._carla_drop_first_seen_at = None
 
+        # 6. No-ok-progress: success counter has not advanced over the
+        # entire window. Only fires after warmup so we don't trigger
+        # during initial scenario boot (the longest legitimate first
+        # success can take >30 min on heavy planners). Reads counts from
+        # the pool's active status reporter; if that's unavailable the
+        # detector is a no-op (returns None below) — fail-open is correct
+        # because false-positive restarts cost more than missed triggers
+        # here (the existing detectors still cover the cascade case).
+        elapsed_since_arm_for_ok = now - self._guard_started_at
+        if elapsed_since_arm_for_ok >= self.no_ok_warmup_s:
+            ok_count = self._current_ok_count()
+            if ok_count is not None:
+                self._ok_history.append((now, ok_count))
+                cutoff = now - self.no_ok_window_s
+                self._ok_history = [(t, c) for t, c in self._ok_history if t > cutoff]
+                # Need samples spanning at least the full window before judging.
+                # The ``check_interval_s + 1`` slack accommodates the discrete
+                # sampling cadence (matches the thread-warn detector's check).
+                if (
+                    len(self._ok_history) >= 2
+                    and self._ok_history[0][0] <= now - self.no_ok_window_s + self.check_interval_s + 1
+                ):
+                    oldest_ok = self._ok_history[0][1]
+                    if ok_count == oldest_ok:
+                        return (f"no_ok_progress (evals_ok stayed at {ok_count} "
+                                f"for {self.no_ok_window_s:.0f}s; pool is grinding "
+                                f"compute without producing successes)")
+
         # 5. CARLA-floor: fewer than N CARLAs per assigned GPU, after warmup.
         # Catches collapse cases where the trailing peak hadn't built up enough
         # for the drop-ratio detector. Warmup grace prevents firing during
         # initial CARLA spawn (which is slow — 30-60s per instance).
+        #
+        # Only meaningful when CarlaPool is the source of truth for CARLA
+        # liveness — i.e. in --scenario-pool mode. In single-shot or
+        # multi-planner-no-pool mode, CARLAs spawned via direct CarlaUE4.sh
+        # (and reparented to init by the GDB-detach RPC patch) are not visible
+        # to ``_count_running_carlas`` and the floor trips spuriously even
+        # when CARLA is healthy. Disable the floor in that case.
         elapsed_since_arm = now - self._guard_started_at
-        if elapsed_since_arm >= self.carla_floor_warmup_s and self._our_gpus:
+        if (self._carla_floor_active
+                and elapsed_since_arm >= self.carla_floor_warmup_s
+                and self._our_gpus):
             floor = max(1, int(len(self._our_gpus) * self.carla_floor_per_gpu))
             if carla_count < floor:
                 if self._carla_floor_first_seen_at is None:
@@ -7013,6 +7491,43 @@ def _parse_vulkaninfo_summary_adapter_uuids(text: str) -> Dict[int, str]:
     return adapters
 
 
+_VULKAN_ADAPTER_DISK_CACHE_PATH = "/tmp/.carla_vulkan_adapter_map.json"
+
+
+def _vulkan_adapter_load_disk_cache() -> Dict[str, int]:
+    """Load a previously-successful mapping from disk.
+
+    Vulkaninfo can be transiently flaky (especially in subprocess where DISPLAY
+    or VK_ICD_FILENAMES may differ from the user's shell). Persisting a known-
+    good mapping prevents identity-fallback from poisoning a long pool run.
+    User can refresh by deleting the file or setting
+    CARLA_VULKAN_ADAPTER_REFRESH=1.
+    """
+    if os.environ.get("CARLA_VULKAN_ADAPTER_REFRESH", "").lower() in ("1", "true", "yes"):
+        return {}
+    try:
+        if not os.path.isfile(_VULKAN_ADAPTER_DISK_CACHE_PATH):
+            return {}
+        import json as _json
+        with open(_VULKAN_ADAPTER_DISK_CACHE_PATH, "r") as _f:
+            data = _json.load(_f)
+        # Validate: keys are physical GPU index strings, values are adapter ints
+        return {str(k): int(v) for k, v in data.items()}
+    except Exception:
+        return {}
+
+
+def _vulkan_adapter_save_disk_cache(mapping: Dict[str, int]) -> None:
+    if not mapping:
+        return
+    try:
+        import json as _json
+        with open(_VULKAN_ADAPTER_DISK_CACHE_PATH, "w") as _f:
+            _json.dump({str(k): int(v) for k, v in mapping.items()}, _f)
+    except Exception:
+        pass
+
+
 def _query_vulkan_adapter_index_by_gpu_index(force_refresh: bool = False) -> Dict[str, int]:
     global _VULKAN_ADAPTER_INDEX_BY_GPU_INDEX_CACHE
     with _VULKAN_ADAPTER_CACHE_LOCK:
@@ -7031,24 +7546,30 @@ def _query_vulkan_adapter_index_by_gpu_index(force_refresh: bool = False) -> Dic
             timeout=20.0,
         )
     except Exception:
-        return {}
+        result = None
 
-    adapter_uuid_map = _parse_vulkaninfo_summary_adapter_uuids(
-        "\n".join(part for part in (result.stdout, result.stderr) if part)
-    )
-    gpu_index_by_uuid = {
-        uuid: index
-        for index, uuid in nvidia_uuid_by_index.items()
-    }
     mapping: Dict[str, int] = {}
-    for adapter_index, normalized_uuid in adapter_uuid_map.items():
-        gpu_index = gpu_index_by_uuid.get(normalized_uuid)
-        if gpu_index is not None:
-            mapping[gpu_index] = int(adapter_index)
+    if result is not None:
+        adapter_uuid_map = _parse_vulkaninfo_summary_adapter_uuids(
+            "\n".join(part for part in (result.stdout, result.stderr) if part)
+        )
+        gpu_index_by_uuid = {
+            uuid: index
+            for index, uuid in nvidia_uuid_by_index.items()
+        }
+        for adapter_index, normalized_uuid in adapter_uuid_map.items():
+            gpu_index = gpu_index_by_uuid.get(normalized_uuid)
+            if gpu_index is not None:
+                mapping[gpu_index] = int(adapter_index)
+
     if not mapping:
-        # Don't cache a failed/empty result - vulkaninfo may have been transiently
-        # unavailable.  Keeping the cache as None forces a retry on the next call
-        # instead of permanently falling back to the identity mapping.
+        # Vulkaninfo failed/empty this call — try the persistent disk cache
+        # (filled by a previous successful run on this host).
+        disk_mapping = _vulkan_adapter_load_disk_cache()
+        if disk_mapping:
+            with _VULKAN_ADAPTER_CACHE_LOCK:
+                _VULKAN_ADAPTER_INDEX_BY_GPU_INDEX_CACHE = dict(disk_mapping)
+            return dict(disk_mapping)
         print(
             "[WARN] Vulkan adapter UUID mapping produced an empty result "
             "(vulkaninfo may have failed or returned unexpected output). "
@@ -7057,6 +7578,7 @@ def _query_vulkan_adapter_index_by_gpu_index(force_refresh: bool = False) -> Dic
         return {}
     with _VULKAN_ADAPTER_CACHE_LOCK:
         _VULKAN_ADAPTER_INDEX_BY_GPU_INDEX_CACHE = dict(mapping)
+    _vulkan_adapter_save_disk_cache(mapping)
     return mapping
 
 
@@ -7293,6 +7815,16 @@ def wait_for_carla_gpu_binding(
     *,
     quiet: bool = False,
 ) -> tuple[bool, str | None]:
+    # Default DISABLED (2026-05-04): the strict validator rejected valid
+    # CARLA launches on hosts where the Vulkan adapter index ≠ nvidia-smi
+    # index AND vulkaninfo is unreliable in subprocess (e.g. Lambda Scalar
+    # 8xL40S). The model's CUDA context uses CUDA_VISIBLE_DEVICES for its
+    # GPU regardless of where CARLA renders, so wrong-GPU CARLA placement
+    # mainly matters for VRAM headroom — which is not an issue when GPU
+    # assignment is sparse. Re-enable strict checking with
+    # CARLA_ENFORCE_GPU_PLACEMENT_CHECK=1.
+    if os.environ.get("CARLA_ENFORCE_GPU_PLACEMENT_CHECK", "").lower() not in ("1", "true", "yes"):
+        return True, "placement_check_disabled_by_default"
     expected_gpu_index = _resolve_physical_gpu_index_from_env(env)
     if expected_gpu_index is None:
         return True, None
@@ -9004,11 +9536,17 @@ def did_scenario_record_runtime_failure(summary: ResultRootProgress) -> bool:
 def has_only_terminal_route_outcomes(summary: ResultRootProgress) -> bool:
     if not bool(summary.has_structured_records):
         return False
-    statuses = [str(raw_status or "").strip() for raw_status in summary.ego_status.values()]
-    statuses = [status for status in statuses if status]
-    if not statuses:
+    if not summary.ego_status:
         return False
-    return all(is_terminal_route_outcome_status(status) for status in statuses)
+    # Every requested ego must have written a terminal status. Treating an
+    # empty/missing status as "absent and therefore ignorable" used to let
+    # 1-of-2-ego runs slip through as success when the leaderboard child was
+    # SIGKILL'd before the per-ego results.json split was written.
+    for raw_status in summary.ego_status.values():
+        status = str(raw_status or "").strip()
+        if not status or not is_terminal_route_outcome_status(status):
+            return False
+    return True
 
 
 def classify_missing_terminal_results(summary: ResultRootProgress) -> str:
@@ -9091,6 +9629,352 @@ def classify_retryable_soft_failure(
         )
         return missing_terminal_kind
     return None
+
+
+# ────────────────────────────────────────────────────────────────────────
+#  Forensic helpers for "Planner child exited 0 but no results written"
+#  failures. These are pure read-only inspection (or surgical cleanup)
+#  used to (a) prevent a stale stub results.json from poisoning retries,
+#  (b) reap CARLA processes orphaned to PID 1 by the GDB-detach RPC patch,
+#  and (c) emit a [FAILURE_DIAG] block with everything we know when the
+#  validator rejects a child's output.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _classify_results_json(path: Path) -> str:
+    """Returns one of: 'missing', 'empty_stub', 'partial', 'real', 'unparseable'.
+
+    'empty_stub' = the placeholder a fresh leaderboard child writes at
+    startup (records=[], global_record={}). This file's mere presence is
+    what makes validate_planner_child_results return 'no_results_written'
+    on the next attempt — leaving it across retries causes infinite-loop
+    retries with the same false-failure classification.
+    """
+    try:
+        if not path.is_file():
+            return "missing"
+        if path.stat().st_size == 0:
+            return "empty_stub"
+        with path.open() as f:
+            data = json.load(f)
+    except json.JSONDecodeError:
+        return "unparseable"
+    except Exception:
+        return "missing"
+    cp = (data or {}).get("_checkpoint") or {}
+    records = cp.get("records") or []
+    global_record = cp.get("global_record") or {}
+    if not records and not global_record:
+        return "empty_stub"
+    if not records or not global_record:
+        return "partial"
+    return "real"
+
+
+def _rotate_stale_results_stub(results_dir: Path, log_path: Path | None = None) -> str | None:
+    """If results.json under ``results_dir`` is an empty stub left over from
+    a prior crashed attempt, rename it with a ``.stale.<unix_ts>`` suffix so
+    the next attempt's validator doesn't re-classify it as 'no_results_written'
+    forever. Returns the renamed path string, or None if nothing was rotated.
+    """
+    target = Path(results_dir) / "results.json"
+    kind = _classify_results_json(target)
+    if kind != "empty_stub":
+        return None
+    rotated = target.with_suffix(f".json.stale.{int(time.time())}")
+    try:
+        target.rename(rotated)
+    except Exception as exc:  # pylint: disable=broad-except
+        msg = f"[STUB_ROTATE] failed to rename {target}: {exc}"
+        if log_path is not None:
+            _append_text_log_line(log_path, msg)
+        else:
+            print(msg, flush=True)
+        return None
+    msg = f"[STUB_ROTATE] {target} → {rotated} (was empty checkpoint stub)"
+    if log_path is not None:
+        _append_text_log_line(log_path, msg)
+    else:
+        print(msg, flush=True)
+    return str(rotated)
+
+
+def _enumerate_orphan_carlas(world_port: int | None = None) -> list[dict]:
+    """Return a list of {pid, ppid, port, cmd} dicts for ``CarlaUE4-Linux-Shipping``
+    processes that have been reparented to PID 1 (init). The GDB-detach RPC
+    patch [carla_rpc_patch] reparents CARLAs to init at birth, so they are
+    NOT visible to ``_enumerate_descendants`` and survive parent-master kills.
+
+    If ``world_port`` is given, return only CARLAs whose argv contains
+    ``--world-port=<world_port>``.
+    """
+    out: list[dict] = []
+    try:
+        ps_output = subprocess.check_output(
+            ["ps", "-eo", "pid,ppid,cmd"],
+            text=True, errors="replace", timeout=10.0,
+        )
+    except Exception:
+        return out
+    for line in ps_output.splitlines()[1:]:
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        cmd = parts[2]
+        if "CarlaUE4-Linux-Shipping" not in cmd:
+            continue
+        if ppid != 1:
+            continue
+        # Extract --world-port=N
+        m = re.search(r"--world-port[= ](\d+)", cmd)
+        port = int(m.group(1)) if m else None
+        if world_port is not None and port != world_port:
+            continue
+        out.append({"pid": pid, "ppid": ppid, "port": port, "cmd": cmd[:200]})
+    return out
+
+
+def _kill_orphan_carlas_for_port(world_port: int, log_path: Path | None = None) -> int:
+    """Reap any orphan CARLAs (parent=1) that bound to ``world_port``.
+    Returns the count killed. Sends SIGTERM, waits 5s, then SIGKILL the
+    survivors. Always logs what it found and what it killed.
+    """
+    orphans = _enumerate_orphan_carlas(world_port=world_port)
+    if not orphans:
+        return 0
+    pids = [o["pid"] for o in orphans]
+    msg = (f"[ORPHAN_CARLA_REAP] port={world_port} "
+           f"found {len(orphans)} orphan CARLA(s): pids={pids}")
+    if log_path is not None:
+        _append_text_log_line(log_path, msg)
+    else:
+        print(msg, flush=True)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:  # pylint: disable=broad-except
+            pass
+    time.sleep(5.0)
+    survivors = []
+    for pid in pids:
+        try:
+            os.kill(pid, 0)  # check existence
+            survivors.append(pid)
+        except OSError:
+            pass
+    for pid in survivors:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:  # pylint: disable=broad-except
+            pass
+    if survivors:
+        msg = f"[ORPHAN_CARLA_REAP] SIGKILL'd survivors: {survivors}"
+        if log_path is not None:
+            _append_text_log_line(log_path, msg)
+        else:
+            print(msg, flush=True)
+    return len(pids)
+
+
+def _enumerate_concurrent_masters(results_tag: str | None) -> list[dict]:
+    """Find other run_custom_eval.py processes that share our ``--results-tag``.
+    These are spawned as per-planner sub-masters from the multi-planner parent;
+    if more than one for the same planner+tag is alive, we have a runaway
+    retry race. Excludes our own PID.
+    """
+    out: list[dict] = []
+    if not results_tag:
+        return out
+    try:
+        ps_output = subprocess.check_output(
+            ["ps", "-eo", "pid,etime,cmd"],
+            text=True, errors="replace", timeout=10.0,
+        )
+    except Exception:
+        return out
+    self_pid = os.getpid()
+    for line in ps_output.splitlines()[1:]:
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == self_pid:
+            continue
+        etime = parts[1]
+        cmd = parts[2]
+        if "run_custom_eval.py" not in cmd:
+            continue
+        if results_tag not in cmd:
+            continue
+        out.append({"pid": pid, "etime": etime, "cmd": cmd[:240]})
+    return out
+
+
+def _gpu_memory_snapshot(gpu_index: int | None = None) -> list[dict]:
+    """Return list of {pid, mem_mib, name, gpu} for the chosen GPU (or all).
+    Uses nvidia-smi to avoid an NVML dependency.
+    """
+    out: list[dict] = []
+    cmd = ["nvidia-smi",
+           "--query-compute-apps=pid,used_memory,process_name,gpu_uuid",
+           "--format=csv,noheader,nounits"]
+    if gpu_index is not None:
+        cmd.insert(1, f"--id={int(gpu_index)}")
+    try:
+        text = subprocess.check_output(cmd, text=True, errors="replace", timeout=10.0)
+    except Exception:
+        return out
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            mem_mib = int(parts[1])
+        except ValueError:
+            continue
+        name = parts[2]
+        out.append({"pid": pid, "mem_mib": mem_mib, "name": name,
+                    "gpu_uuid": parts[3] if len(parts) > 3 else ""})
+    return out
+
+
+def _tail_text_file(path: Path, n: int = 50) -> list[str]:
+    """Return the last ``n`` lines of a text file. Empty list on error."""
+    try:
+        if not path.is_file():
+            return []
+        with path.open(errors="replace") as f:
+            data = f.readlines()
+        return [ln.rstrip("\n") for ln in data[-n:]]
+    except Exception:
+        return []
+
+
+def _emit_failure_diag(
+    *,
+    log_path: Path | None,
+    results_dir: Path,
+    ego_count: int,
+    validation_error: str,
+    runner_returncode: int | None,
+    runner_signal: int | None,
+    child_pid: int | None,
+    world_port: int | None,
+    gpu: str | int | None,
+    results_tag: str | None,
+    planner_log_path: Path | None,
+    leaderboard_log_path: Path | None = None,
+) -> None:
+    """Emit a [FAILURE_DIAG] block with everything we know about why the
+    child's output got rejected. Designed to be greppable: every line begins
+    with [FAILURE_DIAG] and every key is ``key=value``.
+    """
+    lines: list[str] = []
+    e = lines.append
+    e("[FAILURE_DIAG] ────────────────────────────────────────────────")
+    e(f"[FAILURE_DIAG] timestamp={dt.datetime.now().isoformat()}")
+    e(f"[FAILURE_DIAG] validation_error={validation_error!r}")
+    e(f"[FAILURE_DIAG] child_pid={child_pid} returncode={runner_returncode} "
+      f"signal={runner_signal}")
+    e(f"[FAILURE_DIAG] world_port={world_port} gpu={gpu} "
+      f"results_tag={results_tag!r}")
+
+    # 1. results.json classification
+    main_results = Path(results_dir) / "results.json"
+    main_kind = _classify_results_json(main_results)
+    main_size = main_results.stat().st_size if main_results.is_file() else 0
+    main_mtime = (dt.datetime.fromtimestamp(main_results.stat().st_mtime).isoformat()
+                  if main_results.is_file() else "n/a")
+    e(f"[FAILURE_DIAG] results.json: path={main_results} kind={main_kind} "
+      f"size={main_size} mtime={main_mtime}")
+
+    # 2. per-ego results.json files
+    for i in range(ego_count):
+        p = Path(results_dir) / f"ego_vehicle_{i}" / "results.json"
+        k = _classify_results_json(p)
+        sz = p.stat().st_size if p.is_file() else 0
+        e(f"[FAILURE_DIAG] ego_vehicle_{i}/results.json: kind={k} size={sz}")
+
+    # 3. Concurrent masters writing the same results-tag (race detection)
+    concurrent = _enumerate_concurrent_masters(results_tag)
+    if concurrent:
+        e(f"[FAILURE_DIAG] CONCURRENT_MASTERS: {len(concurrent)} other "
+          f"run_custom_eval children share results-tag={results_tag!r}")
+        for c in concurrent:
+            e(f"[FAILURE_DIAG]   pid={c['pid']} etime={c['etime']} cmd={c['cmd']}")
+    else:
+        e(f"[FAILURE_DIAG] CONCURRENT_MASTERS: none (clean)")
+
+    # 4. Orphan CARLAs (parent=1) on this port
+    orphans = _enumerate_orphan_carlas(world_port=world_port)
+    if orphans:
+        e(f"[FAILURE_DIAG] ORPHAN_CARLAS on port={world_port}: "
+          f"{len(orphans)} found (will leak GPU until reaped)")
+        for o in orphans:
+            e(f"[FAILURE_DIAG]   pid={o['pid']} port={o['port']} cmd={o['cmd']}")
+    else:
+        e(f"[FAILURE_DIAG] ORPHAN_CARLAS on port={world_port}: none")
+
+    # 5. GPU memory snapshot
+    try:
+        gpu_idx = int(gpu) if gpu is not None and str(gpu).isdigit() else None
+    except Exception:
+        gpu_idx = None
+    snap = _gpu_memory_snapshot(gpu_index=gpu_idx)
+    if snap:
+        total_mib = sum(s["mem_mib"] for s in snap)
+        e(f"[FAILURE_DIAG] GPU_SNAPSHOT gpu={gpu} total_used={total_mib}MiB "
+          f"n_processes={len(snap)}")
+        for s in snap:
+            e(f"[FAILURE_DIAG]   pid={s['pid']} mem={s['mem_mib']}MiB "
+              f"name={s['name']}")
+    else:
+        e(f"[FAILURE_DIAG] GPU_SNAPSHOT: nvidia-smi gave no rows")
+
+    # 6. Tail of the leaderboard child's log.log (the actual scenario log
+    #    with TICK_WORLD/CTRL/TERM_DECISION etc.). This is the most
+    #    informative artefact when the child exited 0 but didn't write
+    #    results — it shows what the child was doing right before exit.
+    if leaderboard_log_path is None:
+        cand = Path(results_dir) / "log" / "log.log"
+        if cand.is_file():
+            leaderboard_log_path = cand
+    if leaderboard_log_path is not None and leaderboard_log_path.is_file():
+        tail = _tail_text_file(leaderboard_log_path, n=40)
+        e(f"[FAILURE_DIAG] LEADERBOARD_LOG_TAIL (last {len(tail)} lines of "
+          f"{leaderboard_log_path}):")
+        for ln in tail:
+            e(f"[FAILURE_DIAG]   {ln}")
+    else:
+        e(f"[FAILURE_DIAG] LEADERBOARD_LOG_TAIL: file not found "
+          f"(expected at {Path(results_dir) / 'log' / 'log.log'})")
+
+    # 7. Tail of the planner thread's wrapper log (captures runner stderr/stdout)
+    if planner_log_path is not None and planner_log_path.is_file():
+        tail = _tail_text_file(planner_log_path, n=20)
+        e(f"[FAILURE_DIAG] PLANNER_LOG_TAIL (last {len(tail)} lines of "
+          f"{planner_log_path}):")
+        for ln in tail:
+            e(f"[FAILURE_DIAG]   {ln}")
+
+    e("[FAILURE_DIAG] ────────────────────────────────────────────────")
+
+    blob = "\n".join(lines)
+    if log_path is not None:
+        for ln in lines:
+            _append_text_log_line(log_path, ln)
+    print(blob, flush=True)
 
 
 def validate_planner_child_results(
@@ -10538,7 +11422,7 @@ def detect_scenario_subfolders(routes_dir: Path, routes_leaf: str | None = None)
 
     A scenario leaf folder is any directory that contains at least one ego-role
     XML file *directly* inside it (not in a subfolder). The walk is fully
-    recursive so arbitrary nesting is supported (e.g. ``llmgen/<Category>/<N>/``
+    recursive so arbitrary nesting is supported (e.g. ``interaction/<Category>/<N>/``
     as well as ``v2xpnp/<scenario>/``).
 
     If *routes_dir* itself is a scenario leaf, returns ``[]`` (single-scenario
@@ -10587,12 +11471,12 @@ def detect_scenario_subfolders(routes_dir: Path, routes_leaf: str | None = None)
 
     _walk(routes_dir)
     # Bucket-priority ordering (override-able via env var).  Default order:
-    # v2xpnp first, then opencdascenarios, then llmgen, then anything else.
+    # v2xpnp first, then precrash, then interaction, then anything else.
     # Within a bucket, scenarios stay alphabetical.
-    # Set CARLA_SCENARIO_BUCKET_ORDER="llmgen,opencdascenarios,v2xpnp" to revert.
+    # Set CARLA_SCENARIO_BUCKET_ORDER="interaction,precrash,v2xpnp" to revert.
     _bucket_order_raw = os.environ.get(
         "CARLA_SCENARIO_BUCKET_ORDER",
-        "v2xpnp,opencdascenarios,llmgen",
+        "v2xpnp,precrash,interaction",
     )
     _bucket_priority = {
         b.strip(): idx for idx, b in enumerate(_bucket_order_raw.split(","))
@@ -11427,6 +12311,14 @@ def align_ego_routes_in_directory(
     try:
         ego_xmls: List[Path] = []
         for xml_path in routes_dir.glob("*.xml"):
+            # Skip _REPLAY.xml files — they're dense, time-stamped trajectories
+            # used for openloop teleport. Re-aligning them via GRP would strip
+            # the per-waypoint `time=` attribute, which `RouteScenario` then
+            # rejects with "missing timing data for ego" and silently degrades
+            # openloop to closed-loop. Alignment is only meant for sparse
+            # ROUTE waypoints (the planner's target), not the replay trace.
+            if xml_path.name.endswith("_REPLAY.xml"):
+                continue
             try:
                 _, _, role = parse_route_metadata(xml_path.read_bytes())
             except Exception:
@@ -12715,6 +13607,8 @@ def main() -> None:
             )
             if gpu_monitor is not None:
                 gpu_monitor.stop()
+            if getattr(args, "openloop", False) and not args.dry_run:
+                _run_openloop_post_metrics(args, planner_results_root, planner_requests, repo_root)
             sys.exit(int(exit_code))
 
         vram_aware_scheduler = bool(args.vram_aware_scheduler) and not args.dry_run
@@ -13238,6 +14132,41 @@ def main() -> None:
                         "Evaluator teardown gate timed out before planner launch "
                         f"(run_id={planner_request.run_id}, slot={slot.slot_index})."
                     )
+
+                # ── Pre-launch cleanup ──────────────────────────────────────
+                # 1. Rotate any stale empty-stub results.json from a prior
+                #    crashed attempt. Leaving the stub causes the next attempt
+                #    to be classified 'no_results_written' regardless of what
+                #    it actually does, producing infinite retry loops.
+                # 2. Kill any CARLAs orphaned to PID 1 on the world_port we're
+                #    about to use. The GDB-detach RPC patch reparents CARLAs
+                #    to init, so descendant kills miss them; they hold GPU
+                #    memory until manually reaped.
+                _per_planner_results_dir = (
+                    Path(dashboard_state.results_dir)
+                    / (dashboard_state.default_results_subdir or "")
+                )
+                try:
+                    _rotate_stale_results_stub(_per_planner_results_dir,
+                                               log_path=dashboard_state.log_path)
+                except Exception as _stub_exc:  # pylint: disable=broad-except
+                    _append_text_log_line(
+                        dashboard_state.log_path,
+                        f"[STUB_ROTATE] error: {_stub_exc!r}")
+                try:
+                    _reaped = _kill_orphan_carlas_for_port(
+                        int(slot.ports.port),
+                        log_path=dashboard_state.log_path,
+                    )
+                    if _reaped:
+                        # Give the OS a moment to release the port and
+                        # the GPU memory before CARLA spawns again.
+                        time.sleep(2.0)
+                except Exception as _orph_exc:  # pylint: disable=broad-except
+                    _append_text_log_line(
+                        dashboard_state.log_path,
+                        f"[ORPHAN_CARLA_REAP] error: {_orph_exc!r}")
+
                 runner = MonitoredSubprocessRunner(
                     cmd,
                     env=child_env,
@@ -13276,6 +14205,38 @@ def main() -> None:
                     if validation_error is not None:
                         dashboard_state.error = validation_error
                 if validation_error is not None:
+                    # Emit a diagnostic block so we can tell WHY the validator
+                    # rejected the child's output (stale stub? orphan CARLAs?
+                    # concurrent master? leaderboard log shows what happened?).
+                    try:
+                        _emit_failure_diag(
+                            log_path=dashboard_state.log_path,
+                            results_dir=_per_planner_results_dir,
+                            ego_count=planner_validation_ego_count,
+                            validation_error=validation_error,
+                            runner_returncode=getattr(result, "returncode", None),
+                            runner_signal=getattr(result, "signal_num", None),
+                            child_pid=getattr(result, "pid", None),
+                            world_port=int(slot.ports.port),
+                            gpu=slot.gpu,
+                            results_tag=getattr(args, "results_tag", None),
+                            planner_log_path=dashboard_state.log_path,
+                        )
+                    except Exception as _diag_exc:  # pylint: disable=broad-except
+                        _append_text_log_line(
+                            dashboard_state.log_path,
+                            f"[FAILURE_DIAG] emission failed: {_diag_exc!r}")
+                    # Surgical post-validation cleanup so the next retry
+                    # doesn't inherit the same garbage state we just diagnosed.
+                    try:
+                        _kill_orphan_carlas_for_port(
+                            int(slot.ports.port),
+                            log_path=dashboard_state.log_path,
+                        )
+                    except Exception as _post_exc:  # pylint: disable=broad-except
+                        _append_text_log_line(
+                            dashboard_state.log_path,
+                            f"[ORPHAN_CARLA_REAP] post-validation error: {_post_exc!r}")
                     outcome = PlannerThreadResult(
                         planner_request=planner_request,
                         slot_index=slot.slot_index,
@@ -15285,7 +16246,13 @@ def main() -> None:
                     actor_replay_enabled = bool(
                         args.log_replay_actors or args.custom_actor_control_mode == "replay"
                     )
-                    if args.planner == "log-replay":
+                    # CUSTOM_EGO_LOG_REPLAY=1 should propagate whenever
+                    # --openloop is set (any planner), not just log-replay.
+                    # Without this, the perception_swap agent's openloop-gated
+                    # paths (sensor params swap, lidar-only ckpt switch) never
+                    # fire — the env var was stripped before reaching the
+                    # leaderboard subprocess.
+                    if args.planner == "log-replay" or getattr(args, "openloop", False):
                         env["CUSTOM_EGO_LOG_REPLAY"] = "1"
                     else:
                         env.pop("CUSTOM_EGO_LOG_REPLAY", None)

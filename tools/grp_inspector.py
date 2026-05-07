@@ -43,7 +43,7 @@ Usage
        conda activate b2d_zoo
        python tools/grp_inspector.py \
            --carla-port 9000 \
-           --scenario-glob 'llmgen/*/*' \
+           --scenario-glob 'interaction/*/*' \
            --mode all \
            --visualize \
            --output grp_viz/grp_inspection.json \
@@ -1735,8 +1735,8 @@ def visualize_scenario(out_path: str, scenario: str, town: str,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenarios-root", default="/data2/marco/CoLMDriver/scenarioset")
-    parser.add_argument("--scenario-glob", default="llmgen/*/*",
-                        help='glob under scenarios-root (e.g. "llmgen/Intersection_Deadlock_Resolution/*")')
+    parser.add_argument("--scenario-glob", default="interaction/*/*",
+                        help='glob under scenarios-root (e.g. "interaction/Intersection_Deadlock_Resolution/*")')
     parser.add_argument("--carla-host", default="127.0.0.1")
     parser.add_argument("--carla-port", type=int, default=2000)
     parser.add_argument("--carla-timeout-s", type=float, default=30.0)
@@ -1757,7 +1757,7 @@ def main() -> int:
                         help="(raw mode only) also analyze .orig backup files where present")
     parser.add_argument("--limit", type=int, default=0, help="Limit number of egos (0=all)")
     parser.add_argument("--bucket", default="all",
-                        help="Filter to one bucket: llmgen|opencdascenarios|v2xpnp|all")
+                        help="Filter to one bucket: interaction|precrash|v2xpnp|all")
     parser.add_argument("--mode", default="all",
                         choices=["raw", "builder_legacy", "runtime", "all"],
                         help="Which GRP pipeline(s) to run. 'all' runs all 3.")

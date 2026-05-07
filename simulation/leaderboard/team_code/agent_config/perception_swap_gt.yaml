@@ -13,8 +13,9 @@
 # files, so it can run in parallel with the perception_swap_fcooper cell
 # without clobbering its diag.jsonl / ap_summary outputs.
 detector: fcooper
+planner: basicagent          # CARLA BasicAgent (lateral PID lane-following + emergency stop)
 cooperative: true
-comm_range_m: 70
+comm_range_m: 200            # bumped from 70m so v2xpnp 2-ego scenes (max ~250m) stay in range
 max_cooperators: 4
 cruise_speed: 6.0
 score_threshold: 0.20

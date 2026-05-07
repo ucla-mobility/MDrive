@@ -33,7 +33,11 @@ import os as _os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Optional
+try:
+    from typing import Literal  # Python 3.8+
+except ImportError:
+    from typing_extensions import Literal  # Python 3.7 fallback (colmdrivermarco2)
 
 
 log = logging.getLogger(__name__)

@@ -1,0 +1,20 @@
+# PerceptionSwapAgent — DiscoNet detector + BasicAgent planner
+# WITH cooperator pose error ONLY (sweep MAX: pos_std=0.6 m, rot_std=0.6°).
+# See perception_swap_fcooper_poseerr.yaml for the methodology rationale.
+detector: disco
+planner: basicagent
+cooperative: true
+comm_range_m: 200
+max_cooperators: 4
+cruise_speed: 6.0
+score_threshold: 0.20
+detection_radius: 1.5
+collect_ap_metrics: true
+log_tag: disco_poseerr
+
+pose_error:
+  pos_std: 0.6
+  rot_std: 0.6
+  pos_mean: 0.0
+  rot_mean: 0.0
+  use_laplace: false
