@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-03-18-08-32_2_0" model="vehicle.chevrolet.impala" role="npc" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-1.181998" roll="-2.488308" time="0.000000" x="-473.673298" y="11.663982" yaw="97.418279" z="9.643070" />
+    <waypoint pitch="-1.180744" roll="-2.487874" time="0.100000" x="-473.816507" y="12.798560" yaw="97.418279" z="9.630851" />
+    <waypoint pitch="-1.179448" roll="-2.487611" time="0.200000" x="-473.968476" y="14.002538" yaw="97.418279" z="9.618427" />
+    <waypoint pitch="-1.178227" roll="-2.487367" time="0.300000" x="-474.119189" y="15.196566" yaw="97.418279" z="9.606308" />
+    <waypoint pitch="-1.176919" roll="-2.486937" time="0.400000" x="-474.275479" y="16.434627" yaw="97.419143" z="9.593897" />
+  </route>
+</routes>

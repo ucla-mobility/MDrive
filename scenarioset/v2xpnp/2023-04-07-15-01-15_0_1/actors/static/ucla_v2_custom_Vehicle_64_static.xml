@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-07-15-01-15_0_1" model="vehicle.bmw.grandtourer" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-2.713477" roll="0.008584" time="0.000000" x="127.296485" y="-357.303633" yaw="-76.193813" z="29.583493" />
+    <waypoint pitch="-2.713477" roll="0.008584" time="9.500000" x="127.296485" y="-357.303633" yaw="-76.193813" z="29.583493" />
+  </route>
+</routes>

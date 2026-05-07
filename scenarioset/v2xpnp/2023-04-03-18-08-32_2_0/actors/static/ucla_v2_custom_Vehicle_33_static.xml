@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-03-18-08-32_2_0" model="vehicle.mitsubishi.fusorosa" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="1.248061" roll="-0.001351" time="0.000000" x="-469.748174" y="81.956191" yaw="-85.416557" z="8.208914" />
+    <waypoint pitch="1.256570" roll="-0.008101" time="0.100000" x="-469.706673" y="81.411760" yaw="-85.416557" z="8.213891" />
+    <waypoint pitch="1.256570" roll="-0.008101" time="0.200000" x="-469.615137" y="80.351005" yaw="-84.214294" z="8.213891" />
+    <waypoint pitch="1.267594" roll="-0.010407" time="13.300000" x="-469.615137" y="80.351005" yaw="-84.214294" z="8.220836" />
+  </route>
+</routes>

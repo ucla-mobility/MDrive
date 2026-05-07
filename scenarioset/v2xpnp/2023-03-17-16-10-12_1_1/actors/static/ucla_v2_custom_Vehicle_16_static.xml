@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-03-17-16-10-12_1_1" model="vehicle.carlamotors.carlacola" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.000000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.100000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.200000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.300000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.400000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="0.500000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+    <waypoint pitch="0.332551" roll="-0.001277" time="13.000000" x="-532.630387" y="-103.229623" yaw="5.824456" z="10.825906" />
+  </route>
+</routes>

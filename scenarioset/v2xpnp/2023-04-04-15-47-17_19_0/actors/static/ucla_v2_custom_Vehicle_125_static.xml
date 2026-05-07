@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<routes>
+  <route control_mode="replay" id="2023-04-04-15-47-17_19_0" model="vehicle.chevrolet.impala" role="static" snap_to_road="false" town="ucla_v2">
+    <waypoint pitch="-3.235499" roll="0.012488" time="18.100000" x="-421.170033" y="-34.571521" yaw="-179.933614" z="-38.205531" />
+  </route>
+</routes>

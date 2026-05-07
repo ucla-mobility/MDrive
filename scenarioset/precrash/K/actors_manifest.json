@@ -1,0 +1,18 @@
+{
+  "ego": [
+    {
+      "file": "town01_custom_ego_vehicle_0.xml",
+      "kind": "ego",
+      "name": "town01_custom_ego_vehicle_0",
+      "route_id": "247",
+      "town": "Town01"
+    },
+    {
+      "file": "town01_custom_ego_vehicle_1.xml",
+      "kind": "ego",
+      "name": "town01_custom_ego_vehicle_1",
+      "route_id": "247",
+      "town": "Town01"
+    }
+  ]
+}
