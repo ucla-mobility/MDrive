@@ -19,6 +19,86 @@ from team_code.utils.carla_birdeye_view import BirdViewProducer, BirdViewCropTyp
 from team_code.planner_pnp import RoutePlanner
 import team_code.utils.yaml_utils as yaml_utils
 
+
+class CoLMRoutePlanner(RoutePlanner):
+    """RoutePlanner variant scoped to the CoLMDriver model.
+
+    Replaces the parent's single-segment safe_ahead projection with a
+    polyline-based cumulative lookahead. When the safe_ahead guard
+    fires, walks the route polyline forward from route[1] accumulating
+    segment distances until reaching `lookahead_meters` ahead of the
+    ego, returning that point. Handles dense waypoint clusters
+    (e.g., on-ramp merge transitions with 0.5m spacing) and curves
+    cleanly because the target stays on the actual route polyline
+    rather than projected through a tiny local segment direction.
+
+    Default `lookahead_meters` is 6 m (in distribution for the model).
+    Default trigger threshold is 5 m. Tunable per-process via env
+    `COLM_POLYLINE_LOOKAHEAD` and `COLM_SAFE_AHEAD_TRIGGER`.
+    """
+
+    def __init__(self, *args, lookahead_meters=6.0,
+                 trigger_threshold=5.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            env_v = os.environ.get('COLM_POLYLINE_LOOKAHEAD')
+            if env_v is not None:
+                lookahead_meters = float(env_v)
+        except Exception:
+            pass
+        try:
+            env_t = os.environ.get('COLM_SAFE_AHEAD_TRIGGER')
+            if env_t is not None:
+                trigger_threshold = float(env_t)
+        except Exception:
+            pass
+        self._lookahead_meters = float(lookahead_meters)
+        self._trigger_threshold = float(trigger_threshold)
+
+    def _safe_ahead_trigger_threshold(self):
+        return self._trigger_threshold
+
+    def _compute_safe_ahead_target(self, vehicle_num, gps, seg_dir, safe_ahead):
+        if self._lookahead_meters <= safe_ahead:
+            return super()._compute_safe_ahead_target(
+                vehicle_num, gps, seg_dir, safe_ahead)
+        route = self.route[vehicle_num]
+        if len(route) < 2:
+            return super()._compute_safe_ahead_target(
+                vehicle_num, gps, seg_dir, safe_ahead)
+        gps_arr = np.array(gps, dtype=float)
+        route1 = np.array(route[1][0], dtype=float)
+        dist_to_route1 = float(np.dot(route1 - gps_arr, seg_dir))
+        if self._lookahead_meters <= dist_to_route1:
+            return gps_arr + seg_dir * self._lookahead_meters
+        distance_to_walk = self._lookahead_meters - dist_to_route1
+        prev_pt = route1
+        cum = 0.0
+        for i in range(2, len(route)):
+            wp = np.array(route[i][0], dtype=float)
+            seg_v = wp - prev_pt
+            seg_l = float(np.linalg.norm(seg_v))
+            if seg_l < 1e-6:
+                continue
+            if cum + seg_l >= distance_to_walk:
+                seg_unit = seg_v / seg_l
+                return prev_pt + seg_unit * (distance_to_walk - cum)
+            cum += seg_l
+            prev_pt = wp
+        last_seg_dir = None
+        if len(route) >= 2:
+            last_a = np.array(route[-2][0], dtype=float)
+            last_b = np.array(route[-1][0], dtype=float)
+            seg_v = last_b - last_a
+            seg_l = float(np.linalg.norm(seg_v))
+            if seg_l > 1e-6:
+                last_seg_dir = seg_v / seg_l
+        if last_seg_dir is None:
+            last_seg_dir = seg_dir
+        remaining_walk = distance_to_walk - cum
+        return np.array(route[-1][0], dtype=float) + last_seg_dir * remaining_walk
+
+
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
 from leaderboard.sensors.fixed_sensors import RoadSideUnit, get_rsu_point, InfraLiDARUnit
@@ -244,7 +324,7 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
         """
         initialization before the first step of simulation
         """
-        self._route_planner = RoutePlanner(2.0, 10.0)
+        self._route_planner = CoLMRoutePlanner(2.0, 10.0)
         self._route_planner.set_route(self._global_plan, True)
         self.initialized = True
         self.first_generate_rsu = True

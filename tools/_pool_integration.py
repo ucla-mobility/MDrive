@@ -128,6 +128,17 @@ class _PoolStatusReporter:
         with self._lock:
             return int(self._evals_ok)
 
+    def get_evals_remaining(self) -> int:
+        """Return queued + currently-running eval count.
+
+        Used by EmergencyGuard's carla_floor detector to suppress false
+        positives near the end of a run: if fewer scenarios remain than
+        the per-GPU CARLA floor expects, the pool will legitimately wind
+        down some CARLAs and the floor would otherwise trip.
+        """
+        with self._lock:
+            return int(self._evals_queued) + int(self._evals_running)
+
     def emit_failure_breakdown(self) -> None:
         """Print a breakdown of total failure attempts by decision_reason.
         Lets the operator see at a glance which failure mode dominates the

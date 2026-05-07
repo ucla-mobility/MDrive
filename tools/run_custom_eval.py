@@ -6550,6 +6550,23 @@ class EmergencyGuard:
         except Exception:
             return None
 
+    def _read_pool_evals_remaining(self) -> int | None:
+        """Returns queued + running eval count from the pool reporter, or
+        ``None`` if the reporter isn't yet active. Used by the carla_floor
+        detector to suppress trips when fewer scenarios remain than the
+        floor expects (legitimate tail-of-run wind-down)."""
+        try:
+            from tools._pool_integration import get_active_reporter
+        except Exception:
+            return None
+        rep = get_active_reporter()
+        if rep is None:
+            return None
+        try:
+            return rep.get_evals_remaining()
+        except Exception:
+            return None
+
     def _check_triggers(self) -> str | None:
         now = time.monotonic()
         threads = self._current_thread_count()
@@ -6653,13 +6670,21 @@ class EmergencyGuard:
                 and elapsed_since_arm >= self.carla_floor_warmup_s
                 and self._our_gpus):
             floor = max(1, int(len(self._our_gpus) * self.carla_floor_per_gpu))
-            if carla_count < floor:
+            # Tail-of-run suppression: when fewer evals are queued+running
+            # than the floor, the pool will legitimately spin down some
+            # CARLAs and the floor would otherwise trip on healthy
+            # wind-down. Cap the floor at remaining work.
+            remaining = self._read_pool_evals_remaining()
+            effective_floor = floor if remaining is None else min(floor, max(0, remaining))
+            if carla_count < effective_floor:
                 if self._carla_floor_first_seen_at is None:
                     self._carla_floor_first_seen_at = now
                 elif now - self._carla_floor_first_seen_at >= self.carla_floor_sustained_s:
+                    suffix = (f" capped_to_remaining={remaining}"
+                              if remaining is not None and remaining < floor else "")
                     return (f"carla_floor (running_carlas={carla_count} < "
-                            f"floor={floor} ({len(self._our_gpus)} GPUs * "
-                            f"{self.carla_floor_per_gpu:.1f}) for "
+                            f"effective_floor={effective_floor} ({len(self._our_gpus)} GPUs * "
+                            f"{self.carla_floor_per_gpu:.1f}{suffix}) for "
                             f"{now - self._carla_floor_first_seen_at:.0f}s)")
             else:
                 self._carla_floor_first_seen_at = None
