@@ -464,6 +464,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.set_defaults(capture_carla_image=True)
     parser.add_argument(
+        "--carla-topdown-method",
+        type=str,
+        choices=["ortho", "tiled"],
+        default="ortho",
+        help=(
+            "How to capture the CARLA top-down image. 'ortho' (default): one wide-FOV "
+            "shot orthorectified using lane waypoints as 3D ground control points. "
+            "'tiled': legacy multi-tile near-orthographic stitch."
+        ),
+    )
+    parser.add_argument("--carla-topdown-altitude", type=float, default=1500.0)
+    parser.add_argument("--carla-topdown-fov-deg", type=float, default=60.0)
+    parser.add_argument("--carla-topdown-image-px", type=int, default=4096)
+    parser.add_argument("--carla-topdown-waypoint-spacing-m", type=float, default=4.0)
+    parser.add_argument("--carla-topdown-px-per-meter", type=float, default=3.0)
+    parser.add_argument(
         "--lane-correspondence",
         dest="lane_correspondence",
         action="store_true",
@@ -2876,6 +2892,12 @@ def _run_main_logic(args: argparse.Namespace) -> None:
             raw_bounds=raw_bounds_tuple,
             capture_enabled=bool(args.capture_carla_image),
             carla_map_name=str(args.carla_map_name),
+            method=str(args.carla_topdown_method),
+            ortho_altitude=float(args.carla_topdown_altitude),
+            ortho_fov_deg=float(args.carla_topdown_fov_deg),
+            ortho_image_px=int(args.carla_topdown_image_px),
+            ortho_waypoint_spacing_m=float(args.carla_topdown_waypoint_spacing_m),
+            ortho_px_per_meter=float(args.carla_topdown_px_per_meter),
         )
         if result is not None:
             jpeg_bytes, img_raw_bounds = result

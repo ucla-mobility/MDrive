@@ -2096,6 +2096,7 @@ def _capture_carla_topdown_image(
     Returns (jpeg_bytes, actual_bounds) where actual_bounds is
     (min_x, max_x, min_y, max_y) in raw CARLA world coordinates.
     """
+    _ensure_carla_egg_on_path()
     import carla  # type: ignore
     import time as _time
 
@@ -2293,6 +2294,366 @@ def _capture_carla_topdown_image(
     return jpeg_bytes, actual_bounds
 
 
+def _ensure_carla_egg_on_path() -> None:
+    """If `import carla` fails, locate the CARLA 0.9.12 egg in this workspace and
+    add it to sys.path. Idempotent and safe to call before any capture function.
+    """
+    try:
+        import carla  # type: ignore  # noqa: F401
+        return
+    except ImportError:
+        pass
+    candidates = [
+        Path("/data2/marco/CoLMDriver/carla912/PythonAPI/carla/dist"),
+        Path(__file__).resolve().parents[2] / "carla912" / "PythonAPI" / "carla" / "dist",
+        Path(__file__).resolve().parents[2] / "carla" / "PythonAPI" / "carla" / "dist",
+    ]
+    cr = os.environ.get("CARLA_ROOT")
+    if cr:
+        candidates.insert(0, Path(cr) / "PythonAPI" / "carla" / "dist")
+    py_major_minor = f"py{sys.version_info[0]}.{sys.version_info[1]}"
+    for d in candidates:
+        if not d.is_dir():
+            continue
+        eggs = sorted(d.glob("carla-*.egg"))
+        for egg in eggs:
+            if py_major_minor in egg.name:
+                if str(egg) not in sys.path:
+                    sys.path.insert(0, str(egg))
+                    print(f"[INFO] Added CARLA egg to sys.path: {egg}")
+                return
+    raise ImportError(
+        f"CARLA egg for {py_major_minor} not found in known locations. "
+        f"Set CARLA_ROOT or install the carla wheel for this Python version."
+    )
+
+
+def _capture_carla_topdown_orthorectified(
+    carla_host: str,
+    carla_port: int,
+    raw_bounds: Tuple[float, float, float, float],
+    carla_map_name: str = "ucla_v2",
+    altitude: float = 1500.0,
+    fov_deg: float = 60.0,
+    image_px: int = 16384,
+    waypoint_spacing_m: float = 1.0,
+    output_px_per_meter: float = 10.0,
+    margin_factor: float = 1.05,
+    gamma: float = 1.25,
+) -> Tuple[bytes, Tuple[float, float, float, float]]:
+    """Capture a single perspective top-down image from CARLA and orthorectify it
+    using lane waypoints as 3D ground control points.
+
+    Each GCP's true (x, y, z) is queried from `world.get_map().generate_waypoints`,
+    so elevation is handled exactly per-lane via a piecewise-linear remap
+    (no flat-plane assumption, no tile seams).
+
+    Returns ``(jpeg_bytes, output_bounds)`` where ``output_bounds`` is in raw
+    CARLA coordinates and pixels are linearly proportional to ``(x, y)`` world.
+    """
+    _ensure_carla_egg_on_path()
+    import carla  # type: ignore
+    import time as _time
+    import cv2  # type: ignore
+    from scipy.interpolate import LinearNDInterpolator  # type: ignore
+
+    min_x, max_x, min_y, max_y = raw_bounds
+    map_w = (max_x - min_x) * margin_factor
+    map_h = (max_y - min_y) * margin_factor
+    map_cx = (min_x + max_x) / 2.0
+    map_cy = (min_y + max_y) / 2.0
+    out_bounds = (
+        map_cx - map_w / 2.0,
+        map_cx + map_w / 2.0,
+        map_cy - map_h / 2.0,
+        map_cy + map_h / 2.0,
+    )
+    out_w = max(2, int(round(map_w * output_px_per_meter)))
+    out_h = max(2, int(round(map_h * output_px_per_meter)))
+
+    half_fov_rad = math.radians(fov_deg) / 2.0
+    ground_span = 2.0 * altitude * math.tan(half_fov_rad)
+    if ground_span < max(map_w, map_h) * 0.95:
+        # Bump altitude so the FOV covers the whole map with some margin.
+        altitude = max(map_w, map_h) / (2.0 * math.tan(half_fov_rad)) * 1.1
+        ground_span = 2.0 * altitude * math.tan(half_fov_rad)
+        print(f"[INFO] Ortho capture: bumped altitude to {altitude:.0f}m to cover map")
+
+    print(
+        f"[INFO] Ortho capture: altitude={altitude:.0f}m fov={fov_deg}° "
+        f"capture={image_px}x{image_px}px ground_span≈{ground_span:.0f}m → "
+        f"output={out_w}x{out_h}px ({output_px_per_meter} px/m), "
+        f"map={map_w:.0f}x{map_h:.0f}m"
+    )
+
+    client = carla.Client(carla_host, carla_port)
+    client.set_timeout(30.0)
+    world = client.get_world()
+    current_map_name = world.get_map().name
+    want_map = str(carla_map_name).strip()
+    if want_map.lower() not in current_map_name.lower():
+        print(f"[INFO] Loading CARLA map '{want_map}' ...")
+        target_path = None
+        for m in client.get_available_maps():
+            if want_map.lower() in m.lower():
+                target_path = m
+                break
+        if target_path is None:
+            raise RuntimeError(
+                f"Map '{want_map}' not found in CARLA available maps"
+            )
+        world = client.load_world(target_path)
+        _time.sleep(3.0)
+
+    # Async mode for sensor capture
+    original_settings = world.get_settings()
+    was_sync = original_settings.synchronous_mode
+    if was_sync:
+        async_settings = world.get_settings()
+        async_settings.synchronous_mode = False
+        async_settings.fixed_delta_seconds = 0.0
+        world.apply_settings(async_settings)
+        _time.sleep(1.0)
+
+    # Clear afternoon — sun lower in sky for shadow contrast that makes
+    # lane markings stand out against asphalt.
+    world.set_weather(carla.WeatherParameters(
+        cloudiness=10.0,
+        precipitation=0.0,
+        precipitation_deposits=0.0,
+        wind_intensity=0.0,
+        sun_azimuth_angle=140.0,
+        sun_altitude_angle=40.0,
+        fog_density=0.0,
+        fog_distance=0.0,
+        fog_falloff=0.0,
+        wetness=0.0,
+        scattering_intensity=1.0,
+        mie_scattering_scale=0.0,
+        rayleigh_scattering_scale=0.0331,
+    ))
+    _time.sleep(4.0)
+
+    # === Capture one frame ===
+    bp_lib = world.get_blueprint_library()
+    cam_bp = bp_lib.find("sensor.camera.rgb")
+    cam_bp.set_attribute("image_size_x", str(image_px))
+    cam_bp.set_attribute("image_size_y", str(image_px))
+    cam_bp.set_attribute("fov", str(fov_deg))
+    # Use CARLA's default histogram-based auto exposure (what driving cameras
+    # use). Just disable a few cosmetic post-processes that hurt readability.
+    for attr, val in [
+        ("motion_blur_intensity", "0"),
+        ("lens_flare_intensity", "0"),
+        ("bloom_intensity", "0"),
+    ]:
+        if cam_bp.has_attribute(attr):
+            try:
+                cam_bp.set_attribute(attr, val)
+            except Exception:
+                pass
+
+    cam_transform = carla.Transform(
+        carla.Location(x=float(map_cx), y=float(map_cy), z=float(altitude)),
+        carla.Rotation(pitch=-90.0, yaw=-90.0, roll=0.0),
+    )
+    camera = world.spawn_actor(cam_bp, cam_transform)
+    _time.sleep(1.0)
+
+    WARMUP = 15
+    state = {"count": 0, "img": None}
+
+    def _on_image(image):
+        state["count"] += 1
+        state["img"] = image
+
+    camera.listen(_on_image)
+    for _ in range(400):
+        _time.sleep(0.05)
+        if state["count"] >= WARMUP:
+            break
+    _time.sleep(0.3)
+    camera.stop()
+    cam_w2c = np.array(
+        camera.get_transform().get_inverse_matrix(), dtype=np.float64
+    )
+    camera.destroy()
+
+    if state["img"] is None:
+        raise RuntimeError("Camera failed to deliver any frame for ortho capture")
+
+    raw_img = state["img"]
+    captured_rgb = np.frombuffer(raw_img.raw_data, dtype=np.uint8).reshape(
+        (raw_img.height, raw_img.width, 4)
+    )[:, :, 2::-1].copy()  # BGRA → RGB
+
+    # === Sample 3D waypoints as ground control points ===
+    cmap = world.get_map()
+    waypoints = cmap.generate_waypoints(float(waypoint_spacing_m))
+    if not waypoints:
+        raise RuntimeError("CARLA map produced zero waypoints")
+    gcps_world = np.array(
+        [[w.transform.location.x, w.transform.location.y, w.transform.location.z]
+         for w in waypoints],
+        dtype=np.float64,
+    )
+
+    if was_sync:
+        world.apply_settings(original_settings)
+        _time.sleep(0.3)
+
+    print(
+        f"[INFO] Sampled {len(gcps_world)} GCPs from generate_waypoints "
+        f"(z range {gcps_world[:, 2].min():.1f}..{gcps_world[:, 2].max():.1f}m)"
+    )
+
+    # === Project each GCP through the captured camera ===
+    focal = image_px / (2.0 * math.tan(half_fov_rad))
+    K = np.array(
+        [[focal, 0.0, image_px / 2.0],
+         [0.0, focal, image_px / 2.0],
+         [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+    pts_h = np.hstack([gcps_world, np.ones((len(gcps_world), 1))])
+    pts_cam_ue = (cam_w2c @ pts_h.T).T[:, :3]
+    # UE camera frame (x=fwd, y=right, z=up) → standard pinhole (x=right, y=down, z=fwd)
+    pts_std = np.column_stack(
+        [pts_cam_ue[:, 1], -pts_cam_ue[:, 2], pts_cam_ue[:, 0]]
+    )
+
+    in_front = pts_std[:, 2] > 0.5
+    pts_std = pts_std[in_front]
+    gcps_world = gcps_world[in_front]
+    if len(pts_std) < 4:
+        raise RuntimeError(f"Too few GCPs in front of camera: {len(pts_std)}")
+
+    proj = (K @ pts_std.T).T
+    src_uv = proj[:, :2] / proj[:, 2:3]
+
+    inside = (
+        (src_uv[:, 0] >= 0)
+        & (src_uv[:, 0] < image_px)
+        & (src_uv[:, 1] >= 0)
+        & (src_uv[:, 1] < image_px)
+    )
+    src_uv = src_uv[inside]
+    gcps_world = gcps_world[inside]
+    print(f"[INFO] {len(src_uv)} GCPs project inside the captured image")
+    if len(src_uv) < 8:
+        raise RuntimeError(f"Too few GCPs landed inside the image: {len(src_uv)}")
+
+    # === DIAGNOSTIC: dump source image with projected GCPs as red dots ===
+    # Inspect this PNG to confirm projection math: each red dot should land on
+    # a lane visible in the captured image. If dots are systematically offset
+    # from lanes → projection bug. If dots land on lanes but the warped output
+    # is still misaligned → bounds/warp bug.
+    debug_dir = os.environ.get("V2X_ORTHO_DEBUG_DIR")
+    if debug_dir:
+        try:
+            import cv2 as _cv2_dbg
+            dbg = captured_rgb.copy()
+            for u, v in src_uv:
+                iu, iv = int(round(u)), int(round(v))
+                if 0 <= iu < image_px and 0 <= iv < image_px:
+                    _cv2_dbg.circle(dbg, (iu, iv), 4, (255, 0, 0), -1)
+            dbg_path = Path(debug_dir).expanduser().resolve()
+            dbg_path.mkdir(parents=True, exist_ok=True)
+            out_png = dbg_path / "ortho_source_with_gcps.jpg"
+            _cv2_dbg.imwrite(str(out_png), dbg[:, :, ::-1],
+                             [_cv2_dbg.IMWRITE_JPEG_QUALITY, 88])
+            print(f"[DEBUG] Wrote source+GCP overlay: {out_png}")
+        except Exception as exc:
+            print(f"[DEBUG] Could not write GCP overlay: {exc}")
+
+    # === Map GCPs to ortho target pixels ===
+    # Convention matches existing tiled output: pixel (0, 0) = (min_x, min_y) world.
+    tgt_u = (gcps_world[:, 0] - out_bounds[0]) * output_px_per_meter
+    tgt_v = (gcps_world[:, 1] - out_bounds[2]) * output_px_per_meter
+
+    # === Add 4 boundary GCPs at the output rectangle corners ===
+    # Without these, areas off the road network fall outside the convex hull of
+    # waypoint GCPs and get black-filled / wildly extrapolated. We project each
+    # output-rectangle corner through the captured camera assuming a flat plane
+    # at the median lane elevation — that's "right enough" for visual context.
+    median_z = float(np.median(gcps_world[:, 2]))
+    corners_world = np.array([
+        [out_bounds[0], out_bounds[2], median_z],
+        [out_bounds[1], out_bounds[2], median_z],
+        [out_bounds[0], out_bounds[3], median_z],
+        [out_bounds[1], out_bounds[3], median_z],
+    ], dtype=np.float64)
+    corners_h = np.hstack([corners_world, np.ones((4, 1))])
+    corners_cam_ue = (cam_w2c @ corners_h.T).T[:, :3]
+    corners_std = np.column_stack(
+        [corners_cam_ue[:, 1], -corners_cam_ue[:, 2], corners_cam_ue[:, 0]]
+    )
+    corners_proj = (K @ corners_std.T).T
+    corners_src_uv = corners_proj[:, :2] / corners_proj[:, 2:3]
+    # Clamp to image bounds so the warp samples valid pixels even if the
+    # corner projects slightly outside (camera FOV margin).
+    corners_src_uv[:, 0] = np.clip(corners_src_uv[:, 0], 0.0, image_px - 1.0)
+    corners_src_uv[:, 1] = np.clip(corners_src_uv[:, 1], 0.0, image_px - 1.0)
+    corners_tgt_u = (corners_world[:, 0] - out_bounds[0]) * output_px_per_meter
+    corners_tgt_v = (corners_world[:, 1] - out_bounds[2]) * output_px_per_meter
+
+    src_uv = np.vstack([src_uv, corners_src_uv])
+    tgt_u = np.concatenate([tgt_u, corners_tgt_u])
+    tgt_v = np.concatenate([tgt_v, corners_tgt_v])
+    print(f"[INFO] Added 4 boundary GCPs at z={median_z:.1f}m for full-image coverage")
+
+    # Build forward remap: for each output pixel, which source pixel?
+    interp_u = LinearNDInterpolator(
+        np.column_stack([tgt_u, tgt_v]), src_uv[:, 0], fill_value=-1.0
+    )
+    interp_v = LinearNDInterpolator(
+        np.column_stack([tgt_u, tgt_v]), src_uv[:, 1], fill_value=-1.0
+    )
+
+    yy, xx = np.indices((out_h, out_w))
+    map_x = interp_u(xx, yy).astype(np.float32)
+    map_y = interp_v(xx, yy).astype(np.float32)
+
+    warped = cv2.remap(
+        captured_rgb,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0),
+    )
+
+    # Gamma correction: gamma > 1 darkens midtones (good for sun-blown captures).
+    # Done as a 256-entry LUT so it's basically free.
+    if abs(gamma - 1.0) > 0.01:
+        inv_g = 1.0 / float(gamma)
+        lut = np.array(
+            [((i / 255.0) ** inv_g) * 255.0 for i in range(256)],
+            dtype=np.uint8,
+        )
+        warped = cv2.LUT(warped, lut)
+
+    try:
+        from PIL import Image as _PILImage  # type: ignore
+        import io as _io
+        pil_img = _PILImage.fromarray(warped)
+        buf = _io.BytesIO()
+        pil_img.save(buf, format="JPEG", quality=92)
+        jpeg_bytes = buf.getvalue()
+    except ImportError:
+        _, enc = cv2.imencode(
+            ".jpg", warped[:, :, ::-1], [cv2.IMWRITE_JPEG_QUALITY, 92]
+        )
+        jpeg_bytes = bytes(enc)
+
+    print(
+        f"[INFO] Orthorectified image: {warped.shape[1]}x{warped.shape[0]} "
+        f"({len(jpeg_bytes)} bytes)"
+    )
+    return jpeg_bytes, out_bounds
+
+
 def _load_or_capture_carla_topdown(
     image_cache_path: Path,
     meta_cache_path: Path,
@@ -2303,6 +2664,13 @@ def _load_or_capture_carla_topdown(
     carla_map_name: str = "ucla_v2",
     tile_fov_deg: float = 30.0,
     tile_px: int = 2048,
+    method: str = "ortho",
+    ortho_altitude: float = 1500.0,
+    ortho_fov_deg: float = 60.0,
+    ortho_image_px: int = 16384,
+    ortho_waypoint_spacing_m: float = 1.0,
+    ortho_px_per_meter: float = 10.0,
+    ortho_gamma: float = 1.25,
 ) -> Optional[Tuple[bytes, Tuple[float, float, float, float]]]:
     """Load a cached CARLA top-down JPEG, or capture one from a running server.
 
@@ -2332,32 +2700,60 @@ def _load_or_capture_carla_topdown(
         print("[WARN] No raw CARLA map bounds available; cannot capture top-down image.")
         return None
 
+    method_norm = (method or "ortho").strip().lower()
     try:
-        jpeg_bytes, actual_bounds = _capture_carla_topdown_image(
-            carla_host=carla_host,
-            carla_port=carla_port,
-            raw_bounds=raw_bounds,
-            carla_map_name=carla_map_name,
-            tile_fov_deg=tile_fov_deg,
-            tile_px=tile_px,
-        )
+        if method_norm == "ortho":
+            jpeg_bytes, actual_bounds = _capture_carla_topdown_orthorectified(
+                carla_host=carla_host,
+                carla_port=carla_port,
+                raw_bounds=raw_bounds,
+                carla_map_name=carla_map_name,
+                altitude=ortho_altitude,
+                fov_deg=ortho_fov_deg,
+                image_px=ortho_image_px,
+                waypoint_spacing_m=ortho_waypoint_spacing_m,
+                output_px_per_meter=ortho_px_per_meter,
+                gamma=ortho_gamma,
+            )
+            meta_extra = {
+                "method": "ortho",
+                "altitude": ortho_altitude,
+                "fov_deg": ortho_fov_deg,
+                "image_px": ortho_image_px,
+                "waypoint_spacing_m": ortho_waypoint_spacing_m,
+                "px_per_meter": ortho_px_per_meter,
+                "gamma": ortho_gamma,
+            }
+        elif method_norm == "tiled":
+            jpeg_bytes, actual_bounds = _capture_carla_topdown_image(
+                carla_host=carla_host,
+                carla_port=carla_port,
+                raw_bounds=raw_bounds,
+                carla_map_name=carla_map_name,
+                tile_fov_deg=tile_fov_deg,
+                tile_px=tile_px,
+            )
+            meta_extra = {
+                "method": "tiled",
+                "tile_fov_deg": tile_fov_deg,
+                "tile_px": tile_px,
+            }
+        else:
+            raise ValueError(
+                f"Unknown carla-topdown method: '{method}' (expected 'ortho' or 'tiled')"
+            )
     except Exception as exc:
-        print(f"[WARN] Failed to capture CARLA top-down image: {exc}")
+        print(f"[WARN] Failed to capture CARLA top-down image ({method_norm}): {exc}")
         return None
 
     # --- save cache ---
     try:
         image_cache_path.parent.mkdir(parents=True, exist_ok=True)
         image_cache_path.write_bytes(jpeg_bytes)
+        meta_payload = {"bounds": list(actual_bounds)}
+        meta_payload.update(meta_extra)
         meta_cache_path.write_text(
-            json.dumps(
-                {
-                    "bounds": list(actual_bounds),
-                    "tile_fov_deg": tile_fov_deg,
-                    "tile_px": tile_px,
-                },
-                indent=2,
-            ),
+            json.dumps(meta_payload, indent=2),
             encoding="utf-8",
         )
         print(f"[INFO] Cached CARLA top-down image to: {image_cache_path}")

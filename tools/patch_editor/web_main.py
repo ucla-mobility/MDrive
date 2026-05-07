@@ -77,6 +77,9 @@ class BatchState:
         # CARLA connection info
         self.carla_host: str = "localhost"
         self.carla_port: int = 2000
+        # Auto-export pipeline stage toggles
+        self.skip_eval: bool = False
+        self.skip_grp_simplify: bool = False
         # Serial CARLA export queue
         self.carla_queue: List[Dict[str, Any]] = []   # ordered queue items
         self.carla_queue_lock = threading.Lock()
@@ -787,18 +790,21 @@ def _run_background_export_and_eval(scenario_dir: Path, patch_data: dict,
         print(f"[BG]   renamed {len(replay_ego_files)} ego XML(s) to _REPLAY", flush=True)
 
         # 3.5. GRP ego simplification — reads *_REPLAY.xml, writes simplified ego XML (no time/speed)
-        _set_stage("grp_simplify")
-        cmd_grp = [
-            carla_py,
-            str(workspace / "tools" / "ego_grp_simplify.py"),
-            str(routes_dir),
-            "--carla-host", _batch.carla_host,
-            "--carla-port", str(_batch.carla_port),
-        ]
-        try:
-            _run_subprocess(cmd_grp, "GRP ego simplification", timeout=120, env=carla_env)
-        except Exception as e:
-            print(f"[BG]   GRP simplification non-fatal: {e}", flush=True)
+        if _batch.skip_grp_simplify:
+            print("[BG]   GRP simplification SKIPPED (--no-grp-simplify)", flush=True)
+        else:
+            _set_stage("grp_simplify")
+            cmd_grp = [
+                carla_py,
+                str(workspace / "tools" / "ego_grp_simplify.py"),
+                str(routes_dir),
+                "--carla-host", _batch.carla_host,
+                "--carla-port", str(_batch.carla_port),
+            ]
+            try:
+                _run_subprocess(cmd_grp, "GRP ego simplification", timeout=120, env=carla_env)
+            except Exception as e:
+                print(f"[BG]   GRP simplification non-fatal: {e}", flush=True)
 
         # 3.6. GRP fallback — if GRP didn't create the non-REPLAY ego XML, copy
         #      from _REPLAY so downstream steps (ground alignment, etc.) that
@@ -847,18 +853,21 @@ def _run_background_export_and_eval(scenario_dir: Path, patch_data: dict,
             print(f"[BG]   Ground alignment non-fatal: {e}", flush=True)
 
         # 5. Custom eval (subprocess — separate process with CARLA connection)
-        _set_stage("custom_eval")
-        cmd_eval = [
-            carla_py, "tools/run_custom_eval.py",
-            "--routes-dir", str(routes_dir),
-            "--port", str(_batch.carla_port),
-            "--planner", "log-replay",
-            "--npc-only-fake-ego",
-            "--custom-actor-control-mode", "replay",
-            "--log-replay-actors",
-            "--capture-logreplay-images",
-        ]
-        _run_subprocess(cmd_eval, "Custom eval", timeout=600, env=carla_env)
+        if _batch.skip_eval:
+            print("[BG]   Custom eval SKIPPED (--no-eval)", flush=True)
+        else:
+            _set_stage("custom_eval")
+            cmd_eval = [
+                carla_py, "tools/run_custom_eval.py",
+                "--routes-dir", str(routes_dir),
+                "--port", str(_batch.carla_port),
+                "--planner", "log-replay",
+                "--npc-only-fake-ego",
+                "--custom-actor-control-mode", "replay",
+                "--log-replay-actors",
+                "--capture-logreplay-images",
+            ]
+            _run_subprocess(cmd_eval, "Custom eval", timeout=600, env=carla_env)
 
         print(f"[BG] === Export COMPLETE for {scenario_name} "
               f"(total {_elapsed(t0_total)}) ===", flush=True)
@@ -917,11 +926,17 @@ def _serialise_scene(scene: SceneData) -> dict:
         for l in scene.carla_lines
     ]
 
-    return {
+    out: Dict[str, Any] = {
         "scenario_name": scene.scenario_name,
         "tracks":        tracks_out,
         "carla_lines":   lines_out,
     }
+    if scene.bg_image_b64 and scene.bg_image_bounds:
+        out["bg_image"] = {
+            "b64":    scene.bg_image_b64,
+            "bounds": scene.bg_image_bounds,
+        }
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1599,6 +1614,24 @@ let selId=null, curT=0, tMin=0, tMax=10;
 let selIds=new Set();   // multi-actor selection (always includes selId when non-null)
 let tool='sel';
 let camIdx=0;
+
+// Optional CARLA top-down underlay (set when scene data carries one)
+let bgImg=null;            // HTMLImageElement, ready when bgImg.complete && naturalWidth>0
+let bgImgBounds=null;      // {min_x,max_x,min_y,max_y} in V2XPNP world frame
+let bgImgVisible=true;     // toggle
+let bgImgOpacity=0.85;     // 0..1
+function _loadBgImageFromData(data){
+  bgImg=null; bgImgBounds=null;
+  const meta=data && data.bg_image;
+  if(!meta||!meta.b64||!meta.bounds) return;
+  const b=meta.bounds;
+  if(![b.min_x,b.max_x,b.min_y,b.max_y].every(v=>Number.isFinite(v))) return;
+  if(b.max_x<=b.min_x||b.max_y<=b.min_y) return;
+  const im=new Image();
+  im.onload=()=>{ if(typeof redrawMap==='function') redrawMap(); };
+  im.src='data:image/jpeg;base64,'+meta.b64;
+  bgImg=im; bgImgBounds=b;
+}
 let egoTracks=[];
 let _camSubdirCount=0;
 let followEgoIdx=0;   // which ego we're following (index into egoTracks)
@@ -1634,9 +1667,10 @@ let mDown=false, mDragging=false, mStart={x:0,y:0}, vtSnap={tx:0,ty:0};
 let hovLine=null;
 let camDebounce=null;
 let camLoading=false;
-let camPending=null;   // queued frame URL
-let camPreload=new Image();   // off-screen preloader
-let camLastT=-999;   // last time we actually requested a frame
+let camPendingT=null;  // queued sim time for the next request, if any
+let camLastT=-999;     // last requested time
+let camReqId=0;        // monotonic request id for staleness check
+let camLastBlobUrl=null;  // current blob URL on cam-img, for revoke on swap
 
 // ============================================================
 // Camera panel drag + collapse
@@ -1839,7 +1873,7 @@ function playPause(){
   if(playing){
     btn.innerHTML='&#9208; Pause'; btn.classList.add('on');
     // Clear any stale loading state from scrubbing so the first play tick fires immediately
-    camLoading=false; camPending=null;
+    camLoading=false; camPendingT=null;
     playInterval=setInterval(playTick, 1000/playFPS);
   } else {
     btn.innerHTML='&#9654; Play'; btn.classList.remove('on');
@@ -2486,6 +2520,24 @@ function redrawMap(){
   mapCtx.fillStyle='#0e0e0e';
   mapCtx.fillRect(0,0,cW,cH);
 
+  // CARLA top-down underlay (drawn first, beneath everything).
+  // Image bounds are an axis-aligned bbox in V2XPNP frame; we apply the same
+  // w2c projection to the bounds corners as we do to every polyline point —
+  // so they share screen-space and stay aligned.
+  if(bgImg && bgImg.complete && bgImg.naturalWidth>0 && bgImgBounds && bgImgVisible){
+    const b=bgImgBounds;
+    const [tlx,tly]=w2c(b.min_x,b.min_y);
+    const [brx,bry]=w2c(b.max_x,b.max_y);
+    const x=Math.min(tlx,brx), y=Math.min(tly,bry);
+    const w=Math.abs(brx-tlx), h=Math.abs(bry-tly);
+    if(w>0 && h>0){
+      const prevAlpha=mapCtx.globalAlpha;
+      mapCtx.globalAlpha=Math.max(0,Math.min(1,bgImgOpacity));
+      mapCtx.drawImage(bgImg,x,y,w,h);
+      mapCtx.globalAlpha=prevAlpha;
+    }
+  }
+
   // CARLA lines
   for(const l of carlaLines){
     if(l.pts.length<2) continue;
@@ -3016,38 +3068,80 @@ function setCurT(t){
 // ============================================================
 // Camera
 // ============================================================
-function updateCam(){
-  const src='/frame?t='+curT.toFixed(3)+'&cam='+camIdx;
-  document.getElementById('cam-label').textContent=
-    'Camera \u2014 Ego '+camIdx;
+function _drainCamPending(){
+  if(camPendingT === null) return;
+  const t = camPendingT;
+  camPendingT = null;
+  // Only fetch if the queued time is still meaningful (still close to curT)
+  if(Math.abs(t - curT) > 0.01){ /* user moved on; latest curT will be served */ }
+  updateCam();
+}
+function _setCamImageFromBlob(blob, loadT){
+  const img = document.getElementById('cam-img');
+  const url = URL.createObjectURL(blob);
+  // Revoke previous blob URL once the new one renders, to avoid memory leak
+  const prev = camLastBlobUrl;
+  img.onload = ()=>{
+    if(prev && prev !== url) URL.revokeObjectURL(prev);
+    img.onload = null;
+  };
+  img.src = url;
+  camLastBlobUrl = url;
+  document.getElementById('cam-info').textContent =
+    't='+loadT.toFixed(3)+'s  |  Ego '+camIdx;
+}
 
-  // Always serialise: if a frame is already in-flight, queue this one and bail.
-  // (Prevents race conditions during scrubbing *and* pileup during playback.)
-  if(camLoading){ camPending=src; return; }
-  // During playback only, throttle to ~5 camera fps (every 0.12s of sim time)
+function updateCam(){
+  document.getElementById('cam-label').textContent='Camera \u2014 Ego '+camIdx;
+
+  // Serialise requests: queue the latest target time and bail if one is in flight.
+  if(camLoading){ camPendingT = curT; return; }
+  // Playback throttling: ~8 cam fps in sim time
   if(playing && Math.abs(curT-camLastT)<0.12) return;
 
-  camLastT=curT;
-  camLoading=true;
+  const loadT = curT;
+  camLastT = loadT;
+  camLoading = true;
+  const reqId = ++camReqId;
+  const src = '/frame?t='+loadT.toFixed(3)+'&cam='+camIdx;
 
-  // Preload off-screen, then swap into visible img only when ready
-  const loader=new Image();
-  const loadT=curT;
-  loader.onload=function(){
-    const img=document.getElementById('cam-img');
-    img.src=loader.src;
-    document.getElementById('cam-info').textContent=
-      't='+loadT.toFixed(3)+'s  |  Ego '+camIdx;
-    camLoading=false;
-    // If a newer frame was queued while we were loading, fetch it now
-    if(camPending){ const p=camPending; camPending=null; updateCam(); }
-  };
-  loader.onerror=function(){
-    document.getElementById('cam-info').textContent='no frame for ego '+camIdx;
-    camLoading=false;
-    if(camPending){ const p=camPending; camPending=null; updateCam(); }
-  };
-  loader.src=src+'&_='+Date.now();
+  // Watchdog: if a fetch hangs (browser/network glitch), force-reset after 4 s
+  // so future updates aren't blocked forever.
+  const watchdog = setTimeout(()=>{
+    if(reqId === camReqId && camLoading){
+      camLoading = false;
+      console.warn('[cam] watchdog fired after 4s for t='+loadT);
+      _drainCamPending();
+    }
+  }, 4000);
+
+  fetch(src)
+    .then(r=>{
+      if(r.status === 204) return null;       // no frame at this t
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.blob();
+    })
+    .then(blob=>{
+      if(reqId !== camReqId) return;          // a newer request superseded us
+      if(blob){
+        _setCamImageFromBlob(blob, loadT);
+      }else{
+        document.getElementById('cam-info').textContent =
+          'no frame for ego '+camIdx+' at t='+loadT.toFixed(3)+'s';
+      }
+    })
+    .catch(err=>{
+      if(reqId !== camReqId) return;
+      document.getElementById('cam-info').textContent =
+        'cam error: '+(err && err.message || err);
+    })
+    .finally(()=>{
+      clearTimeout(watchdog);
+      if(reqId === camReqId){
+        camLoading = false;
+        _drainCamPending();
+      }
+    });
 }
 
 async function loadCamSubdirs(){
@@ -3420,6 +3514,7 @@ async function init(){
   trackById={}; for(const t of tracks) trackById[t.id]=t;
   lineByIdx={}; for(const l of carlaLines) lineByIdx[l.idx]=l;
   laneChainCache={};  // clear lane chain cache on reload
+  _loadBgImageFromData(data);
 
   // Sort: ego first, then vehicle/cyclist/walker
   const ORD={ego:0,vehicle:1,cyclist:2,walker:3};
@@ -3715,6 +3810,7 @@ async function reloadEditorData(){
     trackById={}; for(const t of tracks) trackById[t.id]=t;
     lineByIdx={}; for(const l of carlaLines) lineByIdx[l.idx]=l;
     laneChainCache={};  // clear lane chain cache on reload
+    _loadBgImageFromData(data);
 
     const ORD={ego:0,vehicle:1,cyclist:2,walker:3};
     tracks.sort((a,b)=>(ORD[a.role]??9)-(ORD[b.role]??9)||a.id.localeCompare(b.id));
@@ -3741,6 +3837,12 @@ async function reloadEditorData(){
     }catch(_){}
 
     await loadCamSubdirs();
+    // Scenario switch: invalidate any in-flight or queued frame requests so the
+    // new scenario's first updateCam() isn't dropped or merged with stale state.
+    camLoading = false;
+    camPendingT = null;
+    camLastT = -999;
+    camReqId++;
     fitAll();
     rebuildActorList();
 
@@ -3905,6 +4007,24 @@ def main() -> None:
     parser.add_argument("--carla-map-offset-json",
                         help="CARLA map offset JSON for pipeline")
 
+    # Auto-export pipeline stage toggles (batch mode)
+    parser.add_argument(
+        "--no-eval",
+        action="store_true",
+        help=(
+            "Skip the final 'Custom eval' (in-CARLA log-replay smoke test) on save/auto-export. "
+            "Use for visual-review-only batches where ego spawn issues block the eval."
+        ),
+    )
+    parser.add_argument(
+        "--no-grp-simplify",
+        action="store_true",
+        help=(
+            "Skip the GRP ego XML simplification step on save/auto-export. "
+            "Saves 30-120s per scenario; the _REPLAY xml is used by log-replay regardless."
+        ),
+    )
+
     args = parser.parse_args()
 
     global _scene_data, _patch, _patch_path
@@ -3925,6 +4045,12 @@ def main() -> None:
         _batch.scenario_dirs = scenario_dirs
         _batch.carla_host = args.carla_host
         _batch.carla_port = args.carla_port
+        _batch.skip_eval = bool(args.no_eval)
+        _batch.skip_grp_simplify = bool(args.no_grp_simplify)
+        if _batch.skip_eval:
+            print("Auto-export: Custom eval will be SKIPPED (--no-eval)")
+        if _batch.skip_grp_simplify:
+            print("Auto-export: GRP simplification will be SKIPPED (--no-grp-simplify)")
 
         if args.routes_out:
             _batch.routes_out_dir = Path(args.routes_out).expanduser().resolve()
