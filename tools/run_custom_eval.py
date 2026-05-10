@@ -613,6 +613,14 @@ PLANNER_SPECS: dict[str, PlannerSpec] = {
         agent="simulation/leaderboard/team_code/tcp_agent.py",
         agent_config="simulation/leaderboard/team_code/agent_config/tcp_5_10_config.yaml",
     ),
+    # Same TCP driving policy as "tcp" — adds multi-angle cinematic cameras
+    # (front, chase, top-down close, top-down wide BEV) saved every tick at
+    # high resolution, then auto-compiled into per-angle mp4 videos in
+    # destroy(). Triggered by TCP_VIDEO_MODE=1 (set below by name).
+    "tcp-vid": PlannerSpec(
+        agent="simulation/leaderboard/team_code/tcp_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/tcp_5_10_config.yaml",
+    ),
     "log-replay": PlannerSpec(
         # Minimal agent that returns neutral controls; actual movement is handled by
         # LogReplayFollower in route_scenario.py when CUSTOM_EGO_LOG_REPLAY=1 is set
@@ -16208,6 +16216,10 @@ def main() -> None:
                         env["TCP_CAPTURE_SENSOR_FRAMES"] = "1"
                     else:
                         env.pop("TCP_CAPTURE_SENSOR_FRAMES", None)
+                    if _planner_label == "tcp-vid":
+                        env["TCP_VIDEO_MODE"] = "1"
+                    else:
+                        env.pop("TCP_VIDEO_MODE", None)
                     if args.capture_logreplay_images:
                         env["TCP_CAPTURE_LOGREPLAY_IMAGES"] = "1"
                     else:

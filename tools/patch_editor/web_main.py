@@ -57,6 +57,13 @@ _cam_subdirs: List[Tuple[str, List[int], Dict[int, Path]]] = []
 _cam_t_min: float = 0.0
 _cam_dt: float = 0.1
 
+# XML-mode bookkeeping: when the active scenario was loaded directly from
+# scenarioset/v2xpnp/<scenario>/, we round-trip patch saves back to the
+# original XML files in place.  None when the scenario is in HTML mode.
+_xml_scenario_dir: Optional[Path] = None
+_xml_actor_paths: Dict[str, Path] = {}
+_xml_route_attrs: Dict[str, dict] = {}
+
 
 # ---------------------------------------------------------------------------
 # Batch mode state
@@ -397,8 +404,47 @@ def _load_scenario_data(scenario_dir: Path) -> Optional[dict]:
     """
     Load (or generate then load) a scenario's data for the editor.
     Returns dict with scene_data, cam info, patch data, etc.
+
+    Two input modes:
+      - HTML mode (V2XPNP pipeline): scenario_dir/trajectory_plot.html
+        → load_from_html() + carla_map underlay; patch.json is a sidecar
+        applied later by re-running the pipeline.
+      - XML mode (scenarioset/v2xpnp/<scenario>/): per-actor XML routes.
+        Patch.json saves are *also* round-tripped back to the source XMLs
+        in-place so the user can directly edit existing scenarios.
     """
     html_path = scenario_dir / "trajectory_plot.html"
+    xml_mode = (not html_path.exists()) and _is_xml_scenario_directory(scenario_dir)
+
+    if xml_mode:
+        from tools.patch_editor.loader import load_from_xml_scenario
+        try:
+            scene_data, actor_paths, route_attrs = load_from_xml_scenario(scenario_dir)
+        except Exception as exc:
+            print(f"[BATCH] Failed to load XML scenario {scenario_dir.name}: {exc}", flush=True)
+            return None
+        # Patch sidecar lives alongside the XMLs.
+        patch_path = scenario_dir / "_patch_editor.patch.json"
+        patch_data: dict = {"overrides": []}
+        if patch_path.exists():
+            try:
+                patch_data = json.loads(patch_path.read_text())
+            except Exception:
+                pass
+        return {
+            "scene_data": scene_data,
+            "html_path": None,
+            "patch_path": patch_path,
+            "patch_data": patch_data,
+            "cam_subdirs": [],
+            "cam_t_min": 0.0,
+            "cam_dt": 0.1,
+            "scenario_name": scenario_dir.name,
+            "xml_mode": True,
+            "xml_scenario_dir": scenario_dir,
+            "xml_actor_paths": actor_paths,
+            "xml_route_attrs": route_attrs,
+        }
 
     # Generate HTML if needed
     if not html_path.exists():
@@ -470,6 +516,10 @@ def _load_scenario_data(scenario_dir: Path) -> Optional[dict]:
         "cam_t_min": cam_t_min,
         "cam_dt": cam_dt,
         "scenario_name": scenario_dir.name,
+        "xml_mode": False,
+        "xml_scenario_dir": None,
+        "xml_actor_paths": {},
+        "xml_route_attrs": {},
     }
 
 
@@ -493,6 +543,7 @@ def _preload_next(idx: int) -> None:
 def _activate_scenario(idx: int) -> bool:
     """Switch the active scenario to index `idx`.  Returns True on success."""
     global _scene_data, _patch, _patch_path, _cam_subdirs, _cam_t_min, _cam_dt
+    global _xml_scenario_dir, _xml_actor_paths, _xml_route_attrs
 
     with _batch.lock:
         data = _batch.preloaded.get(idx)
@@ -507,6 +558,9 @@ def _activate_scenario(idx: int) -> bool:
     _cam_subdirs = data["cam_subdirs"]
     _cam_t_min = data["cam_t_min"]
     _cam_dt = data["cam_dt"]
+    _xml_scenario_dir = data.get("xml_scenario_dir")
+    _xml_actor_paths = data.get("xml_actor_paths") or {}
+    _xml_route_attrs = data.get("xml_route_attrs") or {}
 
     with _patch_lock:
         _patch = data["patch_data"]
@@ -604,6 +658,109 @@ def _enqueue_for_carla(scenario_dir: Path, patch_data: dict) -> dict:
             t.start()
 
     return {"action": "queued"}
+
+
+def _apply_patch_to_xml_scenario(
+    scenario_dir: Path,
+    patch_data: dict,
+    actor_paths: Dict[str, Path],
+    route_attrs: Dict[str, dict],
+) -> int:
+    """Round-trip a patch back to the source XMLs in `scenario_dir`.
+
+    For each track in the live scene, run the same `apply_patch_to_dataset`
+    we use in HTML mode, then rewrite the corresponding XML route file
+    (waypoint x/y/yaw/time get the patched values; pitch/roll/z preserved).
+    Deletes remove the XML and the manifest entry.
+
+    Returns the number of XML files modified or removed.
+    """
+    if _scene_data is None:
+        return 0
+
+    # Only act on actors that have a non-empty override in the patch. That
+    # way `Save` doesn't rewrite all 89 XMLs every time the user edits one.
+    touched_ids: set = set()
+    for ov in (patch_data.get("overrides") or []):
+        if not isinstance(ov, dict):
+            continue
+        actor_id = str(ov.get("actor_id", ""))
+        if not actor_id:
+            continue
+        # Mirror the logic of ActorOverride.is_empty()
+        nonempty = (
+            ov.get("delete")
+            or ov.get("snap_to_outermost")
+            or ov.get("phase_override")
+            or (ov.get("lane_segment_overrides") or [])
+            or (ov.get("waypoint_overrides") or [])
+            or (ov.get("yaw_segment_offsets") or [])
+            or (float(ov.get("yaw_offset_deg") or 0.0) != 0.0)
+        )
+        if nonempty:
+            touched_ids.add(actor_id)
+    if not touched_ids:
+        return 0
+
+    # Build a dataset dict — but only for the touched tracks, since
+    # apply_patch_to_dataset is keyed by id and skips actors with no override.
+    tracks_data: List[dict] = []
+    for tr in _scene_data.tracks:
+        if tr.track_id not in touched_ids:
+            continue
+        frames = []
+        for f in tr.frames:
+            frames.append({
+                "t": f.t, "x": f.x, "y": f.y,
+                "cx": f.cx, "cy": f.cy, "cyaw": f.cyaw,
+                "ccli": f.ccli, "csource": f.csource, "yaw": f.yaw,
+            })
+        tracks_data.append({
+            "id": tr.track_id, "role": tr.role,
+            "obj_type": tr.obj_type, "frames": frames,
+        })
+    dataset = {"tracks": tracks_data, "carla_map": {"lines": []}}
+
+    from tools.patch_editor.patch_apply import apply_patch_to_dataset
+    apply_patch_to_dataset(dataset, patch_data, verbose=False)
+
+    patched_by_id = {str(t["id"]): t for t in dataset["tracks"]}
+    deleted_ids = touched_ids - set(patched_by_id.keys())
+
+    from tools.patch_editor.loader import write_xml_for_track, remove_xml_actor, ActorFrame
+    manifest_path = scenario_dir / "actors_manifest.json"
+    n_written = 0
+
+    for actor_id in deleted_ids:
+        xml_path = actor_paths.get(actor_id)
+        if xml_path is not None:
+            remove_xml_actor(xml_path, manifest_path)
+            n_written += 1
+
+    for actor_id, t in patched_by_id.items():
+        xml_path = actor_paths.get(actor_id)
+        if xml_path is None or not xml_path.exists():
+            continue
+        out_frames: List[ActorFrame] = []
+        for fd in t.get("frames") or []:
+            cx = float(fd.get("cx", fd.get("x", 0.0)))
+            cy = float(fd.get("cy", fd.get("y", 0.0)))
+            cyaw = float(fd.get("cyaw", fd.get("yaw", 0.0)))
+            out_frames.append(ActorFrame(
+                t=float(fd.get("t", 0.0)),
+                x=float(fd.get("x", cx)),
+                y=float(fd.get("y", cy)),
+                yaw=float(fd.get("yaw", cyaw)),
+                cx=cx, cy=cy, cyaw=cyaw,
+                ccli=int(fd.get("ccli", -1)),
+                csource=str(fd.get("csource") or "xml"),
+            ))
+        if not out_frames:
+            continue
+        write_xml_for_track(xml_path, out_frames)
+        n_written += 1
+
+    return n_written
 
 
 def _dequeue_for_carla(scenario_name: str) -> dict:
@@ -1072,11 +1229,23 @@ class _Handler(BaseHTTPRequestHandler):
                     _patch = data
                 if _patch_path:
                     _patch_path.write_text(json.dumps(data, indent=2))
-                # Auto-enqueue for CARLA when a patch is saved — only if the
-                # scenario's HTML already exists (no HTML = pipeline not yet run,
-                # export would fail immediately).
+                # Auto-enqueue / round-trip behaviour depends on the load mode:
+                #   - HTML mode + HTML present: enqueue a CARLA export so the
+                #     pipeline re-runs with the patch applied.
+                #   - XML mode: apply the patch directly and overwrite the
+                #     source XMLs in place (the user's stated workflow).
                 enqueue_result = {}
-                if _batch.enabled and _batch.routes_out_dir and _batch.scenario_dirs:
+                if _xml_scenario_dir is not None:
+                    try:
+                        wrote = _apply_patch_to_xml_scenario(
+                            _xml_scenario_dir, data,
+                            _xml_actor_paths, _xml_route_attrs,
+                        )
+                        enqueue_result = {"action": "xml_in_place",
+                                          "files_written": wrote}
+                    except Exception as exc:
+                        enqueue_result = {"action": "xml_error", "error": str(exc)}
+                elif _batch.enabled and _batch.routes_out_dir and _batch.scenario_dirs:
                     cur_dir = _batch.scenario_dirs[_batch.current_idx]
                     if (cur_dir / "trajectory_plot.html").exists():
                         enqueue_result = _enqueue_for_carla(cur_dir, data)
@@ -1270,6 +1439,15 @@ button:disabled{opacity:.35;cursor:default}
 #lane-snap-opts{display:flex;align-items:center;gap:5px;margin-left:4px}
 #lane-snap-opts label{display:flex;align-items:center;gap:3px;color:#8aa;font-size:10px}
 #lane-snap-opts input[type="checkbox"]{accent-color:#4488cc}
+#yaw-opts{display:flex;align-items:center;gap:5px;margin-left:4px}
+#yaw-opts label{display:flex;align-items:center;gap:3px;color:#8a8;font-size:10px}
+#yaw-opts input[type="checkbox"]{accent-color:#44cc88}
+#yaw-int-lbl{color:#aaf;font-size:10px;font-family:monospace;min-width:88px}
+#yaw-step{width:46px;background:#222;border:1px solid #555;color:#ccd;
+  padding:1px 4px;font-size:11px;border-radius:3px}
+#yaw-opts button{background:#1a3a2a;border:1px solid #2a6a4a;color:#cfc;
+  font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer}
+#yaw-opts button:hover{background:#2a4a3a}
 #lane-blend{width:52px;background:#222;border:1px solid #555;color:#ccd;
             font:11px monospace;padding:2px 4px;border-radius:3px}
 #lane-break-lbl{color:#678;font:10px monospace;min-width:72px}
@@ -1515,10 +1693,20 @@ button:disabled{opacity:.35;cursor:default}
     <button id="btn-sel" class="on" onclick="setTool('sel')" title="S">&#9750; Select</button>
     <button id="btn-lane" onclick="setTool('lane')" title="L">&#8644; Lane Snap</button>
     <button id="btn-wp" onclick="setTool('wp')" title="W">&#9679; Waypoint</button>
+    <button id="btn-yaw" onclick="setTool('yaw')" title="Y">&#8634; Yaw</button>
     <div id="lane-snap-opts" title="Lane snap options">
       <label><input id="lane-after-cur" type="checkbox" onchange="updateLaneSnapUi()">After t</label>
       <input id="lane-blend" type="number" min="0" max="10" step="0.1" value="0.8" title="Blend-in seconds after breakpoint">
       <span id="lane-break-lbl">full</span>
+    </div>
+    <div id="yaw-opts" title="Yaw tool options" style="display:none">
+      <label><input id="yaw-interval" type="checkbox" onchange="updateYawUi()">Interval</label>
+      <span id="yaw-int-lbl">whole route</span>
+      <input id="yaw-step" type="number" min="1" max="180" step="1" value="15" title="Snap step in degrees (Shift to disable)">
+      <span style="color:#888">°step</span>
+      <button onclick="doYawAlignVelocity()" title="A — align to velocity heading">A: vel</button>
+      <button onclick="doYawAlignLane()" title="V — align to lane tangent">V: lane</button>
+      <button onclick="doYawReset()" title="R — clear yaw overrides on selection" style="color:#f88">R: reset</button>
     </div>
   </div>
   <div class="vsep"></div>
@@ -1814,7 +2002,9 @@ function isPatched(id){
   const ov=ovById[id]; if(!ov) return false;
   return !!(ov.delete||ov.snap_to_outermost||ov.phase_override||
             (ov.lane_segment_overrides&&ov.lane_segment_overrides.length)||
-            (ov.waypoint_overrides&&ov.waypoint_overrides.length));
+            (ov.waypoint_overrides&&ov.waypoint_overrides.length)||
+            (Number(ov.yaw_offset_deg)||0)!==0||
+            (ov.yaw_segment_offsets&&ov.yaw_segment_offsets.length));
 }
 function applyPatch(p){
   patch=p; ovById={};
@@ -1847,6 +2037,35 @@ function updateLaneSnapUi(){
     lbl.textContent='t='+curT.toFixed(2)+'s';
   } else {
     lbl.textContent='full';
+  }
+}
+
+// ── Yaw tool UI state ────────────────────────────────────────────────────────
+let yawIntervalStart = null;   // seconds; if set, drag commits a segment offset
+let yawIntervalEnd   = null;
+function yawUseInterval(){
+  const el=document.getElementById('yaw-interval');
+  return !!(el&&el.checked);
+}
+function yawSnapStep(){
+  const el=document.getElementById('yaw-step');
+  const raw=el?parseFloat(el.value):15;
+  if(!isFinite(raw)||raw<=0) return 0;
+  return Math.min(180, raw);
+}
+function updateYawUi(){
+  const opts=document.getElementById('yaw-opts');
+  if(opts) opts.style.display = (tool==='yaw') ? '' : 'none';
+  const lbl=document.getElementById('yaw-int-lbl');
+  if(!lbl) return;
+  if(yawUseInterval()){
+    if(yawIntervalStart==null) yawIntervalStart=Number(curT.toFixed(4));
+    yawIntervalEnd=Number(curT.toFixed(4));
+    lbl.textContent='['+yawIntervalStart.toFixed(2)+'..'+yawIntervalEnd.toFixed(2)+']s';
+  } else {
+    yawIntervalStart=null;
+    yawIntervalEnd=null;
+    lbl.textContent='whole route';
   }
 }
 
@@ -2305,6 +2524,94 @@ function getEffectivePath(track){
   return track.frames.map((_,i)=>getEffectivePos(track,i));
 }
 
+// ── Yaw helpers ──────────────────────────────────────────────────────────────
+function _yawWrap(deg){
+  if(!isFinite(deg)) return 0;
+  let v=deg%360;
+  if(v>180) v-=360;
+  if(v<=-180) v+=360;
+  return v;
+}
+function getYawOffsetAtT(ov, t){
+  if(!ov) return 0;
+  let d=Number(ov.yaw_offset_deg)||0;
+  const segs=ov.yaw_segment_offsets;
+  if(Array.isArray(segs)){
+    for(const s of segs){
+      const soff=Number(s.offset_deg);
+      if(!isFinite(soff)||Math.abs(soff)<1e-9) continue;
+      const st=s.start_t==null?null:Number(s.start_t);
+      const et=s.end_t==null?null:Number(s.end_t);
+      if(st!=null&&t<st) continue;
+      if(et!=null&&t>et) continue;
+      d+=soff;
+    }
+  }
+  return d;
+}
+// Effective heading in DEGREES (matches cyaw convention) for a given frame.
+// Returns null if the frame has no usable yaw and no velocity fallback.
+function getEffectiveYawDeg(track, frameIdx){
+  const f=track.frames[frameIdx];
+  if(!f) return null;
+  let base=Number(f.cyaw);
+  if(!isFinite(base)) base=NaN;
+  // Velocity-based fallback when cyaw is missing/nonsense
+  if(!isFinite(base)){
+    const ep=getEffectivePos(track,frameIdx);
+    let other=null;
+    if(frameIdx<track.frames.length-1) other=getEffectivePos(track,frameIdx+1);
+    else if(frameIdx>0){
+      const prev=getEffectivePos(track,frameIdx-1);
+      if(prev&&ep) other=[2*ep[0]-prev[0], 2*ep[1]-prev[1]];
+    }
+    if(ep&&other){
+      const dx=other[0]-ep[0], dy=other[1]-ep[1];
+      if(Math.hypot(dx,dy)>1e-3) base=Math.atan2(dy,dx)*180/Math.PI;
+    }
+  }
+  if(!isFinite(base)) return null;
+  const ov=ovById[track.id];
+  if(!ov||isDeleted(track.id)) return _yawWrap(base);
+  const t=Number(f.t)||0;
+  return _yawWrap(base + getYawOffsetAtT(ov,t));
+}
+// Velocity-based heading in degrees (always derived from positions).
+function getVelocityYawDeg(track, frameIdx){
+  const ep=getEffectivePos(track,frameIdx);
+  if(!ep) return null;
+  let other=null;
+  if(frameIdx<track.frames.length-1) other=getEffectivePos(track,frameIdx+1);
+  else if(frameIdx>0){
+    const prev=getEffectivePos(track,frameIdx-1);
+    if(prev) other=[2*ep[0]-prev[0], 2*ep[1]-prev[1]];
+  }
+  if(!other) return null;
+  const dx=other[0]-ep[0], dy=other[1]-ep[1];
+  if(Math.hypot(dx,dy)<1e-3) return null;
+  return _yawWrap(Math.atan2(dy,dx)*180/Math.PI);
+}
+function setYawOffsetWholeRoute(actorId, deg){
+  const ov=getOv(actorId);
+  if(Math.abs(deg)<1e-6) delete ov.yaw_offset_deg;
+  else ov.yaw_offset_deg=Number(deg.toFixed(2));
+}
+function addYawSegmentOffset(actorId, startT, endT, deg){
+  const ov=getOv(actorId);
+  if(!Array.isArray(ov.yaw_segment_offsets)) ov.yaw_segment_offsets=[];
+  ov.yaw_segment_offsets.push({
+    start_t: startT==null?null:Number(startT.toFixed(4)),
+    end_t:   endT==null?null:Number(endT.toFixed(4)),
+    offset_deg: Number(deg.toFixed(2)),
+  });
+}
+function clearYawForActor(actorId){
+  const ov=ovById[actorId];
+  if(!ov) return;
+  delete ov.yaw_offset_deg;
+  delete ov.yaw_segment_offsets;
+}
+
 function doUndo(){
   if(!undoStack.length) return;
   redoStack.push(JSON.stringify(patch));
@@ -2328,7 +2635,12 @@ function setTool(t){
   document.getElementById('btn-sel' ).classList.toggle('on',t==='sel');
   document.getElementById('btn-lane').classList.toggle('on',t==='lane');
   document.getElementById('btn-wp'  ).classList.toggle('on',t==='wp');
-  mapEl.style.cursor = t==='lane' ? 'cell' : t==='wp' ? 'grab' : 'crosshair';
+  const yawBtn=document.getElementById('btn-yaw');
+  if(yawBtn) yawBtn.classList.toggle('on',t==='yaw');
+  mapEl.style.cursor = t==='lane' ? 'cell'
+                     : t==='wp'   ? 'grab'
+                     : t==='yaw'  ? 'crosshair'
+                     : 'crosshair';
   const hint=document.getElementById('tool-hint');
   if(t==='lane'){
     hint.textContent='Set timeline t if needed, toggle "After t", then click a CARLA lane line';
@@ -2338,14 +2650,21 @@ function setTool(t){
     hint.textContent='Click/Shift-click/drag-box to select waypoints. Drag to move. Static cars drag as a whole. Delete/Backspace removes with smoothing.';
     hint.classList.add('show');
     setTimeout(()=>hint.classList.remove('show'),5000);
+  } else if(t==='yaw'){
+    hint.textContent='Drag the rotate handle on a selected vehicle to set yaw. Toggle "Interval" to scope the offset to [t_start..t_end] instead of the whole route.';
+    hint.classList.add('show');
+    setTimeout(()=>hint.classList.remove('show'),6000);
   } else {
     hint.classList.remove('show');
   }
+  updateYawUi();
   redrawAll();
   status(t==='lane'
     ? 'Lane Snap \u2014 toggle "After t" to keep pre-breakpoint trajectory unchanged'
     : t==='wp'
     ? 'Waypoint \u2014 click/shift/box-select, drag to move (static cars move fully), Delete to remove'
+    : t==='yaw'
+    ? 'Yaw \u2014 drag the green handle to rotate; A=align-to-velocity, V=align-to-lane, R=reset'
     : 'Select \u2014 click an actor');
   wpSelected.clear();
 }
@@ -2399,6 +2718,183 @@ function doLaneSnap(lineIdx){
   setTool('sel');
   status(msg);
 }
+
+// ── Yaw actions ──────────────────────────────────────────────────────────────
+const VEHICLE_LEN = 4.5;       // metres — used for box drawing + handle distance
+const VEHICLE_WID = 2.0;
+const YAW_HANDLE_OFFSET_M = 1.4 * VEHICLE_LEN / 2;   // ~3.15 m past the nose
+const YAW_HANDLE_HIT_PX = 12;
+
+function _yawSegMatchesInterval(seg, sT, eT){
+  const eps=1e-3;
+  const segS = seg.start_t==null ? null : Number(seg.start_t);
+  const segE = seg.end_t==null   ? null : Number(seg.end_t);
+  const a = (sT==null && segS==null) || (sT!=null && segS!=null && Math.abs(sT-segS)<eps);
+  const b = (eT==null && segE==null) || (eT!=null && segE!=null && Math.abs(eT-segE)<eps);
+  return a && b;
+}
+function getOrCreateYawSegment(actorId, sT, eT){
+  const ov=getOv(actorId);
+  if(!Array.isArray(ov.yaw_segment_offsets)) ov.yaw_segment_offsets=[];
+  let seg=ov.yaw_segment_offsets.find(s=>_yawSegMatchesInterval(s,sT,eT));
+  if(!seg){
+    seg={start_t:sT==null?null:Number(sT.toFixed(4)),
+         end_t:  eT==null?null:Number(eT.toFixed(4)),
+         offset_deg:0};
+    ov.yaw_segment_offsets.push(seg);
+  }
+  return seg;
+}
+function effectiveYawOffsetForActor(actorId, sT, eT){
+  const ov=ovById[actorId]; if(!ov) return 0;
+  if(sT==null && eT==null){
+    return Number(ov.yaw_offset_deg)||0;
+  }
+  const segs=ov.yaw_segment_offsets;
+  if(!Array.isArray(segs)) return 0;
+  const seg=segs.find(s=>_yawSegMatchesInterval(s,sT,eT));
+  return seg ? (Number(seg.offset_deg)||0) : 0;
+}
+function setEffectiveYawOffsetForActor(actorId, sT, eT, deg){
+  if(sT==null && eT==null){
+    setYawOffsetWholeRoute(actorId, deg);
+    return;
+  }
+  const seg=getOrCreateYawSegment(actorId, sT, eT);
+  seg.offset_deg=Number(deg.toFixed(2));
+  // Drop zero offsets to keep the patch tidy.
+  if(Math.abs(seg.offset_deg)<1e-6){
+    const ov=ovById[actorId];
+    ov.yaw_segment_offsets=ov.yaw_segment_offsets.filter(s=>s!==seg);
+    if(!ov.yaw_segment_offsets.length) delete ov.yaw_segment_offsets;
+  }
+}
+
+function _yawNearestLaneTangentDeg(track, frameIdx){
+  // Project effective position onto nearest CARLA line and return its tangent (deg).
+  const ep=getEffectivePos(track, frameIdx);
+  if(!ep) return null;
+  let bestD=Infinity, bestAng=null;
+  for(const l of carlaLines){
+    if(l.pts.length<2) continue;
+    for(let i=0;i<l.pts.length-1;i++){
+      const ax=l.pts[i][0], ay=l.pts[i][1];
+      const bx=l.pts[i+1][0], by=l.pts[i+1][1];
+      const abx=bx-ax, aby=by-ay, ab2=abx*abx+aby*aby;
+      if(ab2<1e-12) continue;
+      const t=Math.max(0,Math.min(1,((ep[0]-ax)*abx+(ep[1]-ay)*aby)/ab2));
+      const qx=ax+t*abx, qy=ay+t*aby;
+      const d2=(ep[0]-qx)*(ep[0]-qx)+(ep[1]-qy)*(ep[1]-qy);
+      if(d2<bestD){
+        bestD=d2;
+        bestAng=Math.atan2(aby,abx)*180/Math.PI;
+      }
+    }
+  }
+  return bestAng;
+}
+
+function _yawIntervalIfActive(){
+  if(!yawUseInterval()) return [null,null];
+  let s=yawIntervalStart, e=yawIntervalEnd;
+  if(s==null || e==null){
+    s = e = Number(curT.toFixed(4));
+  } else if(s>e){ const tmp=s; s=e; e=tmp; }
+  return [s,e];
+}
+
+function doYawAlignVelocity(){
+  if(selIds.size===0){ status('Select a vehicle first'); return; }
+  pushUndo();
+  const [sT,eT]=_yawIntervalIfActive();
+  let n=0;
+  for(const id of selIds){
+    const tr=trackById[id]; if(!tr) continue;
+    const fi=frameIdxAt(tr,curT); if(fi<0) continue;
+    const vy=getVelocityYawDeg(tr,fi);
+    const f=tr.frames[fi];
+    const baseYaw=Number(f && f.cyaw);
+    if(!isFinite(baseYaw) || vy==null) continue;
+    // We need the offset that, added to baseYaw, gives vy.
+    const delta=_yawWrap(vy - baseYaw);
+    setEffectiveYawOffsetForActor(id, sT, eT, delta);
+    n++;
+  }
+  redrawAll(); rebuildActorList(); updatePatchSummary();
+  status(n>0 ? ('Aligned '+n+' actor(s) to velocity heading')
+             : 'No usable velocity heading at current frame');
+}
+
+function doYawAlignLane(){
+  if(selIds.size===0){ status('Select a vehicle first'); return; }
+  pushUndo();
+  const [sT,eT]=_yawIntervalIfActive();
+  let n=0;
+  for(const id of selIds){
+    const tr=trackById[id]; if(!tr) continue;
+    const fi=frameIdxAt(tr,curT); if(fi<0) continue;
+    const ang=_yawNearestLaneTangentDeg(tr,fi);
+    const f=tr.frames[fi];
+    const baseYaw=Number(f && f.cyaw);
+    if(!isFinite(baseYaw) || ang==null) continue;
+    const delta=_yawWrap(ang - baseYaw);
+    setEffectiveYawOffsetForActor(id, sT, eT, delta);
+    n++;
+  }
+  redrawAll(); rebuildActorList(); updatePatchSummary();
+  status(n>0 ? ('Aligned '+n+' actor(s) to nearest lane tangent')
+             : 'No nearby lane found');
+}
+
+function doYawReset(){
+  if(selIds.size===0){ status('Select a vehicle first'); return; }
+  pushUndo();
+  for(const id of selIds) clearYawForActor(id);
+  redrawAll(); rebuildActorList(); updatePatchSummary();
+  status('Cleared yaw overrides on '+selIds.size+' actor(s)');
+}
+
+// Yaw drag state
+let yawDragging=false;
+let yawDragActor=null;
+let yawDragStartAng=0;          // mouse angle (rad) at drag start, in WORLD frame
+let yawDragStartOffset=0;       // offset value at drag start
+let yawDragInterval=[null,null];
+let yawDragUndoPending=false;
+
+function getActorRenderState(track){
+  // Returns {fi, x, y, yawDeg, vYawDeg} or null if not visible at curT.
+  const fi=frameIdxAt(track,curT);
+  if(fi<0) return null;
+  const ep=getEffectivePos(track,fi);
+  if(!ep) return null;
+  const yawDeg=getEffectiveYawDeg(track,fi);
+  const vYawDeg=getVelocityYawDeg(track,fi);
+  return {fi:fi, x:ep[0], y:ep[1], yawDeg:yawDeg, vYawDeg:vYawDeg};
+}
+
+function getYawHandleWorldPos(track){
+  const st=getActorRenderState(track);
+  if(!st || st.yawDeg==null) return null;
+  const r=YAW_HANDLE_OFFSET_M;
+  const a=st.yawDeg*Math.PI/180;
+  return [st.x + r*Math.cos(a), st.y + r*Math.sin(a), st.x, st.y];
+}
+
+function hitYawHandle(wx,wy){
+  if(tool!=='yaw') return null;
+  const thr=YAW_HANDLE_HIT_PX/vt.s;
+  for(const id of selIds){
+    const tr=trackById[id]; if(!tr) continue;
+    const h=getYawHandleWorldPos(tr);
+    if(!h) continue;
+    if(Math.hypot(h[0]-wx, h[1]-wy) <= thr){
+      return {actorId:id, hx:h[0], hy:h[1], cx:h[2], cy:h[3]};
+    }
+  }
+  return null;
+}
+
 async function doSave(){
   try{
     await fetch('/patch',{method:'POST',
@@ -2486,25 +2982,84 @@ function polyDist(pts,px,py){
 }
 
 // ============================================================
-// Overlap detection
+// Overlap detection — oriented bounding boxes (SAT)
 // ============================================================
-const OVERLAP_DIST=2.5; // metres — actors closer than this are overlapping
+// Vehicles use VEHICLE_LEN x VEHICLE_WID with their cyaw (+ offsets).
+// Pedestrian/cyclist actors stay as a small disc; we approximate the disc as
+// a 1m x 1m axis-aligned box for the SAT path so the same code handles both.
+const PED_BOX_LEN = 1.0;
+const PED_BOX_WID = 1.0;
+
+function _obbCorners(cx, cy, halfL, halfW, yawRad){
+  const c=Math.cos(yawRad), s=Math.sin(yawRad);
+  // Corner local coords: (±halfL, ±halfW)
+  const lx=[ halfL,  halfL, -halfL, -halfL];
+  const ly=[ halfW, -halfW, -halfW,  halfW];
+  const out=new Array(4);
+  for(let i=0;i<4;i++){
+    out[i]=[cx + lx[i]*c - ly[i]*s, cy + lx[i]*s + ly[i]*c];
+  }
+  return out;
+}
+function _projectOntoAxis(corners, ax, ay){
+  let mn=Infinity, mx=-Infinity;
+  for(const p of corners){
+    const v=p[0]*ax + p[1]*ay;
+    if(v<mn) mn=v;
+    if(v>mx) mx=v;
+  }
+  return [mn,mx];
+}
+function _obbOverlap(a, b){
+  // a, b: {cx,cy,halfL,halfW,yawRad}
+  // Quick reject: bounding sphere.
+  const radA=Math.hypot(a.halfL,a.halfW), radB=Math.hypot(b.halfL,b.halfW);
+  const dx=a.cx-b.cx, dy=a.cy-b.cy;
+  if(dx*dx+dy*dy > (radA+radB)*(radA+radB)) return false;
+  // SAT: 4 axes (each box's right + forward perpendicular).
+  const axes=[
+    [Math.cos(a.yawRad), Math.sin(a.yawRad)],
+    [-Math.sin(a.yawRad), Math.cos(a.yawRad)],
+    [Math.cos(b.yawRad), Math.sin(b.yawRad)],
+    [-Math.sin(b.yawRad), Math.cos(b.yawRad)],
+  ];
+  const cA=_obbCorners(a.cx,a.cy,a.halfL,a.halfW,a.yawRad);
+  const cB=_obbCorners(b.cx,b.cy,b.halfL,b.halfW,b.yawRad);
+  for(const ax of axes){
+    const [pa1,pa2]=_projectOntoAxis(cA,ax[0],ax[1]);
+    const [pb1,pb2]=_projectOntoAxis(cB,ax[0],ax[1]);
+    if(pa2 < pb1 || pb2 < pa1) return false;   // separating axis found
+  }
+  return true;
+}
+
 function computeOverlaps(){
   const ids=new Set();
-  const pos=[];
+  const boxes=[];
   for(const tr of tracks){
     if(isDeleted(tr.id)) continue;
     const fi=frameIdxAt(tr,curT);
     if(fi<0) continue;
     const ep=getEffectivePos(tr,fi);
     if(!ep) continue;
-    pos.push({id:tr.id, x:ep[0], y:ep[1]});
+    const isVeh = tr.role==='vehicle' || tr.role==='ego';
+    let yawDeg=null;
+    if(isVeh) yawDeg=getEffectiveYawDeg(tr,fi);
+    if(yawDeg==null) yawDeg=getVelocityYawDeg(tr,fi) || 0;
+    const halfL=isVeh?VEHICLE_LEN/2:PED_BOX_LEN/2;
+    const halfW=isVeh?VEHICLE_WID/2:PED_BOX_WID/2;
+    boxes.push({
+      id:tr.id, isVeh:isVeh,
+      cx:ep[0], cy:ep[1], halfL:halfL, halfW:halfW,
+      yawRad:yawDeg*Math.PI/180,
+    });
   }
-  for(let a=0;a<pos.length;a++){
-    for(let b=a+1;b<pos.length;b++){
-      const dx=pos[a].x-pos[b].x, dy=pos[a].y-pos[b].y;
-      if(Math.sqrt(dx*dx+dy*dy)<OVERLAP_DIST){
-        ids.add(pos[a].id); ids.add(pos[b].id);
+  for(let a=0;a<boxes.length;a++){
+    for(let b=a+1;b<boxes.length;b++){
+      // Don't flag two non-vehicles (peds standing close are usually fine).
+      if(!boxes[a].isVeh && !boxes[b].isVeh) continue;
+      if(_obbOverlap(boxes[a], boxes[b])){
+        ids.add(boxes[a].id); ids.add(boxes[b].id);
       }
     }
   }
@@ -2672,28 +3227,166 @@ function redrawMap(){
     const isEgo=tr.role==='ego';
     const egoIdx=isEgo?egoTracks.indexOf(tr):-1;
 
-    // Direction indicator (triangle showing heading)
-    if(isEgo || sel){
-      let heading=0;
-      if(fi<tr.frames.length-1){
-        const ep2=getEffectivePos(tr,fi+1);
-        if(ep2) heading=Math.atan2(ep2[1]-py,ep2[0]-px);
-      } else if(fi>0){
-        const ep0=getEffectivePos(tr,fi-1);
-        if(ep0) heading=Math.atan2(py-ep0[1],px-ep0[0]);
-      }
-      // Draw direction triangle
+    // Oriented vehicle box (uses cyaw + offset). Drawn for vehicles only;
+    // pedestrians/cyclists keep the dot marker.
+    //
+    // Convention note: world heading θ_w is in the V2XPNP / CARLA frame
+    // (degrees CCW from +X). The map's w2c flips Y, so we ALWAYS go through
+    // w2c instead of trying to derive a canvas-rotation from yaw analytically
+    // — this matches the modified-path arrow code (the known-good reference)
+    // and is independent of viewRotation / y-flip sign conventions.
+    const isVehicleLike = tr.role==='vehicle' || tr.role==='ego';
+    const yawDeg = isVehicleLike ? getEffectiveYawDeg(tr,fi) : null;
+    const vYawDeg = isVehicleLike ? getVelocityYawDeg(tr,fi) : null;
+
+    // Helper closure: returns canvas-frame angle (radians) for a world yaw,
+    // anchored at the vehicle's world position (px,py)/canvas (sx,sy).
+    const yawToCanvasAng = (deg)=>{
+      const a = deg*Math.PI/180;
+      const [tx, ty] = w2c(px + Math.cos(a), py + Math.sin(a));
+      return Math.atan2(ty - sy, tx - sx);
+    };
+
+    if(isVehicleLike && yawDeg!=null){
+      const ang = yawToCanvasAng(yawDeg);
+      const halfL = (VEHICLE_LEN/2)*vt.s;
+      const halfW = (VEHICLE_WID/2)*vt.s;
       mapCtx.save();
       mapCtx.translate(sx,sy);
-      // Convert world heading to screen heading
-      const screenAng = -heading + viewRotation;
-      mapCtx.rotate(-screenAng);
-      const sz=sel?14:(isEgo?11:8);
-      mapCtx.fillStyle=isEgo?'rgba(68,136,255,0.4)':'rgba(255,160,64,0.3)';
+      mapCtx.rotate(ang);
+      // Body fill — translucent so trajectories underneath stay visible.
+      // Deleted actors are filtered out earlier in this loop, so no del branch.
+      const bodyFill = sel ? 'rgba(255,224,102,0.30)'
+                    : isEgo ? 'rgba(68,136,255,0.28)'
+                            : 'rgba(180,180,200,0.20)';
+      const bodyEdge = sel ? '#ffe066'
+                    : isEgo ? '#4488ff'
+                            : '#cccccc';
+      mapCtx.fillStyle = bodyFill;
+      mapCtx.strokeStyle = bodyEdge;
+      mapCtx.lineWidth = sel?2:1;
       mapCtx.beginPath();
-      mapCtx.moveTo(sz,0); mapCtx.lineTo(-sz*0.6,-sz*0.7); mapCtx.lineTo(-sz*0.6,sz*0.7);
-      mapCtx.closePath(); mapCtx.fill();
+      mapCtx.rect(-halfL, -halfW, halfL*2, halfW*2);
+      mapCtx.fill();
+      mapCtx.stroke();
+      // Front-edge tick (so the heading is unambiguous)
+      mapCtx.strokeStyle = bodyEdge;
+      mapCtx.lineWidth = sel?2.5:1.5;
+      mapCtx.beginPath();
+      mapCtx.moveTo(halfL, -halfW); mapCtx.lineTo(halfL, halfW);
+      mapCtx.stroke();
       mapCtx.restore();
+
+      // Dual arrows for ego / selected: cyaw (cyan) vs velocity (magenta).
+      // Diverging arrows = a vehicle whose stored yaw doesn't match its motion.
+      if(isEgo || sel){
+        const arrLen = Math.max(14, halfL*1.1);
+        // cyaw arrow
+        mapCtx.save();
+        mapCtx.translate(sx,sy);
+        mapCtx.rotate(ang);
+        mapCtx.strokeStyle = '#5cf';
+        mapCtx.fillStyle   = '#5cf';
+        mapCtx.lineWidth = 2;
+        mapCtx.beginPath(); mapCtx.moveTo(0,0); mapCtx.lineTo(arrLen,0); mapCtx.stroke();
+        mapCtx.beginPath();
+        mapCtx.moveTo(arrLen,0); mapCtx.lineTo(arrLen-6,-4); mapCtx.lineTo(arrLen-6,4);
+        mapCtx.closePath(); mapCtx.fill();
+        mapCtx.restore();
+        // velocity arrow (only if it differs notably and is well-defined)
+        if(vYawDeg!=null){
+          const yawDiff=Math.abs(_yawWrap(vYawDeg-yawDeg));
+          if(yawDiff>3){
+            const vAng = yawToCanvasAng(vYawDeg);
+            mapCtx.save();
+            mapCtx.translate(sx,sy);
+            mapCtx.rotate(vAng);
+            mapCtx.strokeStyle = '#f6c';
+            mapCtx.fillStyle   = '#f6c';
+            mapCtx.lineWidth = 1.6;
+            mapCtx.setLineDash([4,3]);
+            mapCtx.beginPath(); mapCtx.moveTo(0,0); mapCtx.lineTo(arrLen*0.85,0); mapCtx.stroke();
+            mapCtx.setLineDash([]);
+            mapCtx.beginPath();
+            mapCtx.moveTo(arrLen*0.85,0);
+            mapCtx.lineTo(arrLen*0.85-5,-3); mapCtx.lineTo(arrLen*0.85-5,3);
+            mapCtx.closePath(); mapCtx.fill();
+            mapCtx.restore();
+            // Mismatch warning: red ring around the box for big disagreements
+            if(yawDiff>30 && !sel){
+              mapCtx.strokeStyle='rgba(255,80,80,0.7)';
+              mapCtx.lineWidth=1.5;
+              mapCtx.setLineDash([3,3]);
+              mapCtx.beginPath(); mapCtx.arc(sx,sy,Math.max(halfL,halfW)+4,0,Math.PI*2); mapCtx.stroke();
+              mapCtx.setLineDash([]);
+            }
+          }
+        }
+      }
+    } else if(isEgo || sel){
+      // Fallback for pedestrians/cyclists/unknown-yaw: derive heading directly
+      // from canvas-frame motion, same as the modified-path arrows.
+      let canvasHeading=0, ok=false;
+      if(fi<tr.frames.length-1){
+        const ep2=getEffectivePos(tr,fi+1);
+        if(ep2){
+          const [s2x,s2y]=w2c(ep2[0],ep2[1]);
+          if(Math.hypot(s2x-sx, s2y-sy)>1){ canvasHeading=Math.atan2(s2y-sy,s2x-sx); ok=true; }
+        }
+      } else if(fi>0){
+        const ep0=getEffectivePos(tr,fi-1);
+        if(ep0){
+          const [s0x,s0y]=w2c(ep0[0],ep0[1]);
+          if(Math.hypot(sx-s0x, sy-s0y)>1){ canvasHeading=Math.atan2(sy-s0y,sx-s0x); ok=true; }
+        }
+      }
+      if(ok){
+        mapCtx.save();
+        mapCtx.translate(sx,sy);
+        mapCtx.rotate(canvasHeading);
+        const sz=sel?14:(isEgo?11:8);
+        mapCtx.fillStyle=isEgo?'rgba(68,136,255,0.4)':'rgba(255,160,64,0.3)';
+        mapCtx.beginPath();
+        mapCtx.moveTo(sz,0); mapCtx.lineTo(-sz*0.6,-sz*0.7); mapCtx.lineTo(-sz*0.6,sz*0.7);
+        mapCtx.closePath(); mapCtx.fill();
+        mapCtx.restore();
+      }
+    }
+
+    // Yaw-tool rotate handle (drawn for all selected vehicles when in yaw mode)
+    if(tool==='yaw' && sel && isVehicleLike && yawDeg!=null){
+      // Compute handle position in world, then w2c — guaranteed to land on
+      // the same visual direction as the oriented box's front.
+      const a = yawDeg*Math.PI/180;
+      const hwx = px + YAW_HANDLE_OFFSET_M*Math.cos(a);
+      const hwy = py + YAW_HANDLE_OFFSET_M*Math.sin(a);
+      const [hsx, hsy] = w2c(hwx, hwy);
+      mapCtx.save();
+      // Tether
+      mapCtx.strokeStyle='#4f4';
+      mapCtx.lineWidth=1.5;
+      mapCtx.setLineDash([4,3]);
+      mapCtx.beginPath(); mapCtx.moveTo(sx,sy); mapCtx.lineTo(hsx,hsy); mapCtx.stroke();
+      mapCtx.setLineDash([]);
+      // Handle dot
+      mapCtx.fillStyle = (yawDragging && yawDragActor===tr.id) ? '#ff0' : '#4f4';
+      mapCtx.beginPath(); mapCtx.arc(hsx,hsy,6,0,Math.PI*2); mapCtx.fill();
+      mapCtx.strokeStyle='#0a0';
+      mapCtx.lineWidth=1.5;
+      mapCtx.stroke();
+      mapCtx.restore();
+      // Offset readout
+      const ov=ovById[tr.id];
+      const off = ov ? ((Number(ov.yaw_offset_deg)||0)
+                       + (yawUseInterval()
+                           ? effectiveYawOffsetForActor(tr.id, ...(_yawIntervalIfActive()))
+                           : 0)) : 0;
+      if(Math.abs(off)>1e-3){
+        mapCtx.font='bold 10px monospace';
+        mapCtx.fillStyle='#4f4';
+        mapCtx.textAlign='left'; mapCtx.textBaseline='middle';
+        mapCtx.fillText((off>0?'+':'')+off.toFixed(1)+'°', sx+12, sy-12);
+      }
     }
 
     // Dot
@@ -2837,6 +3530,28 @@ mapEl.addEventListener('mousedown',e=>{
   const cx=e.clientX-rect.left, cy=e.clientY-rect.top;
   const [wx,wy]=c2w(cx,cy);
 
+  // Yaw tool: hit-test the rotate handle on any selected vehicle
+  if(tool==='yaw' && e.button===0){
+    const h=hitYawHandle(wx,wy);
+    if(h){
+      yawDragging=true;
+      yawDragActor=h.actorId;
+      yawDragStartAng=Math.atan2(wy-h.cy, wx-h.cx);
+      yawDragInterval=_yawIntervalIfActive();
+      yawDragStartOffset=effectiveYawOffsetForActor(
+        h.actorId, yawDragInterval[0], yawDragInterval[1]);
+      yawDragUndoPending=true;
+      mapEl.style.cursor='grabbing';
+      e.preventDefault();
+      return;
+    }
+    // Click-without-handle = select actor under cursor (so the handle appears).
+    const hitId=hitActor(wx,wy)||hitTrajectory(wx,wy);
+    if(hitId){ selectActor(hitId, e.shiftKey); redrawAll(); }
+    e.preventDefault();
+    return;
+  }
+
   // Waypoint tool: click/shift-click/box-select/drag
   if(tool==='wp' && e.button===0){
     const wp=hitWaypoint(wx,wy);
@@ -2891,6 +3606,26 @@ mapEl.addEventListener('mousemove',e=>{
   const rect=mapEl.getBoundingClientRect();
   const cx=e.clientX-rect.left, cy=e.clientY-rect.top;
   const [wx,wy]=c2w(cx,cy);
+
+  // Yaw drag in progress
+  if(yawDragging && yawDragActor){
+    const tr=trackById[yawDragActor];
+    if(!tr){ yawDragging=false; return; }
+    const st=getActorRenderState(tr);
+    if(!st){ redrawMap(); return; }
+    const curAng=Math.atan2(wy-st.y, wx-st.x);
+    let deltaDeg=(curAng - yawDragStartAng) * 180/Math.PI;
+    let target=_yawWrap(yawDragStartOffset + deltaDeg);
+    // Snap to step (Shift disables)
+    if(!e.shiftKey){
+      const step=yawSnapStep();
+      if(step>0) target=Math.round(target/step)*step;
+    }
+    if(yawDragUndoPending){ pushUndo(); yawDragUndoPending=false; }
+    setEffectiveYawOffsetForActor(yawDragActor, yawDragInterval[0], yawDragInterval[1], target);
+    redrawMap();
+    return;
+  }
 
   // Rubber-band box selection
   if(wpBoxSel){
@@ -2955,8 +3690,32 @@ mapEl.addEventListener('mousemove',e=>{
     const wp=hitWaypoint(wx,wy);
     mapEl.style.cursor=wp?'grab':'crosshair';
   }
+  if(tool==='yaw' && !yawDragging){
+    const h=hitYawHandle(wx,wy);
+    mapEl.style.cursor=h?'grab':'crosshair';
+  }
 });
 mapEl.addEventListener('mouseup',e=>{
+  // Yaw drag end
+  if(yawDragging){
+    const actorId=yawDragActor;
+    yawDragging=false;
+    yawDragActor=null;
+    yawDragUndoPending=false;
+    mapEl.style.cursor='crosshair';
+    rebuildActorList();
+    updatePatchSummary();
+    redrawAll();
+    if(actorId){
+      const off=effectiveYawOffsetForActor(actorId, yawDragInterval[0], yawDragInterval[1]);
+      const scope=(yawDragInterval[0]==null && yawDragInterval[1]==null)
+                    ? 'whole route'
+                    : '['+(yawDragInterval[0]||0).toFixed(2)+'..'+(yawDragInterval[1]||0).toFixed(2)+']s';
+      status('Yaw '+actorId+' offset='+off.toFixed(1)+'° ('+scope+') — Ctrl+Z to undo');
+    }
+    return;
+  }
+
   // Rubber-band box selection end
   if(wpBoxSel){
     wpBoxSel=false;
@@ -3025,6 +3784,11 @@ mapEl.addEventListener('mouseup',e=>{
       let hit=hitActor(wx,wy);
       if(!hit) hit=hitTrajectory(wx,wy);
       if(hit) selectActor(hit, e.shiftKey);
+    } else if(tool==='yaw'){
+      // Click on an actor selects it (handle hit-test happens in mousedown)
+      let hit=hitActor(wx,wy);
+      if(!hit) hit=hitTrajectory(wx,wy);
+      if(hit) selectActor(hit, e.shiftKey);
     }
   }
   mDown=false; mDragging=false;
@@ -3062,6 +3826,18 @@ function setCurT(t){
   curT=Math.max(tMin,Math.min(tMax,t));
   if(followMode) applyFollow();
   updateLaneSnapUi();
+  // Yaw interval mode: extend the end-of-interval as time advances. The user
+  // toggles "Interval" at the start time, scrubs to the end time, then drags.
+  if(tool==='yaw' && yawUseInterval()){
+    if(yawIntervalStart==null) yawIntervalStart=Number(curT.toFixed(4));
+    yawIntervalEnd=Number(curT.toFixed(4));
+    const lbl=document.getElementById('yaw-int-lbl');
+    if(lbl){
+      const a=Math.min(yawIntervalStart, yawIntervalEnd);
+      const b=Math.max(yawIntervalStart, yawIntervalEnd);
+      lbl.textContent='['+a.toFixed(2)+'..'+b.toFixed(2)+']s';
+    }
+  }
   updateCam(); redrawTimeline(); redrawMap();
 }
 
@@ -3258,6 +4034,18 @@ function updatePatchSummary(){
   if(wps.length){
     lines.push('\u2022 '+wps.length+' waypoint adjustment(s)');
   }
+  const yawOff=Number(ov.yaw_offset_deg)||0;
+  if(Math.abs(yawOff)>1e-3){
+    lines.push('\u21bb Yaw offset: '+(yawOff>0?'+':'')+yawOff.toFixed(1)+'\u00b0 (whole route)');
+  }
+  for(const seg of (ov.yaw_segment_offsets||[])){
+    const off=Number(seg.offset_deg)||0;
+    if(Math.abs(off)<1e-3) continue;
+    const sT=seg.start_t, eT=seg.end_t;
+    const t0=sT!=null&&isFinite(Number(sT))?Number(sT).toFixed(2):'start';
+    const t1=eT!=null&&isFinite(Number(eT))?Number(eT).toFixed(2):'end';
+    lines.push('\u21bb Yaw '+(off>0?'+':'')+off.toFixed(1)+'\u00b0 ['+t0+'\u2013'+t1+']');
+  }
   el.textContent=lines.join('\n');
 }
 
@@ -3444,11 +4232,16 @@ document.addEventListener('keydown',e=>{
   else if(k==='s'&&!e.ctrlKey){ e.preventDefault(); setTool('sel'); }
   else if(k==='l'){ e.preventDefault(); setTool('lane'); }
   else if(k==='w'){ e.preventDefault(); setTool('wp'); }
+  else if(k==='y'&&!e.ctrlKey){ e.preventDefault(); setTool('yaw'); }
+  else if(k==='r'&&tool==='yaw'){ e.preventDefault(); doYawReset(); }
+  else if(k==='v'&&tool==='yaw'){ e.preventDefault(); doYawAlignLane(); }
   else if(k==='d'&&tool!=='wp'){ e.preventDefault(); doDelete(); }
   else if(k==='o'){ e.preventDefault(); doOuter(); }
   else if(k==='p'){ e.preventDefault(); doPhase(); }
-  else if(k==='a'&&!e.ctrlKey){ e.preventDefault(); 
-    if(tool==='wp'&&selId) wpSelectAll(); else fitAll(); }
+  else if(k==='a'&&!e.ctrlKey){ e.preventDefault();
+    if(tool==='yaw') doYawAlignVelocity();
+    else if(tool==='wp'&&selId) wpSelectAll();
+    else fitAll(); }
   else if(e.ctrlKey&&k==='a'&&tool==='wp'){ e.preventDefault(); wpSelectAll(); }
   else if(e.ctrlKey&&k==='s'){ e.preventDefault(); doSave(); }
   else if(e.ctrlKey&&k==='z'){ e.preventDefault(); doUndo(); }
@@ -3941,23 +4734,42 @@ init().catch(e=>{ status('Init error: '+e.message); console.error('[init] uncaug
 
 def _is_scenario_directory(d: Path) -> bool:
     """
-    A scenario directory contains numbered subdirs (e.g. 1/, 2/) with YAML files.
-    Matches the pipeline convention.
+    A scenario directory either:
+      - already contains trajectory_plot.html (V2XPNP HTML mode), OR
+      - contains numbered subdirs with YAML files (raw V2XPNP scenes the
+        pipeline can synthesize from), OR
+      - contains an actors_manifest.json + per-actor XML routes
+        (scenarioset/v2xpnp/<scenario>/ — direct XML edit mode).
     """
     if not d.is_dir():
         return False
-    # Check for trajectory_plot.html or numbered subdirectories with YAML
     if (d / "trajectory_plot.html").exists():
+        return True
+    if _is_xml_scenario_directory(d):
         return True
     for child in d.iterdir():
         if child.is_dir():
             try:
                 int(child.name)
-                # Check if it has YAML / yaml files
                 if list(child.glob("*.yaml")) or list(child.glob("*.yml")):
                     return True
             except ValueError:
                 pass
+    return False
+
+
+def _is_xml_scenario_directory(d: Path) -> bool:
+    """An XML-mode scenario folder has an actors_manifest.json next to its
+    ego XML routes. The trajectory_plot.html may or may not exist; if it
+    does, HTML mode wins (it carries the carla_map underlay)."""
+    if not d.is_dir():
+        return False
+    if not (d / "actors_manifest.json").exists():
+        return False
+    # Need at least one non-replay XML route
+    for p in d.glob("*.xml"):
+        if not p.name.endswith("_REPLAY.xml"):
+            return True
     return False
 
 
@@ -4036,7 +4848,13 @@ def main() -> None:
 
     if is_batch:
         # ── Batch mode ──
-        scenario_dirs = _find_scenario_directories(input_path)
+        # If the input itself is a single scenario folder, treat it as a
+        # one-element batch (so the user can point at one scenarioset/v2xpnp/
+        # <scenario>/ dir without needing to wrap it).
+        if _is_scenario_directory(input_path):
+            scenario_dirs = [input_path]
+        else:
+            scenario_dirs = _find_scenario_directories(input_path)
         if not scenario_dirs:
             print(f"ERROR: No scenario directories found in {input_path}", file=sys.stderr)
             sys.exit(1)
@@ -4067,7 +4885,12 @@ def main() -> None:
         print(f"BATCH MODE: {len(scenario_dirs)} scenarios in {input_path.name}")
         for i, d in enumerate(scenario_dirs):
             has_html = (d / "trajectory_plot.html").exists()
-            marker = " (HTML ready)" if has_html else " (needs pipeline)"
+            if has_html:
+                marker = " (HTML ready)"
+            elif _is_xml_scenario_directory(d):
+                marker = " (XML — direct edit)"
+            else:
+                marker = " (needs pipeline)"
             print(f"  [{i}] {d.name}{marker}")
 
         # Load first scenario
