@@ -121,6 +121,26 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.capture_logreplay_images = (
 			os.environ.get("TCP_CAPTURE_LOGREPLAY_IMAGES", "").lower() in ("1", "true", "yes")
 		)
+		# TCP-Vid mode: same TCP driving policy, but also captures additional
+		# cinematic CARLA RGB cameras every tick and auto-compiles each into
+		# an mp4. The agent_wrapper detects the 'cine_' id prefix and zeroes
+		# out lens distortion + chromatic aberration + motion blur on every
+		# cine_* sensor (planner-facing rgb/bev keep the heavy distortion the
+		# TCP model was trained on, so driving behavior is unchanged).
+		self.video_mode = os.environ.get("TCP_VIDEO_MODE", "").lower() in ("1", "true", "yes")
+		# Cinematic CARLA RGB cameras (per-ego). Saved to <save_path>/<id>_<ego>/.
+		# All real photographic captures — no schematics.
+		self.cine_cam_ids = [
+			'cine_front',     # forward camera over the hood
+			'cine_chase',     # third-person chase, behind & above
+			'cine_side',      # side tracking shot (driver-side profile)
+			'cine_top_close', # real top-down photo, zoomed in (orbital ~30 m)
+			'cine_top_wide',  # real top-down photo, wider context (~120 m)
+		]
+		if self.video_mode:
+			# Save every agent tick — cinematic-quality is the whole point.
+			self.save_interval = 1
+		self.video_fps = _env_int("TCP_VIDEO_FPS", 20, minimum=1)
 
 		if SAVE_PATH is not None:
 			now = datetime.datetime.now()
@@ -137,11 +157,17 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 			self.calibration_path = self.logreplayimages_path
 
 			for ego_id in range(self.ego_vehicles_num):
-				(self.save_path / 'rgb_{}'.format(ego_id)).mkdir()
 				(self.save_path / 'meta_{}'.format(ego_id)).mkdir()
-				(self.save_path / 'bev_{}'.format(ego_id)).mkdir()
+				if not self.video_mode:
+					(self.save_path / 'rgb_{}'.format(ego_id)).mkdir()
+					(self.save_path / 'bev_{}'.format(ego_id)).mkdir()
 				if self.capture_logreplay_images and self.logreplayimages_path is not None:
 					(self.logreplayimages_path / 'logreplay_rgb_{}'.format(ego_id)).mkdir(parents=True, exist_ok=True)
+				if self.video_mode:
+					for cam in self.cine_cam_ids:
+						(self.save_path / f'{cam}_{ego_id}').mkdir(parents=True, exist_ok=True)
+			if self.video_mode:
+				(self.save_path / 'videos').mkdir(parents=True, exist_ok=True)
 
 	def _init(self):
 		self._route_planner = RoutePlanner(4.0, 10.0) # (4.0, 50.0)
@@ -283,7 +309,83 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 					'id': 'logreplay_rgb'
 				}
 			)
+		if self.video_mode:
+			sensors.extend(self._cinematic_sensors())
 		return sensors
+
+	def _cinematic_sensors(self):
+		# CARLA vehicle frame: +X forward, +Y right, +Z up.
+		# Per-ego suffixes (_0, _1, ...) are added by the leaderboard wrapper,
+		# so here we just use the bare 'id'. Every sensor here uses the
+		# 'cine_' id prefix; agent_wrapper.py detects that and zeroes out
+		# lens distortion + chromatic aberration + motion blur (vs. the
+		# heavy planner-facing defaults).
+		cine_w = _env_int("TCP_VID_CINE_WIDTH", 1920, minimum=1)
+		cine_h = _env_int("TCP_VID_CINE_HEIGHT", 1080, minimum=1)
+		# 1) Front camera over the hood
+		front_x = _env_float("TCP_VID_FRONT_X", -1.5)
+		front_z = _env_float("TCP_VID_FRONT_Z", 2.0)
+		front_fov = _env_float("TCP_VID_FRONT_FOV", 50.0)
+		# 2) Chase camera — far enough back & high enough that the full
+		# back of the ego car (including trunk) is visible at frame bottom.
+		chase_x = _env_float("TCP_VID_CHASE_X", -14.0)
+		chase_z = _env_float("TCP_VID_CHASE_Z", 6.0)
+		chase_pitch = _env_float("TCP_VID_CHASE_PITCH", -15.0)
+		chase_fov = _env_float("TCP_VID_CHASE_FOV", 50.0)
+		# 3) Side tracking shot (driver-side profile of the ego). Camera x
+		# is aligned with the vehicle origin so the body sits horizontally
+		# centered (yaw=90 → image-LEFT = vehicle forward; offsetting x in
+		# either direction shifts the car off-center in that direction).
+		side_x = _env_float("TCP_VID_SIDE_X", 0.0)
+		side_y = _env_float("TCP_VID_SIDE_Y", -9.0)
+		side_z = _env_float("TCP_VID_SIDE_Z", 1.5)
+		side_yaw = _env_float("TCP_VID_SIDE_YAW", 90.0)   # face the car
+		side_pitch = _env_float("TCP_VID_SIDE_PITCH", 0.0)
+		side_fov = _env_float("TCP_VID_SIDE_FOV", 60.0)
+		# 4) Real top-down photo, zoomed in on the ego (orbital ~30 m above).
+		# Narrow FOV from this height keeps it close to orthographic.
+		top_close_z = _env_float("TCP_VID_TOP_CLOSE_Z", 30.0)
+		top_close_fov = _env_float("TCP_VID_TOP_CLOSE_FOV", 50.0)
+		# 5) Real top-down photo, wider context (~120 m high).
+		top_wide_z = _env_float("TCP_VID_TOP_WIDE_Z", 120.0)
+		top_wide_fov = _env_float("TCP_VID_TOP_WIDE_FOV", 50.0)
+		return [
+			{
+				'type': 'sensor.camera.rgb',
+				'x': front_x, 'y': 0.0, 'z': front_z,
+				'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0,
+				'width': cine_w, 'height': cine_h, 'fov': front_fov,
+				'id': 'cine_front',
+			},
+			{
+				'type': 'sensor.camera.rgb',
+				'x': chase_x, 'y': 0.0, 'z': chase_z,
+				'roll': 0.0, 'pitch': chase_pitch, 'yaw': 0.0,
+				'width': cine_w, 'height': cine_h, 'fov': chase_fov,
+				'id': 'cine_chase',
+			},
+			{
+				'type': 'sensor.camera.rgb',
+				'x': side_x, 'y': side_y, 'z': side_z,
+				'roll': 0.0, 'pitch': side_pitch, 'yaw': side_yaw,
+				'width': cine_w, 'height': cine_h, 'fov': side_fov,
+				'id': 'cine_side',
+			},
+			{
+				'type': 'sensor.camera.rgb',
+				'x': 0.0, 'y': 0.0, 'z': top_close_z,
+				'roll': 0.0, 'pitch': -90.0, 'yaw': 0.0,
+				'width': cine_w, 'height': cine_h, 'fov': top_close_fov,
+				'id': 'cine_top_close',
+			},
+			{
+				'type': 'sensor.camera.rgb',
+				'x': 0.0, 'y': 0.0, 'z': top_wide_z,
+				'roll': 0.0, 'pitch': -90.0, 'yaw': 0.0,
+				'width': cine_w, 'height': cine_h, 'fov': top_wide_fov,
+				'id': 'cine_top_wide',
+			},
+		]
 
 	def tick(self, ego_id, input_data):
 		# self.step += 1
@@ -309,6 +411,15 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 				'bev': bev,
 				'logreplay_rgb': logreplay_rgb
 				}
+		if self.video_mode:
+			for cam in self.cine_cam_ids:
+				cam_key = f'{cam}_{ego_id}'
+				if cam_key in input_data:
+					result[cam] = cv2.cvtColor(
+						input_data[cam_key][1][:, :, :3], cv2.COLOR_BGR2RGB
+					)
+				else:
+					result[cam] = None
 		
 		pos = self._get_position(result)
 		result['gps'] = pos
@@ -516,21 +627,68 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 			return
 
 		frame_name = '%04d.png' % frame
-		rgb_image = Image.fromarray(tick_data['rgb'])
-		bev_image = Image.fromarray(tick_data['bev'])
-
-		rgb_image.save(self.save_path / 'rgb_{}'.format(ego_id) / frame_name)
-		bev_image.save(self.save_path / 'bev_{}'.format(ego_id) / frame_name)
+		# In video mode, suppress the stretched 900x256 RGB and 256x256 BEV
+		# PNG dumps — those are TCP's model inputs, not viewing artifacts.
+		# The cinematic cameras below are the only on-disk frames.
+		if not self.video_mode:
+			rgb_image = Image.fromarray(tick_data['rgb'])
+			bev_image = Image.fromarray(tick_data['bev'])
+			rgb_image.save(self.save_path / 'rgb_{}'.format(ego_id) / frame_name)
+			bev_image.save(self.save_path / 'bev_{}'.format(ego_id) / frame_name)
 		if self.capture_logreplay_images and self.logreplayimages_path is not None:
 			logreplay_rgb = tick_data.get('logreplay_rgb')
 			if logreplay_rgb is not None:
 				Image.fromarray(logreplay_rgb).save(
 					self.logreplayimages_path / 'logreplay_rgb_{}'.format(ego_id) / frame_name
 				)
+		if self.video_mode:
+			for cam in self.cine_cam_ids:
+				img = tick_data.get(cam)
+				if img is not None:
+					Image.fromarray(img).save(
+						self.save_path / f'{cam}_{ego_id}' / frame_name
+					)
 
 		outfile = open(self.save_path / 'meta_{}'.format(ego_id) / ('%04d.json' % frame), 'w')
 		json.dump(self.pid_metadata, outfile, indent=4)
 		outfile.close()
+
+	def _compile_videos(self):
+		"""Walk each cinematic camera output dir and emit an mp4 per (id, ego)."""
+		if self.save_path is None:
+			return
+		videos_dir = self.save_path / 'videos'
+		videos_dir.mkdir(parents=True, exist_ok=True)
+		fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+		for ego_id in range(self.ego_vehicles_num):
+			for cam in self.cine_cam_ids:
+				frames_dir = self.save_path / f'{cam}_{ego_id}'
+				if not frames_dir.is_dir():
+					continue
+				png_paths = sorted(frames_dir.glob('*.png'))
+				if not png_paths:
+					continue
+				first = cv2.imread(str(png_paths[0]))
+				if first is None:
+					continue
+				h, w = first.shape[:2]
+				out_path = videos_dir / f'{cam}_{ego_id}.mp4'
+				writer = cv2.VideoWriter(str(out_path), fourcc, float(self.video_fps), (w, h))
+				if not writer.isOpened():
+					print(f"[TCP-Vid] failed to open VideoWriter for {out_path}")
+					continue
+				try:
+					writer.write(first)
+					for png_path in png_paths[1:]:
+						img = cv2.imread(str(png_path))
+						if img is None:
+							continue
+						if img.shape[:2] != (h, w):
+							img = cv2.resize(img, (w, h))
+						writer.write(img)
+				finally:
+					writer.release()
+				print(f"[TCP-Vid] wrote {out_path} ({len(png_paths)} frames @ {self.video_fps} fps)")
 
 	def destroy(self):
 		# Print and save per-step timing summary before cleanup
@@ -553,6 +711,11 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 					_f.write(_summary + '\n')
 			except Exception:
 				pass
+		if self.video_mode:
+			try:
+				self._compile_videos()
+			except Exception as exc:
+				print(f"[TCP-Vid] video compilation failed: {exc}")
 		del self.net
 		torch.cuda.empty_cache()
 

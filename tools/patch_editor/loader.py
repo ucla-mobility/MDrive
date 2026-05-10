@@ -271,6 +271,262 @@ def load_from_dict(d: dict) -> SceneData:
     )
 
 
+# ---------------------------------------------------------------------------
+# XML scenarioset loading
+# ---------------------------------------------------------------------------
+# Layout produced by the V2XPNP pipeline (and what the user wants to edit
+# directly):
+#
+#   <scenario>/
+#     actors_manifest.json
+#     ucla_v2_custom_ego_vehicle_0.xml         ← ego routes (one per ego)
+#     ucla_v2_custom_ego_vehicle_*_REPLAY.xml  ← CARLA-side replay logs (skip)
+#     actors/
+#       npc/*.xml      static/*.xml
+#       walker/*.xml   cyclist/*.xml
+
+_XML_REPLAY_SUFFIX = "_REPLAY.xml"
+
+
+def _xml_role_to_ui_role(xml_role: str) -> Tuple[str, str]:
+    """Map XML route role → (ui_role, obj_type) used by the editor."""
+    r = (xml_role or "").lower()
+    if r == "ego":
+        return "ego", "ego"
+    if r == "walker":
+        return "walker", "walker"
+    if r == "cyclist":
+        return "cyclist", "cyclist"
+    if r in ("static", "parked", "parking"):
+        return "vehicle", "static"
+    if r == "npc":
+        return "vehicle", "npc"
+    return "vehicle", r or "vehicle"
+
+
+def _read_xml_actor_id(manifest_entry: Optional[dict], xml_path: Path,
+                       xml_role: str) -> str:
+    """Pick a stable actor id for a track loaded from XML."""
+    if isinstance(manifest_entry, dict):
+        name = manifest_entry.get("name") or manifest_entry.get("id")
+        if name:
+            return str(name)
+    stem = xml_path.stem  # e.g. "ucla_v2_custom_Vehicle_0_npc"
+    # Strip a leading "<town>_custom_" prefix if present so ids are tidy.
+    parts = stem.split("_custom_", 1)
+    return parts[1] if len(parts) == 2 else stem
+
+
+def _build_manifest_lookup(manifest: dict) -> Dict[str, dict]:
+    """Build {xml_filename → manifest entry} for actor-id resolution."""
+    out: Dict[str, dict] = {}
+    if not isinstance(manifest, dict):
+        return out
+    for kind in ("ego", "npc", "static", "walker", "cyclist"):
+        for entry in (manifest.get(kind) or []):
+            if isinstance(entry, dict):
+                f = entry.get("file")
+                if f:
+                    out[str(f)] = entry
+    return out
+
+
+def _parse_xml_route(xml_path: Path,
+                    manifest_entry: Optional[dict]) -> Optional[Tuple[ActorTrack, dict]]:
+    """Parse a CARLA scenario-runner route XML into an ActorTrack.
+
+    Returns (track, route_attrs) or None on failure.  route_attrs preserves
+    the <route> element's attributes so a later save round-trip can restore
+    every attr the user didn't touch (model, town, control_mode, ...).
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        tree = ET.parse(xml_path)
+    except Exception:
+        return None
+    root = tree.getroot()
+    route = root.find("route") if root.tag != "route" else root
+    if route is None:
+        return None
+
+    xml_role = str(route.attrib.get("role") or "vehicle")
+    ui_role, obj_type = _xml_role_to_ui_role(xml_role)
+    actor_id = _read_xml_actor_id(manifest_entry, xml_path, xml_role)
+
+    frames: List[ActorFrame] = []
+    for wp in route.findall("waypoint"):
+        a = wp.attrib
+        t = _safe_float(a.get("time"), 0.0)
+        x = _safe_float(a.get("x"), 0.0)
+        y = _safe_float(a.get("y"), 0.0)
+        yaw = _safe_float(a.get("yaw"), 0.0)
+        # XMLs are already in CARLA frame, so cx/cy/cyaw == x/y/yaw.
+        # Frames carry no ccli (no map data here) — leave -1.
+        frames.append(ActorFrame(
+            t=t, x=x, y=y, yaw=yaw,
+            cx=x, cy=y, cyaw=yaw,
+            ccli=-1, csource="xml",
+        ))
+    if not frames:
+        return None
+
+    track = ActorTrack(
+        track_id=actor_id, role=ui_role, obj_type=obj_type, frames=frames
+    )
+    return track, dict(route.attrib)
+
+
+def load_from_xml_scenario(scenario_dir: Path) -> Tuple[SceneData, Dict[str, Path], Dict[str, dict]]:
+    """Load every actor XML in a scenarioset/v2xpnp/<scenario>/ folder.
+
+    Returns:
+      scene       - SceneData with no carla_lines (XML carries no map info)
+      actor_paths - {actor_id → xml_path}     for round-trip save
+      route_attrs - {actor_id → <route> attrs} so save preserves model/town/etc
+    """
+    manifest_path = scenario_dir / "actors_manifest.json"
+    manifest_lookup: Dict[str, dict] = {}
+    if manifest_path.exists():
+        try:
+            manifest_lookup = _build_manifest_lookup(json.loads(manifest_path.read_text()))
+        except Exception:
+            manifest_lookup = {}
+
+    candidates: List[Path] = []
+    # Top-level ego routes
+    for p in sorted(scenario_dir.glob("*.xml")):
+        if p.name.endswith(_XML_REPLAY_SUFFIX):
+            continue
+        candidates.append(p)
+    # actors/<kind>/*.xml
+    actors_dir = scenario_dir / "actors"
+    if actors_dir.is_dir():
+        for kind_dir in sorted(actors_dir.iterdir()):
+            if not kind_dir.is_dir():
+                continue
+            for p in sorted(kind_dir.glob("*.xml")):
+                if p.name.endswith(_XML_REPLAY_SUFFIX):
+                    continue
+                candidates.append(p)
+
+    tracks: List[ActorTrack] = []
+    actor_paths: Dict[str, Path] = {}
+    route_attrs: Dict[str, dict] = {}
+    for xml_path in candidates:
+        manifest_entry = manifest_lookup.get(xml_path.name)
+        parsed = _parse_xml_route(xml_path, manifest_entry)
+        if parsed is None:
+            continue
+        track, attrs = parsed
+        # If two actors collide on id (shouldn't happen via manifest), suffix.
+        base = track.track_id
+        suffix = 2
+        while track.track_id in actor_paths:
+            track.track_id = f"{base}_{suffix}"
+            suffix += 1
+        tracks.append(track)
+        actor_paths[track.track_id] = xml_path
+        route_attrs[track.track_id] = attrs
+
+    # Compute map bbox from all frames (used by the editor's "Fit" view).
+    xs: List[float] = []
+    ys: List[float] = []
+    for tr in tracks:
+        for f in tr.frames:
+            if math.isfinite(f.cx):
+                xs.append(f.cx)
+            if math.isfinite(f.cy):
+                ys.append(f.cy)
+    if xs and ys:
+        bbox = {"min_x": min(xs), "max_x": max(xs),
+                "min_y": min(ys), "max_y": max(ys)}
+    else:
+        bbox = {"min_x": 0.0, "max_x": 100.0, "min_y": 0.0, "max_y": 100.0}
+
+    scene = SceneData(
+        scenario_name=scenario_dir.name,
+        map_bbox=bbox,
+        tracks=tracks,
+        carla_lines=[],
+    )
+    return scene, actor_paths, route_attrs
+
+
+def write_xml_for_track(xml_path: Path, frames: List[ActorFrame]) -> None:
+    """Re-emit a CARLA route XML in-place, replacing only its <waypoint>s.
+
+    Preserves the <route> element's attributes and any other XML structure
+    (declaration, <routes> wrapper, model/town/control_mode/etc.).  Only the
+    <waypoint> children are rewritten; their non-edited attrs (pitch/roll/z)
+    survive at their original values for any indices that still exist.
+    """
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    route = root.find("route") if root.tag != "route" else root
+    if route is None:
+        return
+    old_wps = list(route.findall("waypoint"))
+    # Cache original attrs by frame index so pitch/roll/z carry through.
+    orig_attrs: List[dict] = [dict(w.attrib) for w in old_wps]
+
+    # Remove all existing waypoints
+    for w in old_wps:
+        route.remove(w)
+
+    for i, fr in enumerate(frames):
+        attrs = orig_attrs[i].copy() if i < len(orig_attrs) else {}
+        attrs["time"] = f"{fr.t:.6f}"
+        attrs["x"] = f"{fr.cx:.6f}"
+        attrs["y"] = f"{fr.cy:.6f}"
+        attrs["yaw"] = f"{fr.cyaw:.6f}"
+        # pitch/roll/z preserved if previously present, otherwise zeros.
+        attrs.setdefault("pitch", "0.000000")
+        attrs.setdefault("roll", "0.000000")
+        attrs.setdefault("z", "0.000000")
+        ET.SubElement(route, "waypoint", attrs)
+
+    # Pretty-print with the same 2-space indent the originals use.
+    ET.indent(tree, space="  ", level=0)
+    tree.write(xml_path, encoding="utf-8", xml_declaration=True)
+
+
+def remove_xml_actor(xml_path: Path, manifest_path: Optional[Path]) -> None:
+    """Delete an actor's XML file and remove its manifest entry, if any.
+
+    The manifest stores `file` either as a basename (top-level egos) or as a
+    path relative to the scenario directory (e.g. `actors/walker/<...>.xml`).
+    We match against both forms.
+    """
+    try:
+        xml_path.unlink()
+    except FileNotFoundError:
+        pass
+    if manifest_path is None or not manifest_path.exists():
+        return
+    try:
+        m = json.loads(manifest_path.read_text())
+    except Exception:
+        return
+    scenario_dir = manifest_path.parent
+    try:
+        rel_path = str(xml_path.resolve().relative_to(scenario_dir.resolve()))
+    except ValueError:
+        rel_path = xml_path.name
+    fname = xml_path.name
+    candidates = {fname, rel_path, rel_path.replace("\\", "/")}
+    changed = False
+    for kind in ("ego", "npc", "static", "walker", "cyclist"):
+        lst = m.get(kind) or []
+        new = [e for e in lst
+               if not (isinstance(e, dict) and str(e.get("file")) in candidates)]
+        if len(new) != len(lst):
+            m[kind] = new
+            changed = True
+    if changed:
+        manifest_path.write_text(json.dumps(m, indent=2))
+
+
 def find_nearest_line(
     carla_lines: List[CarlaLine],
     px: float,

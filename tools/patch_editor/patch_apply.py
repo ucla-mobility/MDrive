@@ -428,6 +428,59 @@ def apply_patch_to_dataset(
             if verbose:
                 print(f"[PATCH] waypoint {actor_id}[{fi}] +({dx:.3f},{dy:.3f})")
 
+        # ── yaw_offset_deg + yaw_segment_offsets ─────────────────────────────
+        # Whole-route offset is summed with any matching segment offsets.
+        # Segment range conventions match lane_segment_overrides (start_t/end_t
+        # both optional; None = open-ended on that side).
+        try:
+            yaw_off = float(ov.get("yaw_offset_deg", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            yaw_off = 0.0
+        seg_offs_raw = ov.get("yaw_segment_offsets") or []
+        seg_offs: List[Tuple[Optional[float], Optional[float], float]] = []
+        for seg in seg_offs_raw:
+            if not isinstance(seg, dict):
+                continue
+            try:
+                soff = float(seg.get("offset_deg", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if abs(soff) < 1e-9:
+                continue
+            s_t = seg.get("start_t")
+            e_t = seg.get("end_t")
+            seg_offs.append(
+                (
+                    float(s_t) if s_t is not None else None,
+                    float(e_t) if e_t is not None else None,
+                    soff,
+                )
+            )
+        if abs(yaw_off) > 1e-9 or seg_offs:
+            n_yaw = 0
+            for fr in frames:
+                t = float(fr.get("t", 0.0))
+                delta = yaw_off
+                for s_t, e_t, soff in seg_offs:
+                    if s_t is not None and t < s_t:
+                        continue
+                    if e_t is not None and t > e_t:
+                        continue
+                    delta += soff
+                if abs(delta) < 1e-9:
+                    continue
+                base = float(fr.get("cyaw", fr.get("yaw", 0.0)))
+                # Wrap to (-180, 180] for tidiness; downstream consumers don't
+                # care about absolute representation but tests/diffs are easier.
+                new_yaw = ((base + delta + 180.0) % 360.0) - 180.0
+                fr["cyaw"] = new_yaw
+                n_yaw += 1
+            n_applied += 1
+            if verbose:
+                seg_str = f", {len(seg_offs)} seg" if seg_offs else ""
+                print(f"[PATCH] yaw {actor_id}: offset={yaw_off:+.2f}°{seg_str}  "
+                      f"{n_yaw} frames updated")
+
         # ── phase_override ───────────────────────────────────────────────────
         if ov.get("phase_override"):
             phase = str(ov["phase_override"])

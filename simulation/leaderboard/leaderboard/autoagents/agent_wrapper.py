@@ -171,9 +171,15 @@ class AgentWrapper(object):
                     bp.set_attribute('image_size_x', str(sensor_spec['width']))
                     bp.set_attribute('image_size_y', str(sensor_spec['height']))
                     bp.set_attribute('fov', str(sensor_spec['fov']))
-                    is_logreplay_rgb = sensor_spec.get('id') == 'logreplay_rgb'
-                    if is_logreplay_rgb:
-                        # Keep log-replay image captures visually clean while preserving
+                    sensor_id = str(sensor_spec.get('id', ''))
+                    # Cinematic / log-replay capture sensors must be free of
+                    # lens distortion + chromatic aberration: the planner-facing
+                    # branch below explicitly cranks lens_circle_* up to 3.0
+                    # (for TCP and friends) and chromatic_aberration_intensity
+                    # to 0.5, both of which are visible at the frame edges.
+                    is_clean_camera = sensor_id == 'logreplay_rgb' or sensor_id.startswith('cine_')
+                    if is_clean_camera:
+                        # Keep image captures visually clean while preserving
                         # existing post-processing for planner-facing cameras.
                         _safe_set_bp_attribute(bp, 'chromatic_aberration_intensity', 0.0)
                         _safe_set_bp_attribute(bp, 'chromatic_aberration_offset', 0.0)
@@ -181,6 +187,14 @@ class AgentWrapper(object):
                         _safe_set_bp_attribute(bp, 'lens_circle_falloff', 0.0)
                         _safe_set_bp_attribute(bp, 'lens_k', 0.0)
                         _safe_set_bp_attribute(bp, 'lens_kcube', 0.0)
+                        # Also disable motion blur / bloom / lens flare for
+                        # crisp video frames (these are PostProcess effects
+                        # CARLA applies on top of the lens model).
+                        _safe_set_bp_attribute(bp, 'motion_blur_intensity', 0.0)
+                        _safe_set_bp_attribute(bp, 'motion_blur_max_distortion', 0.0)
+                        _safe_set_bp_attribute(bp, 'motion_blur_min_object_screen_size', 0.0)
+                        _safe_set_bp_attribute(bp, 'bloom_intensity', 0.0)
+                        _safe_set_bp_attribute(bp, 'lens_flare_intensity', 0.0)
                     else:
                         bp.set_attribute('chromatic_aberration_intensity', str(0.5))
                         bp.set_attribute('chromatic_aberration_offset', str(0))
