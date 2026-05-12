@@ -1,5 +1,22 @@
-# MDrive: A Cooperative Driving Benchmark for End-to-End Closed-loop Multi-Agent System
-A benchmark for multi-agent, multi-granular cooperative driving. Focus on end-to-end closed-loop systems to improve safety and coordination in complex urban environments.
+# <img src="figure/MDrive-Logo.png" height="35" style="vertical-align: middle; margin-right: 10px;"> MDrive
+
+[![website](https://img.shields.io/badge/Website-Explore%20Now-blueviolet?style=flat&logo=google-chrome)](hhttps://mdrive-challenge.github.io/)
+[![paper](https://img.shields.io/badge/arXiv-2604.19710-B31B1B.svg?style=flat&logo=arxiv)](https://arxiv.org/pdf/2605.10904)
+[![License](https://img.shields.io/badge/License-Academic_Software_License-blue)]()
+
+This is the official implementation of the paper:
+
+**MDrive: Benchmarking Closed-Loop Cooperative Driving for End-to-End Multi-agent Systems**
+
+[Marco Coscoy](https://www.linkedin.com/in/marco-coscoy-592670266/)\*, [Zewei Zhou](https://zewei-zhou.github.io/)\*‡, [Seth Z. Zhao](https://sethzhao506.github.io/)*‡, [Henry Wei](https://www.linkedin.com/in/henrywei8/), [Angela Magtoto](https://www.linkedin.com/in/angelamagtoto/), [Johnson Liu](https://www.linkedin.com/in/johnsonliu367/), [Rui Song](https://rruisong.github.io/)<sup>†</sup>, [Walter Zimmer](https://walzimmer.github.io/), [Zhiyu Huang](https://mczhi.github.io/), [Chen Tang](https://chentangmark.github.io/), [Bolei Zhou](https://boleizhou.github.io/), [Jiaqi Ma](https://mobility-lab.seas.ucla.edu/about/)
+
+University of California, Los Angeles, USA
+
+<sup>*</sup> Equal contribution. <sup>‡</sup> Project lead. <sup>†</sup> Corresponding author.
+
+
+
+<!-- A closed-loop cooperative driving benchmark with diverse interaction scenarios, and systematically analyze the V2X benefits across perception sharing and decision negotiation. -->
                          
 <p align="center">
   <img src="figure/MDrive_overview.png" alt="MDrive Overview" width="100%">
@@ -486,3 +503,13 @@ python -m v2xpnp.pipeline.entrypoint <log-dir> \
     --carla-map-offset-json v2xpnp/map/map_offset_carla.json \
     --out /tmp/output.html
 ```
+
+## Citation
+If you find this repository useful for your research, please consider giving us a star 🌟 and citing our paper.
+ ```bibtex
+@article{coscoy2026mdrive,
+      title={MDrive: Benchmarking Closed-Loop Cooperative Driving for End-to-End Multi-agent Systems}, 
+      author={Marco Coscoy and Zewei Zhou and Seth Z. Zhao and Henry Wei and Angela Magtoto and Johnson Liu and Rui Song and Walter Zimmer and Zhiyu Huang and Chen Tang and Bolei Zhou and Jiaqi Ma},
+      year={2026},
+      journal = {arXiv preprint arXiv:2605.10904},
+}
