@@ -10,9 +10,7 @@ This is the official implementation of the paper:
 
 [Marco Coscoy](https://www.linkedin.com/in/marco-coscoy-592670266/)\*, [Zewei Zhou](https://zewei-zhou.github.io/)\*‡, [Seth Z. Zhao](https://sethzhao506.github.io/)*‡, [Henry Wei](https://www.linkedin.com/in/henrywei8/), [Angela Magtoto](https://www.linkedin.com/in/angelamagtoto/), [Johnson Liu](https://www.linkedin.com/in/johnsonliu367/), [Rui Song](https://rruisong.github.io/)<sup>†</sup>, [Walter Zimmer](https://walzimmer.github.io/), [Zhiyu Huang](https://mczhi.github.io/), [Chen Tang](https://chentangmark.github.io/), [Bolei Zhou](https://boleizhou.github.io/), [Jiaqi Ma](https://mobility-lab.seas.ucla.edu/about/)
 
-University of California, Los Angeles, USA
-
-<sup>*</sup> Equal contribution. <sup>‡</sup> Project lead. <sup>†</sup> Corresponding author.
+University of California, Los Angeles, USA | <sup>*</sup> Equal contribution. <sup>‡</sup> Project lead. <sup>†</sup> Corresponding author.
 
 
 
