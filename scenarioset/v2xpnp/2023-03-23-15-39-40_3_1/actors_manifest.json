@@ -645,15 +645,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_21_static.xml",
-      "route_id": "2023-03-23-15-39-40_3_1",
-      "town": "ucla_v2",
-      "name": "21",
-      "kind": "static",
-      "model": "vehicle.bmw.grandtourer",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_22_static.xml",
       "route_id": "2023-03-23-15-39-40_3_1",
       "town": "ucla_v2",

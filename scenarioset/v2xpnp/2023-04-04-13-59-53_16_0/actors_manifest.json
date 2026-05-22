@@ -109,15 +109,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_16_npc.xml",
-      "route_id": "2023-04-04-13-59-53_16_0",
-      "town": "ucla_v2",
-      "name": "16",
-      "kind": "npc",
-      "model": "vehicle.seat.leon",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_18_npc.xml",
       "route_id": "2023-04-04-13-59-53_16_0",
       "town": "ucla_v2",
@@ -1055,15 +1046,6 @@
       "name": "8",
       "kind": "static",
       "model": "vehicle.audi.etron",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_9_static.xml",
-      "route_id": "2023-04-04-13-59-53_16_0",
-      "town": "ucla_v2",
-      "name": "9",
-      "kind": "static",
-      "model": "vehicle.mercedes.sprinter",
       "control_mode": "replay"
     },
     {

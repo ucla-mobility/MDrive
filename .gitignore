@@ -16,6 +16,8 @@ v2xpnp/v2xscenariosrecovereable/
 tum-traffic-dataset-dev-kit/
 
 scenarioset/interaction_deselected/
+scenarioset/v2xpnp_ego1_test/
+scenarioset/test_postnudge/
 stats/
 benchmark_runs
 
@@ -47,6 +49,14 @@ log.txt
 lmdrivelog.txt
 *.bak
 *.tmp
+
+# scenarioset actor-XML fix-tool backups (fix_actor_collisions.py,
+# fix_actor_yaw_reversal.py write these next to each edited XML)
+*.presnap
+*.preflip
+*.predelete
+*.pretrunc
+*.prestagger
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

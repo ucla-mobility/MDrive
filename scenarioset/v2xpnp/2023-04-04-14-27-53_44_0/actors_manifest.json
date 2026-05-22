@@ -808,15 +808,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_43_static.xml",
-      "route_id": "2023-04-04-14-27-53_44_0",
-      "town": "ucla_v2",
-      "name": "43",
-      "kind": "static",
-      "model": "vehicle.volkswagen.t2",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_187_static.xml",
       "route_id": "2023-04-04-14-27-53_44_0",
       "town": "ucla_v2",
@@ -943,30 +934,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_18_static.xml",
-      "route_id": "2023-04-04-14-27-53_44_0",
-      "town": "ucla_v2",
-      "name": "18",
-      "kind": "static",
-      "model": "vehicle.mitsubishi.fusorosa",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_19_static.xml",
       "route_id": "2023-04-04-14-27-53_44_0",
       "town": "ucla_v2",
       "name": "19",
       "kind": "static",
       "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_24_static.xml",
-      "route_id": "2023-04-04-14-27-53_44_0",
-      "town": "ucla_v2",
-      "name": "24",
-      "kind": "static",
-      "model": "vehicle.bmw.grandtourer",
       "control_mode": "replay"
     },
     {
@@ -985,15 +958,6 @@
       "name": "28",
       "kind": "static",
       "model": "vehicle.mitsubishi.fusorosa",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_29_static.xml",
-      "route_id": "2023-04-04-14-27-53_44_0",
-      "town": "ucla_v2",
-      "name": "29",
-      "kind": "static",
-      "model": "vehicle.chevrolet.impala",
       "control_mode": "replay"
     },
     {

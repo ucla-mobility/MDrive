@@ -161,15 +161,6 @@
       "kind": "npc",
       "model": "vehicle.citroen.c3",
       "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_62_npc.xml",
-      "route_id": "2023-04-04-13-51-53_8_0",
-      "town": "ucla_v2",
-      "name": "62",
-      "kind": "npc",
-      "model": "vehicle.volkswagen.t2",
-      "control_mode": "replay"
     }
   ],
   "walker": [
@@ -637,15 +628,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_18_static.xml",
-      "route_id": "2023-04-04-13-51-53_8_0",
-      "town": "ucla_v2",
-      "name": "18",
-      "kind": "static",
-      "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_20_static.xml",
       "route_id": "2023-04-04-13-51-53_8_0",
       "town": "ucla_v2",
@@ -706,24 +688,6 @@
       "name": "37",
       "kind": "static",
       "model": "vehicle.mitsubishi.fusorosa",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_40_static.xml",
-      "route_id": "2023-04-04-13-51-53_8_0",
-      "town": "ucla_v2",
-      "name": "40",
-      "kind": "static",
-      "model": "vehicle.toyota.prius",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_42_static.xml",
-      "route_id": "2023-04-04-13-51-53_8_0",
-      "town": "ucla_v2",
-      "name": "42",
-      "kind": "static",
-      "model": "vehicle.carlamotors.carlacola",
       "control_mode": "replay"
     },
     {

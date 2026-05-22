@@ -100,15 +100,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_26_npc.xml",
-      "route_id": "2023-03-17-16-11-12_2_0",
-      "town": "ucla_v2",
-      "name": "26",
-      "kind": "npc",
-      "model": "vehicle.citroen.c3",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_31_npc.xml",
       "route_id": "2023-03-17-16-11-12_2_0",
       "town": "ucla_v2",
@@ -133,15 +124,6 @@
       "name": "33",
       "kind": "npc",
       "model": "vehicle.mini.cooper_s",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_34_npc.xml",
-      "route_id": "2023-03-17-16-11-12_2_0",
-      "town": "ucla_v2",
-      "name": "34",
-      "kind": "npc",
-      "model": "vehicle.citroen.c3",
       "control_mode": "replay"
     },
     {
@@ -324,15 +306,6 @@
       "name": "28",
       "kind": "static",
       "model": "vehicle.nissan.micra",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_39_static.xml",
-      "route_id": "2023-03-17-16-11-12_2_0",
-      "town": "ucla_v2",
-      "name": "39",
-      "kind": "static",
-      "model": "vehicle.seat.leon",
       "control_mode": "replay"
     }
   ],

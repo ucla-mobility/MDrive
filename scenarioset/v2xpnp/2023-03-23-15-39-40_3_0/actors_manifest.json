@@ -19,15 +19,6 @@
   ],
   "npc": [
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_1_npc.xml",
-      "route_id": "2023-03-23-15-39-40_3_0",
-      "town": "ucla_v2",
-      "name": "1",
-      "kind": "npc",
-      "model": "vehicle.chevrolet.impala",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_2_npc.xml",
       "route_id": "2023-03-23-15-39-40_3_0",
       "town": "ucla_v2",
@@ -1064,24 +1055,6 @@
       "name": "35",
       "kind": "static",
       "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_37_static.xml",
-      "route_id": "2023-03-23-15-39-40_3_0",
-      "town": "ucla_v2",
-      "name": "37",
-      "kind": "static",
-      "model": "vehicle.bmw.grandtourer",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_38_static.xml",
-      "route_id": "2023-03-23-15-39-40_3_0",
-      "town": "ucla_v2",
-      "name": "38",
-      "kind": "static",
-      "model": "vehicle.audi.a2",
       "control_mode": "replay"
     },
     {

@@ -154,15 +154,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_32_npc.xml",
-      "route_id": "2023-03-17-16-12-12_3_0",
-      "town": "ucla_v2",
-      "name": "32",
-      "kind": "npc",
-      "model": "vehicle.citroen.c3",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_33_npc.xml",
       "route_id": "2023-03-17-16-12-12_3_0",
       "town": "ucla_v2",
@@ -333,15 +324,6 @@
       "name": "36",
       "kind": "static",
       "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_39_static.xml",
-      "route_id": "2023-03-17-16-12-12_3_0",
-      "town": "ucla_v2",
-      "name": "39",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe_2020",
       "control_mode": "replay"
     },
     {

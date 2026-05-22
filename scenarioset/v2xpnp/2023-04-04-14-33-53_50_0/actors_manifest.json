@@ -171,15 +171,6 @@
       "kind": "npc",
       "model": "vehicle.ford.mustang",
       "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_38_npc.xml",
-      "route_id": "2023-04-04-14-33-53_50_0",
-      "town": "ucla_v2",
-      "name": "38",
-      "kind": "npc",
-      "model": "vehicle.lincoln.mkz_2017",
-      "control_mode": "replay"
     }
   ],
   "static": [
@@ -274,39 +265,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_29_static.xml",
-      "route_id": "2023-04-04-14-33-53_50_0",
-      "town": "ucla_v2",
-      "name": "29",
-      "kind": "static",
-      "model": "vehicle.audi.tt",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_40_static.xml",
       "route_id": "2023-04-04-14-33-53_50_0",
       "town": "ucla_v2",
       "name": "40",
       "kind": "static",
       "model": "vehicle.citroen.c3",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_43_static.xml",
-      "route_id": "2023-04-04-14-33-53_50_0",
-      "town": "ucla_v2",
-      "name": "43",
-      "kind": "static",
-      "model": "vehicle.audi.etron",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_50_static.xml",
-      "route_id": "2023-04-04-14-33-53_50_0",
-      "town": "ucla_v2",
-      "name": "50",
-      "kind": "static",
-      "model": "vehicle.ford.mustang",
       "control_mode": "replay"
     },
     {

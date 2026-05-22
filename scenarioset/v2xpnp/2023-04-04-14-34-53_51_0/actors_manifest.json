@@ -887,15 +887,6 @@
       "kind": "static",
       "model": "vehicle.dodge.charger_2020",
       "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_94_static.xml",
-      "route_id": "2023-04-04-14-34-53_51_0",
-      "town": "ucla_v2",
-      "name": "94",
-      "kind": "static",
-      "model": "vehicle.volkswagen.t2",
-      "control_mode": "replay"
     }
   ]
 }

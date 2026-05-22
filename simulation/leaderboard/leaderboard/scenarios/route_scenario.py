@@ -1375,6 +1375,174 @@ def _smooth_vehicle_replay_plan(
     return out
 
 
+class _ResetVehicleControl(py_trees.behaviour.Behaviour):
+    """One-shot atomic that explicitly zeroes throttle/brake/hand_brake/steer
+    on an actor and returns SUCCESS.
+
+    Needed between the brake_seq and the resume WaypointFollower because
+    StopVehicle leaves brake=1.0 latched on the actor when the par(SUCCESS_ON_ONE)
+    interrupts it via follow_WF's terminate-induced SUCCESS — StopVehicle's
+    auto-clear-on-stop branch never runs in that path.
+    """
+
+    def __init__(self, actor, name="ResetVehicleControl"):
+        super(_ResetVehicleControl, self).__init__(name)
+        self._actor = actor
+
+    def update(self):
+        try:
+            if self._actor is not None and self._actor.is_alive:
+                ctl = carla.VehicleControl()
+                ctl.throttle = 0.0
+                ctl.brake = 0.0
+                ctl.hand_brake = False
+                ctl.steer = 0.0
+                ctl.reverse = False
+                ctl.manual_gear_shift = False
+                self._actor.apply_control(ctl)
+        except Exception:
+            pass
+        return py_trees.common.Status.SUCCESS
+
+
+class _DynamicForwardWaypointFollower(py_trees.behaviour.Behaviour):
+    """WaypointFollower variant that builds its global plan AT INITIALISE TIME
+    from the actor's current location forward, instead of using a pre-computed
+    plan that may have waypoints behind the actor (which makes CARLA's
+    LocalPlanner stick on brake=1.0 indefinitely).
+
+    Takes a base_plan (sequence of (carla.Waypoint, RoadOption) OR
+    carla.Location) and on first tick:
+      1. Finds the first waypoint in base_plan that is strictly ahead of the
+         actor (using forward-vector dot product).
+      2. Constructs a fresh plan from current actor position forward through
+         the remaining base_plan waypoints.
+      3. Hands that plan to an inner WaypointFollower for execution.
+    """
+
+    def __init__(self, actor, base_plan, target_speed, avoid_collision=False,
+                 name="DynamicForwardWaypointFollower"):
+        super(_DynamicForwardWaypointFollower, self).__init__(name)
+        self._actor = actor
+        self._base_plan = list(base_plan or [])
+        self._target_speed = target_speed
+        self._avoid_collision = avoid_collision
+        self._inner = None
+        self._inner_initialised = False
+
+    def _build_forward_plan(self):
+        try:
+            actor_tf = self._actor.get_transform()
+            actor_loc = actor_tf.location
+            fwd = actor_tf.get_forward_vector()
+        except Exception:
+            return None
+
+        # Reduce base_plan to entries strictly ahead of actor (>0.5m forward)
+        forward_only = []
+        for entry in self._base_plan:
+            try:
+                if hasattr(entry, "transform"):
+                    wp_loc = entry.transform.location
+                elif isinstance(entry, tuple) and hasattr(entry[0], "transform"):
+                    wp_loc = entry[0].transform.location
+                elif hasattr(entry, "x") and hasattr(entry, "y"):
+                    wp_loc = entry
+                else:
+                    continue
+                dx = wp_loc.x - actor_loc.x
+                dy = wp_loc.y - actor_loc.y
+                dot = dx * fwd.x + dy * fwd.y
+                if dot > 0.5:
+                    forward_only.append(entry)
+            except Exception:
+                continue
+
+        if not forward_only:
+            return self._base_plan if self._base_plan else None
+
+        try:
+            carla_map = CarlaDataProvider.get_map()
+        except Exception:
+            carla_map = None
+
+        # Convert anything to (Waypoint, RoadOption) tuples for LocalPlanner
+        normalized = []
+        for entry in forward_only:
+            try:
+                if isinstance(entry, tuple) and hasattr(entry[0], "transform"):
+                    normalized.append(entry)
+                elif hasattr(entry, "transform"):
+                    normalized.append((entry, RoadOption.LANEFOLLOW))
+                elif hasattr(entry, "x") and hasattr(entry, "y") and carla_map is not None:
+                    wp = carla_map.get_waypoint(entry, project_to_road=True, lane_type=carla.LaneType.Driving)
+                    if wp is not None:
+                        normalized.append((wp, RoadOption.LANEFOLLOW))
+            except Exception:
+                continue
+        return normalized if normalized else None
+
+    def initialise(self):
+        super(_DynamicForwardWaypointFollower, self).initialise()
+        forward_plan = self._build_forward_plan()
+        self._inner = WaypointFollower(
+            self._actor,
+            target_speed=self._target_speed,
+            plan=forward_plan,
+            avoid_collision=self._avoid_collision,
+            name=f"{self.name}-inner",
+        )
+        self._inner.setup(0.0)
+        self._inner.initialise()
+        self._inner_initialised = True
+        return True
+
+    def update(self):
+        if not self._inner_initialised or self._inner is None:
+            return py_trees.common.Status.RUNNING
+        return self._inner.update()
+
+    def terminate(self, new_status):
+        try:
+            if self._inner is not None:
+                self._inner.terminate(new_status)
+        except Exception:
+            pass
+        super(_DynamicForwardWaypointFollower, self).terminate(new_status)
+
+
+class _ActorMovedDistance(py_trees.behaviour.Behaviour):
+    """py_trees condition that succeeds once an actor has travelled >= min_distance
+    metres from its position when this behaviour first ticks.
+
+    Replaces a plain Idle(t) as the brake-gate so the trigger can't fire while
+    the NPC is still sitting at spawn (which would happen if TCP hasn't begun
+    driving yet and pacing=true keeps the NPC stationary).
+    """
+
+    def __init__(self, actor, min_distance=3.0, name="ActorMovedDistance"):
+        super(_ActorMovedDistance, self).__init__(name)
+        self._actor = actor
+        self._min = float(min_distance)
+        self._start_loc = None
+        self._last_log = 0
+
+    def update(self):
+        try:
+            loc = CarlaDataProvider.get_location(self._actor) or self._actor.get_location()
+        except Exception:
+            return py_trees.common.Status.RUNNING
+        if loc is None:
+            return py_trees.common.Status.RUNNING
+        if self._start_loc is None:
+            self._start_loc = loc
+            return py_trees.common.Status.RUNNING
+        d = loc.distance(self._start_loc)
+        if d >= self._min:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
+
+
 class StagedWaypointFollower(py_trees.behaviour.Behaviour):
     """Wrapper that delays an actor's movement until its real-world start time.
 
@@ -3015,6 +3183,37 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             seen.add(ego_id)
             actors.append(ego)
 
+        # NEW: optionally include all OTHER vehicles (not just egos) as
+        # "concerned-about" targets. This lets each NPC's guard see other
+        # NPCs as obstacles, so when one NPC slows for ego, the NPCs
+        # behind it also slow naturally (queue formation) instead of
+        # rear-ending the slowed NPC. Gated by env var; default OFF to
+        # preserve existing behavior for callers that don't opt in.
+        if os.environ.get(
+            "CUSTOM_LOG_REPLAY_GUARD_CONSIDER_ALL_VEHICLES", "0",
+        ).lower() in ("1", "true", "yes"):
+            try:
+                world = CarlaDataProvider.get_world()
+                if world is not None:
+                    for v in world.get_actors().filter("vehicle.*"):
+                        try:
+                            vid = int(v.id)
+                        except Exception:  # pylint: disable=broad-except
+                            continue
+                        if self_actor_id is not None and vid == self_actor_id:
+                            continue
+                        if vid in seen:
+                            continue
+                        try:
+                            if hasattr(v, "is_alive") and not bool(v.is_alive):
+                                continue
+                        except Exception:  # pylint: disable=broad-except
+                            pass
+                        seen.add(vid)
+                        actors.append(v)
+            except Exception:  # pylint: disable=broad-except
+                pass
+
         if actors:
             return actors
 
@@ -3094,6 +3293,29 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
         prev_sep = None
         prev_t = 0.0
         ego_radius = float(ego_state["radius"])
+        # Default ON: only flag this ego as a concern when its
+        # projection into the actor's body frame is INSIDE the actor's
+        # forward driving lane. Adjacent-lane traffic (large lateral
+        # offset, small along offset) doesn't actually risk a collision
+        # — the circular distance check otherwise over-fires here and
+        # causes spurious slowdowns + cascade rear-ends.
+        # Set CUSTOM_LOG_REPLAY_GUARD_REQUIRE_IN_PATH=0 to revert to the
+        # purely-circular distance check.
+        require_in_path = os.environ.get(
+            "CUSTOM_LOG_REPLAY_GUARD_REQUIRE_IN_PATH", "1",
+        ).lower() in ("1", "true", "yes")
+        try:
+            in_path_lateral_m = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_IN_PATH_LATERAL_M", "1.6")
+            )
+        except Exception:  # pylint: disable=broad-except
+            in_path_lateral_m = 1.6
+        try:
+            in_path_behind_m = float(
+                os.environ.get("CUSTOM_LOG_REPLAY_GUARD_IN_PATH_BEHIND_M", "1.5")
+            )
+        except Exception:  # pylint: disable=broad-except
+            in_path_behind_m = 1.5
         for idx in range(steps + 1):
             t = min(float(self._guard_horizon_s), float(idx) * float(self._guard_dt_s))
             tau = float(tau_start) + float(replay_rate) * t
@@ -3105,6 +3327,23 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             ey = float(ego_state["y"]) + float(ego_state["vy"]) * t
             dist_xy = math.hypot(ax - ex, ay - ey)
             sep = dist_xy - (float(actor_radius) + float(ego_radius) + float(self._guard_margin_m))
+            if require_in_path:
+                # Project (ego - actor) into actor's body frame
+                actor_yaw_rad = math.radians(float(actor_tf.rotation.yaw))
+                cos_y = math.cos(actor_yaw_rad)
+                sin_y = math.sin(actor_yaw_rad)
+                rel_x = ex - ax
+                rel_y = ey - ay
+                along  = rel_x * cos_y + rel_y * sin_y
+                lateral = -rel_x * sin_y + rel_y * cos_y
+                # Skip if ego is laterally far (different lane) or behind actor
+                # (actor moving away, ego won't be hit by us).
+                if abs(lateral) > in_path_lateral_m or along < -in_path_behind_m:
+                    # Skip this step; reset prev_sep so closing-rate calc in
+                    # the next non-skip iteration doesn't bridge across the gap.
+                    prev_sep = None
+                    prev_t = float(t)
+                    continue
             if sep < min_sep:
                 min_sep = float(sep)
             if sep <= 0.0 and not math.isfinite(min_ttc):
@@ -3365,23 +3604,37 @@ class LogReplayFollower(py_trees.behaviour.Behaviour):
             actor_has_priority = True
             self._priority_state = "actor_vru"
         else:
-            actor_arrival, ego_arrival, _ = self._priority_arrival_times(
-                target_ego_state,
-                float(self._tau_actual),
-            )
+            # Multi-ego priority: actor only has priority if it arrives
+            # first vs ALL egos. If ANY ego has priority, actor yields —
+            # otherwise the non-target ego gets hit while the actor races
+            # past the target ego it "won priority over".
             tie = float(self._guard_priority_tie_margin_s)
-            if float(actor_arrival) + tie < float(ego_arrival):
-                actor_has_priority = True
-            elif float(ego_arrival) + tie < float(actor_arrival):
-                actor_has_priority = False
-            else:
-                actor_has_priority = str(self._priority_state).startswith("actor")
+            actor_has_priority = True
+            for _eid, (_es, _em) in nominal_by_ego.items():
+                _actor_arrival, _ego_arrival, _ = self._priority_arrival_times(
+                    _es, float(self._tau_actual),
+                )
+                if float(_ego_arrival) + tie < float(_actor_arrival):
+                    # This ego arrives clearly first → it has priority → actor must yield.
+                    actor_has_priority = False
+                    break
+                if (not (float(_actor_arrival) + tie < float(_ego_arrival))):
+                    # Tie wrt this ego — fall back to prior state to avoid flicker.
+                    if not str(self._priority_state).startswith("actor"):
+                        actor_has_priority = False
+                        break
             self._priority_state = "actor" if actor_has_priority else "ego"
 
-        desired_risk = self._risk_state_from_metrics(
-            float(target_nominal_metrics.get("min_sep", float("inf"))),
-            float(target_nominal_metrics.get("min_ttc", float("inf"))),
-        )
+        # Multi-ego safety: risk state must reflect the WORST case across
+        # all egos, not just the target ego. Previously this used only
+        # target_nominal_metrics → an actor threatening both egos would
+        # lock onto the closer ego, ignore the farther one, and hit it.
+        worst_min_sep = float(target_nominal_metrics.get("min_sep", float("inf")))
+        worst_min_ttc = float(target_nominal_metrics.get("min_ttc", float("inf")))
+        for _eid, (_es, _em) in nominal_by_ego.items():
+            worst_min_sep = min(worst_min_sep, float(_em.get("min_sep", float("inf"))))
+            worst_min_ttc = min(worst_min_ttc, float(_em.get("min_ttc", float("inf"))))
+        desired_risk = self._risk_state_from_metrics(worst_min_sep, worst_min_ttc)
         self._update_guard_risk_state(desired_risk, float(sim_time))
 
         metrics_by_rate: Dict[float, Dict[str, float]] = {}
@@ -3864,6 +4117,8 @@ from srunner.scenariomanager.scenarioatomics.atomic_behaviors import (
     HandBrakeVehicle,
     TerminateWaypointFollower,
 )
+
+
 from srunner.scenariomanager.timer import GameTime
 from srunner.scenariomanager.scenarioatomics.atomic_trigger_conditions import AtomicCondition, InTriggerDistanceToVehicle
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
@@ -7003,10 +7258,22 @@ class RouteScenario(BasicScenario):
         
         is_vehicle = self._is_vehicle_actor(actor_plan)
         has_distance_trigger = (
-            isinstance(trigger_spec, dict) and 
+            isinstance(trigger_spec, dict) and
             trigger_spec.get("type") == "distance_to_vehicle"
         )
-        needs_catchup = is_vehicle and has_distance_trigger and action_type != "start_motion"
+        # By default we add a speed_callback that paces the NPC to <= 0.98*ego
+        # so it can't outrun the ego before the trigger fires. Scenarios that
+        # need the NPC to drive at a fixed speed regardless of ego (and avoid
+        # the "both stop at trigger+epsilon" deadlock when TCP-like agents
+        # brake on close approach) can set action.pacing=false in
+        # actors_behavior.json.
+        pacing_enabled = True
+        try:
+            if isinstance(action_spec, dict) and action_spec.get("pacing") is False:
+                pacing_enabled = False
+        except Exception:
+            pass
+        needs_catchup = is_vehicle and has_distance_trigger and action_type != "start_motion" and pacing_enabled
         
         effective_speed = target_speed if target_speed is not None else 8.0
         if needs_catchup and ego_actor is not None and actor is not None:
@@ -7083,8 +7350,12 @@ class RouteScenario(BasicScenario):
         resume_plan = plan
         if needs_catchup and has_distance_trigger:
             # Avoid short plans ending before the trigger fires.
+            # NOTE: only nuke follow_plan — the parallel uses SUCCESS_ON_ONE and
+            # would otherwise complete before the trigger if the plan is short.
+            # resume_plan MUST stay populated; with plan=None the resume
+            # WaypointFollower's LocalPlanner never gets set_global_plan and
+            # the actor sits motionless after the 2s handbrake.
             follow_plan = None
-            resume_plan = None
 
         if action_type == "start_motion":
             if trigger_cond is None:
@@ -7123,24 +7394,31 @@ class RouteScenario(BasicScenario):
                 speed_callback=speed_callback,
                 name=f"FollowWaypoints-{actor_plan.get('name')}",
             )
-            
+
             # Brake sequence: wait for combined trigger -> terminate follower -> brake -> handbrake
             brake_seq = py_trees.composites.Sequence(name=f"TriggerBrake-{actor_plan.get('name')}")
             
             if trigger_cond is not None and needs_catchup:
-                # Combined trigger: BOTH minimum drive time AND distance trigger must be satisfied
-                # This prevents immediate triggering if NPC spawns within trigger distance
+                # Combined trigger: NPC must have actually moved >=min_drive_distance
+                # AND the distance trigger condition must be satisfied. Using a
+                # distance-traveled gate instead of a wall-time Idle prevents the
+                # brake from firing at spawn if the ego (and thus the paced NPC)
+                # hasn't actually started driving yet.
                 combined_trigger = py_trees.composites.Parallel(
                     name=f"CombinedTrigger-{actor_plan.get('name')}",
                     policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ALL,
                 )
-                combined_trigger.add_child(Idle(duration=min_drive_time, name=f"MinDriveTime-{actor_plan.get('name')}"))
+                try:
+                    min_drive_distance = float(action_spec.get("min_drive_distance_m", 3.0))
+                except Exception:
+                    min_drive_distance = 3.0
+                combined_trigger.add_child(_ActorMovedDistance(actor, min_distance=min_drive_distance, name=f"NpcMoved-{actor_plan.get('name')}"))
                 combined_trigger.add_child(trigger_cond)
                 brake_seq.add_child(combined_trigger)
             elif trigger_cond is not None:
                 brake_seq.add_child(trigger_cond)
             # else: no trigger, brake immediately
-            
+
             brake_seq.add_child(TerminateWaypointFollower(actor))
             brake_seq.add_child(StopVehicle(actor, brake_value=1.0))
             brake_seq.add_child(HandBrakeVehicle(actor, hand_brake_value=1.0))
@@ -7157,17 +7435,44 @@ class RouteScenario(BasicScenario):
             # Main sequence: parallel (drive+brake) -> wait -> release -> resume driving
             main_seq = py_trees.composites.Sequence(name=f"HardBrakeBehavior-{actor_plan.get('name')}")
             main_seq.add_child(par)
-            # Wait 2 seconds while stopped
-            main_seq.add_child(Idle(duration=2.0, name=f"BrakeWait-{actor_plan.get('name')}"))
-            # Release handbrake
-            main_seq.add_child(HandBrakeVehicle(actor, hand_brake_value=0.0))
-            # Resume driving with a fresh follower so the actor doesn't remain stationary.
-            resume_speed = target_speed if target_speed is not None else effective_speed
+            # Brake hold duration — defaults to 2s, can be overridden via actors_behavior.json
+            # action_spec key "brake_hold_s" (e.g. for hard_brake-then-flee patterns).
+            try:
+                brake_hold_s = float(action_spec.get("brake_hold_s", 2.0))
+            except Exception:
+                brake_hold_s = 2.0
+            main_seq.add_child(Idle(duration=brake_hold_s, name=f"BrakeWait-{actor_plan.get('name')}"))
+            # Release handbrake: do NOT use HandBrakeVehicle(0) here. Its apply_control
+            # mysteriously HANGS after the brake_seq path (StopVehicle ran), causing a
+            # 10s CARLA RPC timeout and scenario crash. _ResetVehicleControl below uses
+            # a FRESH carla.VehicleControl() per tick, which doesn't reproduce the hang.
+            # CRITICAL: explicitly reset brake to 0 before resume. StopVehicle's
+            # auto-clear-brake-on-stop branch is bypassed when par succeeds via
+            # follow_WF's terminate-induced SUCCESS, so br=1.0 stays latched on
+            # the actor. Without this, the resume WaypointFollower's first apply
+            # would have to overcome a stuck brake.
+            main_seq.add_child(_ResetVehicleControl(actor, name=f"BrakeReset-{actor_plan.get('name')}"))
+            # Resume target speed defaults to actor target_speed; override via action_spec
+            # key "resume_speed_mps" (lets NPC sprint away after a brief hard brake so
+            # downstream planners regain forward perception clearance).
+            try:
+                _resume_override = action_spec.get("resume_speed_mps")
+                resume_speed = float(_resume_override) if _resume_override is not None else (target_speed if target_speed is not None else effective_speed)
+            except Exception:
+                resume_speed = target_speed if target_speed is not None else effective_speed
+            # CRITICAL: dynamically build the resume plan from the NPC's actual
+            # position at resume time. Using the original `plan` here causes
+            # CARLA's LocalPlanner to target the FIRST plan waypoint, which is
+            # usually BEHIND the NPC (because the NPC has driven through it
+            # before braking). When the PID target is behind the vehicle, the
+            # LocalPlanner outputs brake=1.0 indefinitely and the NPC never
+            # moves again. _DynamicForwardWaypointFollower waits until first
+            # tick, then builds a new plan starting from current+min_lookahead.
             main_seq.add_child(
-                WaypointFollower(
-                    actor,
+                _DynamicForwardWaypointFollower(
+                    actor=actor,
+                    base_plan=resume_plan,
                     target_speed=resume_speed,
-                    plan=resume_plan,
                     avoid_collision=avoid_collision,
                     name=f"FollowWaypoints-{actor_plan.get('name')}-resume",
                 )
@@ -7483,6 +7788,14 @@ class RouteScenario(BasicScenario):
                         )
 
                     subbehavior.add_child(custom_behavior)
+                    # If the action behavior asked for a persistent NPC
+                    # kinematics logger, plant it as a sibling here so it
+                    # runs in parallel with the action throughout the entire
+                    # scenario (subbehavior never SUCCESSES — has an Idle()
+                    # sentinel — so logger is alive until scenario shutdown).
+                    _npc_logger = actor_plan.pop("_npc_kinematics_logger", None)
+                    if _npc_logger is not None:
+                        subbehavior.add_child(_npc_logger)
 
             scenario_behaviors = []
             blackboard_list = []

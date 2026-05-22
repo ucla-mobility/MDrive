@@ -100,15 +100,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_27_npc.xml",
-      "route_id": "2023-04-05-16-18-26_15_0",
-      "town": "ucla_v2",
-      "name": "27",
-      "kind": "npc",
-      "model": "vehicle.toyota.prius",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_29_npc.xml",
       "route_id": "2023-04-05-16-18-26_15_0",
       "town": "ucla_v2",

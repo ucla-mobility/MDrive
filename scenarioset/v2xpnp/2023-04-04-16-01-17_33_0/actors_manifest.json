@@ -444,15 +444,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_43_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "43",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_44_static.xml",
       "route_id": "2023-04-04-16-01-17_33_0",
       "town": "ucla_v2",
@@ -471,24 +462,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_48_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "48",
-      "kind": "static",
-      "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_53_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "53",
-      "kind": "static",
-      "model": "vehicle.chevrolet.impala",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_56_static.xml",
       "route_id": "2023-04-04-16-01-17_33_0",
       "town": "ucla_v2",
@@ -498,39 +471,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_58_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "58",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_60_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "60",
-      "kind": "static",
-      "model": "vehicle.mercedes.sprinter",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_62_static.xml",
       "route_id": "2023-04-04-16-01-17_33_0",
       "town": "ucla_v2",
       "name": "62",
       "kind": "static",
       "model": "vehicle.mini.cooper_s",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_65_static.xml",
-      "route_id": "2023-04-04-16-01-17_33_0",
-      "town": "ucla_v2",
-      "name": "65",
-      "kind": "static",
-      "model": "vehicle.tesla.model3",
       "control_mode": "replay"
     },
     {

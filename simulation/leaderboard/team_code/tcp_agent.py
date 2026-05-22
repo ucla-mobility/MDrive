@@ -130,16 +130,37 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		self.video_mode = os.environ.get("TCP_VIDEO_MODE", "").lower() in ("1", "true", "yes")
 		# Cinematic CARLA RGB cameras (per-ego). Saved to <save_path>/<id>_<ego>/.
 		# All real photographic captures — no schematics.
-		self.cine_cam_ids = [
+		_all_cine_cam_ids = [
 			'cine_front',     # forward camera over the hood
 			'cine_chase',     # third-person chase, behind & above
 			'cine_side',      # side tracking shot (driver-side profile)
 			'cine_top_close', # real top-down photo, zoomed in (orbital ~30 m)
 			'cine_top_wide',  # real top-down photo, wider context (~120 m)
 		]
+		# Per-run cine camera filter. Pass a comma-separated list via env to
+		# only spawn + save the cameras you need (e.g. when only the patch
+		# editor BEV overlay is the consumer, set
+		# TCP_VID_CINE_CAMS=cine_top_wide,cine_front to skip the chase/side/
+		# top_close sensors entirely — each saved camera adds ~10% per-tick
+		# wall time and ~100MB/scenario of disk).
+		_cine_filter = (os.environ.get("TCP_VID_CINE_CAMS", "") or "").strip()
+		if _cine_filter:
+			_wanted = {c.strip() for c in _cine_filter.split(",") if c.strip()}
+			self.cine_cam_ids = [c for c in _all_cine_cam_ids if c in _wanted]
+			_dropped = sorted(_wanted - set(_all_cine_cam_ids))
+			if _dropped:
+				print(f"[TCP-Vid] unknown TCP_VID_CINE_CAMS entries ignored: {_dropped}",
+				      flush=True)
+			if not self.cine_cam_ids:
+				print(f"[TCP-Vid] TCP_VID_CINE_CAMS={_cine_filter!r} matched no known cameras; "
+				      f"falling back to default set ({','.join(_all_cine_cam_ids)})", flush=True)
+				self.cine_cam_ids = list(_all_cine_cam_ids)
+		else:
+			self.cine_cam_ids = list(_all_cine_cam_ids)
 		if self.video_mode:
-			# Save every agent tick — cinematic-quality is the whole point.
-			self.save_interval = 1
+			# Save every Nth agent tick. Default 1 (= cinematic-quality every tick).
+			# Set TCP_VID_SAVE_INTERVAL=4 to keep ~1 frame every 4 ticks, etc.
+			self.save_interval = _env_int("TCP_VID_SAVE_INTERVAL", 1, minimum=1)
 		self.video_fps = _env_int("TCP_VIDEO_FPS", 20, minimum=1)
 
 		if SAVE_PATH is not None:
@@ -349,7 +370,12 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 		# 5) Real top-down photo, wider context (~120 m high).
 		top_wide_z = _env_float("TCP_VID_TOP_WIDE_Z", 120.0)
 		top_wide_fov = _env_float("TCP_VID_TOP_WIDE_FOV", 50.0)
-		return [
+		# Only spawn the cameras requested via TCP_VID_CINE_CAMS (or all of
+		# them if the user didn't filter). Skipping a sensor here also
+		# skips the agent_wrapper distortion-zeroing pass, the CARLA
+		# server-side allocation, and the per-tick image transfer, so this
+		# is the single biggest control over runtime cost.
+		_all_specs = [
 			{
 				'type': 'sensor.camera.rgb',
 				'x': front_x, 'y': 0.0, 'z': front_z,
@@ -386,6 +412,8 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 				'id': 'cine_top_wide',
 			},
 		]
+		_enabled = set(self.cine_cam_ids)
+		return [s for s in _all_specs if s['id'] in _enabled]
 
 	def tick(self, ego_id, input_data):
 		# self.step += 1
@@ -649,6 +677,18 @@ class TCPAgent(autonomous_agent.AutonomousAgent):
 						self.save_path / f'{cam}_{ego_id}' / frame_name
 					)
 
+		# Record the hero's actual world transform so the patch-editor
+		# replay overlay can place the cine_top_wide BEV crop in CARLA
+		# world coords without having to invert route-planner gps.
+		try:
+			hero_for_pose = CarlaDataProvider.get_hero_actor(hero_id=ego_id)
+			if hero_for_pose is not None:
+				tr = hero_for_pose.get_transform()
+				self.pid_metadata['world_x']       = float(tr.location.x)
+				self.pid_metadata['world_y']       = float(tr.location.y)
+				self.pid_metadata['world_yaw_deg'] = float(tr.rotation.yaw)
+		except Exception:
+			pass
 		outfile = open(self.save_path / 'meta_{}'.format(ego_id) / ('%04d.json' % frame), 'w')
 		json.dump(self.pid_metadata, outfile, indent=4)
 		outfile.close()

@@ -1,0 +1,4004 @@
+{
+  "xodr": "/data2/marco/CoLMDriver/v2xpnp/map/ucla_v2.xodr",
+  "scenarioset": "/data2/marco/CoLMDriver/scenarioset/v2xpnp",
+  "thresholds": {
+    "min_samples": 10,
+    "verify_ratio": 0.8,
+    "agree_tol_deg": 30.0,
+    "opp_tol_deg": 30.0,
+    "min_step_m": 0.3,
+    "wp_max_lateral_m": 3.0
+  },
+  "totals": {
+    "segments_scanned": 72943,
+    "segments_matched": 71723,
+    "segments_no_lane": 1220,
+    "lanes_total": 398,
+    "lanes_trust": 268,
+    "lanes_invert": 7,
+    "lanes_unreliable": 73,
+    "lanes_under_sampled": 50
+  },
+  "lanes": {
+    "1582:-2": {
+      "road_id": 1582,
+      "lane_id": -2,
+      "n_samples": 287,
+      "n_agree": 285,
+      "n_oppose": 2,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.37068516193156
+    },
+    "138:-2": {
+      "road_id": 138,
+      "lane_id": -2,
+      "n_samples": 35,
+      "n_agree": 35,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.96319364014937
+    },
+    "155:-1": {
+      "road_id": 155,
+      "lane_id": -1,
+      "n_samples": 1033,
+      "n_agree": 1032,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.30802548464288
+    },
+    "754:-1": {
+      "road_id": 754,
+      "lane_id": -1,
+      "n_samples": 481,
+      "n_agree": 463,
+      "n_oppose": 0,
+      "n_other": 18,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 100.57387218130367
+    },
+    "1415:-1": {
+      "road_id": 1415,
+      "lane_id": -1,
+      "n_samples": 39,
+      "n_agree": 14,
+      "n_oppose": 0,
+      "n_other": 25,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1420:-1": {
+      "road_id": 1420,
+      "lane_id": -1,
+      "n_samples": 157,
+      "n_agree": 114,
+      "n_oppose": 0,
+      "n_other": 43,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1408:-1": {
+      "road_id": 1408,
+      "lane_id": -1,
+      "n_samples": 58,
+      "n_agree": 42,
+      "n_oppose": 4,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "44:2": {
+      "road_id": 44,
+      "lane_id": 2,
+      "n_samples": 826,
+      "n_agree": 823,
+      "n_oppose": 2,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 0.4886890155887502
+    },
+    "1165:1": {
+      "road_id": 1165,
+      "lane_id": 1,
+      "n_samples": 2172,
+      "n_agree": 1609,
+      "n_oppose": 68,
+      "n_other": 495,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1156:1": {
+      "road_id": 1156,
+      "lane_id": 1,
+      "n_samples": 717,
+      "n_agree": 709,
+      "n_oppose": 3,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -19.365094072884215
+    },
+    "38:-1": {
+      "road_id": 38,
+      "lane_id": -1,
+      "n_samples": 2364,
+      "n_agree": 2336,
+      "n_oppose": 3,
+      "n_other": 25,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -1.715307484988286
+    },
+    "98:4": {
+      "road_id": 98,
+      "lane_id": 4,
+      "n_samples": 136,
+      "n_agree": 74,
+      "n_oppose": 57,
+      "n_other": 5,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1417:1": {
+      "road_id": 1417,
+      "lane_id": 1,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.00305037263884
+    },
+    "1450:-1": {
+      "road_id": 1450,
+      "lane_id": -1,
+      "n_samples": 44,
+      "n_agree": 44,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -58.63058517242843
+    },
+    "150:2": {
+      "road_id": 150,
+      "lane_id": 2,
+      "n_samples": 102,
+      "n_agree": 102,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.58600333005906
+    },
+    "38:2": {
+      "road_id": 38,
+      "lane_id": 2,
+      "n_samples": 2641,
+      "n_agree": 2636,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 179.74263792060916
+    },
+    "770:1": {
+      "road_id": 770,
+      "lane_id": 1,
+      "n_samples": 63,
+      "n_agree": 63,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -23.612948622952036
+    },
+    "755:-1": {
+      "road_id": 755,
+      "lane_id": -1,
+      "n_samples": 41,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 25,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "753:-1": {
+      "road_id": 753,
+      "lane_id": -1,
+      "n_samples": 407,
+      "n_agree": 383,
+      "n_oppose": 0,
+      "n_other": 24,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 100.82786725970911
+    },
+    "757:1": {
+      "road_id": 757,
+      "lane_id": 1,
+      "n_samples": 191,
+      "n_agree": 191,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.81967616866969
+    },
+    "155:2": {
+      "road_id": 155,
+      "lane_id": 2,
+      "n_samples": 192,
+      "n_agree": 185,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.69779017028593
+    },
+    "155:3": {
+      "road_id": 155,
+      "lane_id": 3,
+      "n_samples": 477,
+      "n_agree": 472,
+      "n_oppose": 1,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.33081675355261
+    },
+    "1593:3": {
+      "road_id": 1593,
+      "lane_id": 3,
+      "n_samples": 288,
+      "n_agree": 288,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.14902118331572
+    },
+    "24:2": {
+      "road_id": 24,
+      "lane_id": 2,
+      "n_samples": 586,
+      "n_agree": 575,
+      "n_oppose": 11,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.70249487515476
+    },
+    "1413:-1": {
+      "road_id": 1413,
+      "lane_id": -1,
+      "n_samples": 28,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 19,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1406:1": {
+      "road_id": 1406,
+      "lane_id": 1,
+      "n_samples": 41,
+      "n_agree": 4,
+      "n_oppose": 8,
+      "n_other": 29,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1410:1": {
+      "road_id": 1410,
+      "lane_id": 1,
+      "n_samples": 30,
+      "n_agree": 0,
+      "n_oppose": 2,
+      "n_other": 28,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1395:-1": {
+      "road_id": 1395,
+      "lane_id": -1,
+      "n_samples": 41,
+      "n_agree": 25,
+      "n_oppose": 0,
+      "n_other": 16,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "150:3": {
+      "road_id": 150,
+      "lane_id": 3,
+      "n_samples": 405,
+      "n_agree": 401,
+      "n_oppose": 4,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.90699608152767
+    },
+    "150:4": {
+      "road_id": 150,
+      "lane_id": 4,
+      "n_samples": 427,
+      "n_agree": 423,
+      "n_oppose": 4,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.53890317431814
+    },
+    "20:-4": {
+      "road_id": 20,
+      "lane_id": -4,
+      "n_samples": 371,
+      "n_agree": 350,
+      "n_oppose": 4,
+      "n_other": 17,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 100.74047419075906
+    },
+    "20:-3": {
+      "road_id": 20,
+      "lane_id": -3,
+      "n_samples": 906,
+      "n_agree": 870,
+      "n_oppose": 7,
+      "n_other": 29,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 102.07943799783881
+    },
+    "154:-2": {
+      "road_id": 154,
+      "lane_id": -2,
+      "n_samples": 772,
+      "n_agree": 763,
+      "n_oppose": 3,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.69098709836332
+    },
+    "1594:-2": {
+      "road_id": 1594,
+      "lane_id": -2,
+      "n_samples": 471,
+      "n_agree": 466,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.41630888525431
+    },
+    "1595:1": {
+      "road_id": 1595,
+      "lane_id": 1,
+      "n_samples": 213,
+      "n_agree": 63,
+      "n_oppose": 0,
+      "n_other": 150,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "155:-2": {
+      "road_id": 155,
+      "lane_id": -2,
+      "n_samples": 921,
+      "n_agree": 920,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.27739155528016
+    },
+    "756:1": {
+      "road_id": 756,
+      "lane_id": 1,
+      "n_samples": 306,
+      "n_agree": 306,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -85.08551057267357
+    },
+    "758:1": {
+      "road_id": 758,
+      "lane_id": 1,
+      "n_samples": 204,
+      "n_agree": 204,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.84456623946018
+    },
+    "155:4": {
+      "road_id": 155,
+      "lane_id": 4,
+      "n_samples": 771,
+      "n_agree": 770,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.1292213719786
+    },
+    "23:2": {
+      "road_id": 23,
+      "lane_id": 2,
+      "n_samples": 302,
+      "n_agree": 296,
+      "n_oppose": 1,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.10107787967871
+    },
+    "1109:1": {
+      "road_id": 1109,
+      "lane_id": 1,
+      "n_samples": 466,
+      "n_agree": 452,
+      "n_oppose": 2,
+      "n_other": 12,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.49320035814708
+    },
+    "1163:1": {
+      "road_id": 1163,
+      "lane_id": 1,
+      "n_samples": 2667,
+      "n_agree": 1848,
+      "n_oppose": 67,
+      "n_other": 752,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1133:1": {
+      "road_id": 1133,
+      "lane_id": 1,
+      "n_samples": 1056,
+      "n_agree": 842,
+      "n_oppose": 11,
+      "n_other": 203,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "42:-1": {
+      "road_id": 42,
+      "lane_id": -1,
+      "n_samples": 57,
+      "n_agree": 44,
+      "n_oppose": 9,
+      "n_other": 4,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "461:-1": {
+      "road_id": 461,
+      "lane_id": -1,
+      "n_samples": 97,
+      "n_agree": 88,
+      "n_oppose": 7,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -1.0493338712275726
+    },
+    "468:-1": {
+      "road_id": 468,
+      "lane_id": -1,
+      "n_samples": 207,
+      "n_agree": 173,
+      "n_oppose": 6,
+      "n_other": 28,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 27.802234920148127
+    },
+    "43:-1": {
+      "road_id": 43,
+      "lane_id": -1,
+      "n_samples": 522,
+      "n_agree": 517,
+      "n_oppose": 4,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 0.9813908703187368
+    },
+    "43:1": {
+      "road_id": 43,
+      "lane_id": 1,
+      "n_samples": 179,
+      "n_agree": 67,
+      "n_oppose": 112,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "142:1": {
+      "road_id": 142,
+      "lane_id": 1,
+      "n_samples": 367,
+      "n_agree": 360,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 6.746755857425147
+    },
+    "79:1": {
+      "road_id": 79,
+      "lane_id": 1,
+      "n_samples": 298,
+      "n_agree": 278,
+      "n_oppose": 0,
+      "n_other": 20,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 3.946447430976423
+    },
+    "79:2": {
+      "road_id": 79,
+      "lane_id": 2,
+      "n_samples": 214,
+      "n_agree": 198,
+      "n_oppose": 2,
+      "n_other": 14,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 4.449396383352439
+    },
+    "20:4": {
+      "road_id": 20,
+      "lane_id": 4,
+      "n_samples": 348,
+      "n_agree": 345,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -73.33425620767986
+    },
+    "1593:2": {
+      "road_id": 1593,
+      "lane_id": 2,
+      "n_samples": 62,
+      "n_agree": 57,
+      "n_oppose": 5,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.60263088258647
+    },
+    "154:2": {
+      "road_id": 154,
+      "lane_id": 2,
+      "n_samples": 234,
+      "n_agree": 203,
+      "n_oppose": 31,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.56749601988015
+    },
+    "20:1": {
+      "road_id": 20,
+      "lane_id": 1,
+      "n_samples": 454,
+      "n_agree": 429,
+      "n_oppose": 10,
+      "n_other": 15,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -76.13521029470948
+    },
+    "154:3": {
+      "road_id": 154,
+      "lane_id": 3,
+      "n_samples": 497,
+      "n_agree": 482,
+      "n_oppose": 1,
+      "n_other": 14,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.27952432397255
+    },
+    "20:2": {
+      "road_id": 20,
+      "lane_id": 2,
+      "n_samples": 585,
+      "n_agree": 544,
+      "n_oppose": 14,
+      "n_other": 27,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -76.29896366190933
+    },
+    "460:1": {
+      "road_id": 460,
+      "lane_id": 1,
+      "n_samples": 126,
+      "n_agree": 112,
+      "n_oppose": 8,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 179.83230136892783
+    },
+    "42:1": {
+      "road_id": 42,
+      "lane_id": 1,
+      "n_samples": 238,
+      "n_agree": 229,
+      "n_oppose": 0,
+      "n_other": 9,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 177.3046089181574
+    },
+    "1468:1": {
+      "road_id": 1468,
+      "lane_id": 1,
+      "n_samples": 478,
+      "n_agree": 470,
+      "n_oppose": 0,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 179.15425052027342
+    },
+    "1469:1": {
+      "road_id": 1469,
+      "lane_id": 1,
+      "n_samples": 261,
+      "n_agree": 187,
+      "n_oppose": 2,
+      "n_other": 72,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1582:-3": {
+      "road_id": 1582,
+      "lane_id": -3,
+      "n_samples": 177,
+      "n_agree": 177,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.54946037113012
+    },
+    "1145:1": {
+      "road_id": 1145,
+      "lane_id": 1,
+      "n_samples": 142,
+      "n_agree": 129,
+      "n_oppose": 3,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 63.237318974738976
+    },
+    "1593:4": {
+      "road_id": 1593,
+      "lane_id": 4,
+      "n_samples": 576,
+      "n_agree": 575,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.47684485224225
+    },
+    "154:4": {
+      "road_id": 154,
+      "lane_id": 4,
+      "n_samples": 786,
+      "n_agree": 776,
+      "n_oppose": 1,
+      "n_other": 9,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.65339850731671
+    },
+    "20:3": {
+      "road_id": 20,
+      "lane_id": 3,
+      "n_samples": 515,
+      "n_agree": 496,
+      "n_oppose": 0,
+      "n_other": 19,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -74.30073041032658
+    },
+    "79:-1": {
+      "road_id": 79,
+      "lane_id": -1,
+      "n_samples": 600,
+      "n_agree": 597,
+      "n_oppose": 2,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -178.10950982667734
+    },
+    "142:-1": {
+      "road_id": 142,
+      "lane_id": -1,
+      "n_samples": 1163,
+      "n_agree": 1151,
+      "n_oppose": 5,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -172.93349057776265
+    },
+    "1110:1": {
+      "road_id": 1110,
+      "lane_id": 1,
+      "n_samples": 251,
+      "n_agree": 220,
+      "n_oppose": 0,
+      "n_other": 31,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.65986619966058
+    },
+    "38:-2": {
+      "road_id": 38,
+      "lane_id": -2,
+      "n_samples": 129,
+      "n_agree": 112,
+      "n_oppose": 0,
+      "n_other": 17,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -0.8429923438046572
+    },
+    "1467:-2": {
+      "road_id": 1467,
+      "lane_id": -2,
+      "n_samples": 227,
+      "n_agree": 211,
+      "n_oppose": 4,
+      "n_other": 12,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -0.01619482043050276
+    },
+    "1161:1": {
+      "road_id": 1161,
+      "lane_id": 1,
+      "n_samples": 1222,
+      "n_agree": 904,
+      "n_oppose": 145,
+      "n_other": 173,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1457:1": {
+      "road_id": 1457,
+      "lane_id": 1,
+      "n_samples": 103,
+      "n_agree": 1,
+      "n_oppose": 3,
+      "n_other": 99,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "154:5": {
+      "road_id": 154,
+      "lane_id": 5,
+      "n_samples": 111,
+      "n_agree": 107,
+      "n_oppose": 2,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -80.52484990936655
+    },
+    "133:3": {
+      "road_id": 133,
+      "lane_id": 3,
+      "n_samples": 179,
+      "n_agree": 167,
+      "n_oppose": 1,
+      "n_other": 11,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.2822476022829
+    },
+    "133:-2": {
+      "road_id": 133,
+      "lane_id": -2,
+      "n_samples": 69,
+      "n_agree": 66,
+      "n_oppose": 2,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -85.61584833727603
+    },
+    "133:4": {
+      "road_id": 133,
+      "lane_id": 4,
+      "n_samples": 228,
+      "n_agree": 224,
+      "n_oppose": 2,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.40729169246211
+    },
+    "1121:1": {
+      "road_id": 1121,
+      "lane_id": 1,
+      "n_samples": 299,
+      "n_agree": 281,
+      "n_oppose": 1,
+      "n_other": 17,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 118.39095719137792
+    },
+    "1108:1": {
+      "road_id": 1108,
+      "lane_id": 1,
+      "n_samples": 179,
+      "n_agree": 168,
+      "n_oppose": 4,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.61287970445824
+    },
+    "1117:1": {
+      "road_id": 1117,
+      "lane_id": 1,
+      "n_samples": 202,
+      "n_agree": 118,
+      "n_oppose": 46,
+      "n_other": 38,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "154:-3": {
+      "road_id": 154,
+      "lane_id": -3,
+      "n_samples": 129,
+      "n_agree": 126,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.1097486315214
+    },
+    "1586:-1": {
+      "road_id": 1586,
+      "lane_id": -1,
+      "n_samples": 52,
+      "n_agree": 45,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 127.31431306745027
+    },
+    "1594:-3": {
+      "road_id": 1594,
+      "lane_id": -3,
+      "n_samples": 29,
+      "n_agree": 23,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1681:-1": {
+      "road_id": 1681,
+      "lane_id": -1,
+      "n_samples": 168,
+      "n_agree": 167,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -177.51113134939806
+    },
+    "1674:-1": {
+      "road_id": 1674,
+      "lane_id": -1,
+      "n_samples": 55,
+      "n_agree": 32,
+      "n_oppose": 0,
+      "n_other": 23,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "143:-1": {
+      "road_id": 143,
+      "lane_id": -1,
+      "n_samples": 150,
+      "n_agree": 134,
+      "n_oppose": 0,
+      "n_other": 16,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 176.13680439214576
+    },
+    "137:3": {
+      "road_id": 137,
+      "lane_id": 3,
+      "n_samples": 331,
+      "n_agree": 297,
+      "n_oppose": 7,
+      "n_other": 27,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.55238377671802
+    },
+    "83:3": {
+      "road_id": 83,
+      "lane_id": 3,
+      "n_samples": 266,
+      "n_agree": 257,
+      "n_oppose": 1,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.54790876774983
+    },
+    "1114:1": {
+      "road_id": 1114,
+      "lane_id": 1,
+      "n_samples": 511,
+      "n_agree": 483,
+      "n_oppose": 14,
+      "n_other": 14,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.96205234583192
+    },
+    "42:-2": {
+      "road_id": 42,
+      "lane_id": -2,
+      "n_samples": 91,
+      "n_agree": 87,
+      "n_oppose": 2,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -2.8755856607857044
+    },
+    "461:-2": {
+      "road_id": 461,
+      "lane_id": -2,
+      "n_samples": 40,
+      "n_agree": 40,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -3.461819821396929
+    },
+    "1467:-1": {
+      "road_id": 1467,
+      "lane_id": -1,
+      "n_samples": 216,
+      "n_agree": 215,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -2.104466314451596
+    },
+    "1461:1": {
+      "road_id": 1461,
+      "lane_id": 1,
+      "n_samples": 70,
+      "n_agree": 28,
+      "n_oppose": 0,
+      "n_other": 42,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "678:-1": {
+      "road_id": 678,
+      "lane_id": -1,
+      "n_samples": 220,
+      "n_agree": 198,
+      "n_oppose": 0,
+      "n_other": 22,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 173.07911038639298
+    },
+    "1127:1": {
+      "road_id": 1127,
+      "lane_id": 1,
+      "n_samples": 431,
+      "n_agree": 394,
+      "n_oppose": 18,
+      "n_other": 19,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 73.08249608835571
+    },
+    "1685:-1": {
+      "road_id": 1685,
+      "lane_id": -1,
+      "n_samples": 31,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 22,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "110:1": {
+      "road_id": 110,
+      "lane_id": 1,
+      "n_samples": 4,
+      "n_agree": 4,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "50:-4": {
+      "road_id": 50,
+      "lane_id": -4,
+      "n_samples": 3,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "50:-3": {
+      "road_id": 50,
+      "lane_id": -3,
+      "n_samples": 4,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "674:-3": {
+      "road_id": 674,
+      "lane_id": -3,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "223:-2": {
+      "road_id": 223,
+      "lane_id": -2,
+      "n_samples": 228,
+      "n_agree": 204,
+      "n_oppose": 21,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.12727748286453
+    },
+    "24:-2": {
+      "road_id": 24,
+      "lane_id": -2,
+      "n_samples": 338,
+      "n_agree": 300,
+      "n_oppose": 38,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -85.02013892616125
+    },
+    "77:1": {
+      "road_id": 77,
+      "lane_id": 1,
+      "n_samples": 47,
+      "n_agree": 0,
+      "n_oppose": 44,
+      "n_other": 3,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": 48.76040245292449
+    },
+    "77:-1": {
+      "road_id": 77,
+      "lane_id": -1,
+      "n_samples": 19,
+      "n_agree": 8,
+      "n_oppose": 6,
+      "n_other": 5,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1102:-1": {
+      "road_id": 1102,
+      "lane_id": -1,
+      "n_samples": 6,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "27:-1": {
+      "road_id": 27,
+      "lane_id": -1,
+      "n_samples": 2,
+      "n_agree": 2,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "133:-1": {
+      "road_id": 133,
+      "lane_id": -1,
+      "n_samples": 257,
+      "n_agree": 256,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.43005480820756
+    },
+    "83:-2": {
+      "road_id": 83,
+      "lane_id": -2,
+      "n_samples": 216,
+      "n_agree": 208,
+      "n_oppose": 1,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.10430685716155
+    },
+    "137:-2": {
+      "road_id": 137,
+      "lane_id": -2,
+      "n_samples": 365,
+      "n_agree": 359,
+      "n_oppose": 3,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.05590938100302
+    },
+    "137:-3": {
+      "road_id": 137,
+      "lane_id": -3,
+      "n_samples": 169,
+      "n_agree": 168,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.61137260011631
+    },
+    "138:-3": {
+      "road_id": 138,
+      "lane_id": -3,
+      "n_samples": 23,
+      "n_agree": 23,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.11207271813511
+    },
+    "132:-3": {
+      "road_id": 132,
+      "lane_id": -3,
+      "n_samples": 66,
+      "n_agree": 65,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.00987519775244
+    },
+    "1649:-3": {
+      "road_id": 1649,
+      "lane_id": -3,
+      "n_samples": 232,
+      "n_agree": 230,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.56581357065919
+    },
+    "23:-3": {
+      "road_id": 23,
+      "lane_id": -3,
+      "n_samples": 127,
+      "n_agree": 124,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.4976836296068
+    },
+    "223:-3": {
+      "road_id": 223,
+      "lane_id": -3,
+      "n_samples": 172,
+      "n_agree": 169,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -85.39638867509413
+    },
+    "1125:1": {
+      "road_id": 1125,
+      "lane_id": 1,
+      "n_samples": 214,
+      "n_agree": 205,
+      "n_oppose": 2,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -159.28097453960882
+    },
+    "28:-2": {
+      "road_id": 28,
+      "lane_id": -2,
+      "n_samples": 10,
+      "n_agree": 10,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 53.57533621598115
+    },
+    "1582:-1": {
+      "road_id": 1582,
+      "lane_id": -1,
+      "n_samples": 78,
+      "n_agree": 78,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.5530476181365
+    },
+    "138:-1": {
+      "road_id": 138,
+      "lane_id": -1,
+      "n_samples": 8,
+      "n_agree": 8,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "132:-1": {
+      "road_id": 132,
+      "lane_id": -1,
+      "n_samples": 26,
+      "n_agree": 25,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.77199883860352
+    },
+    "28:1": {
+      "road_id": 28,
+      "lane_id": 1,
+      "n_samples": 9,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "28:2": {
+      "road_id": 28,
+      "lane_id": 2,
+      "n_samples": 4,
+      "n_agree": 4,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "224:2": {
+      "road_id": 224,
+      "lane_id": 2,
+      "n_samples": 354,
+      "n_agree": 344,
+      "n_oppose": 4,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.2969325140317
+    },
+    "224:3": {
+      "road_id": 224,
+      "lane_id": 3,
+      "n_samples": 198,
+      "n_agree": 93,
+      "n_oppose": 41,
+      "n_other": 64,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "23:3": {
+      "road_id": 23,
+      "lane_id": 3,
+      "n_samples": 78,
+      "n_agree": 72,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.25274032663566
+    },
+    "95:3": {
+      "road_id": 95,
+      "lane_id": 3,
+      "n_samples": 20,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 107.03201060599513
+    },
+    "1635:1": {
+      "road_id": 1635,
+      "lane_id": 1,
+      "n_samples": 291,
+      "n_agree": 189,
+      "n_oppose": 0,
+      "n_other": 102,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "27:2": {
+      "road_id": 27,
+      "lane_id": 2,
+      "n_samples": 19,
+      "n_agree": 19,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -135.65271069709067
+    },
+    "27:1": {
+      "road_id": 27,
+      "lane_id": 1,
+      "n_samples": 24,
+      "n_agree": 24,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -132.1248378053666
+    },
+    "1695:-1": {
+      "road_id": 1695,
+      "lane_id": -1,
+      "n_samples": 3,
+      "n_agree": 2,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1693:1": {
+      "road_id": 1693,
+      "lane_id": 1,
+      "n_samples": 11,
+      "n_agree": 6,
+      "n_oppose": 1,
+      "n_other": 4,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "35:1": {
+      "road_id": 35,
+      "lane_id": 1,
+      "n_samples": 3,
+      "n_agree": 3,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1092:1": {
+      "road_id": 1092,
+      "lane_id": 1,
+      "n_samples": 9,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "38:1": {
+      "road_id": 38,
+      "lane_id": 1,
+      "n_samples": 895,
+      "n_agree": 871,
+      "n_oppose": 14,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 178.55038294689643
+    },
+    "132:-2": {
+      "road_id": 132,
+      "lane_id": -2,
+      "n_samples": 65,
+      "n_agree": 65,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.46736272412312
+    },
+    "1649:-2": {
+      "road_id": 1649,
+      "lane_id": -2,
+      "n_samples": 220,
+      "n_agree": 210,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -83.45291148775796
+    },
+    "95:-2": {
+      "road_id": 95,
+      "lane_id": -2,
+      "n_samples": 8,
+      "n_agree": 8,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "23:-2": {
+      "road_id": 23,
+      "lane_id": -2,
+      "n_samples": 131,
+      "n_agree": 119,
+      "n_oppose": 2,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.24980514925161
+    },
+    "1094:-1": {
+      "road_id": 1094,
+      "lane_id": -1,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -1.1077635784329078
+    },
+    "1030:1": {
+      "road_id": 1030,
+      "lane_id": 1,
+      "n_samples": 288,
+      "n_agree": 256,
+      "n_oppose": 1,
+      "n_other": 31,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 85.16591607120354
+    },
+    "1035:1": {
+      "road_id": 1035,
+      "lane_id": 1,
+      "n_samples": 96,
+      "n_agree": 68,
+      "n_oppose": 3,
+      "n_other": 25,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1070:-1": {
+      "road_id": 1070,
+      "lane_id": -1,
+      "n_samples": 66,
+      "n_agree": 59,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -119.45452916790018
+    },
+    "1051:1": {
+      "road_id": 1051,
+      "lane_id": 1,
+      "n_samples": 53,
+      "n_agree": 40,
+      "n_oppose": 0,
+      "n_other": 13,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1064:-1": {
+      "road_id": 1064,
+      "lane_id": -1,
+      "n_samples": 43,
+      "n_agree": 39,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.640195400278
+    },
+    "1058:-1": {
+      "road_id": 1058,
+      "lane_id": -1,
+      "n_samples": 50,
+      "n_agree": 38,
+      "n_oppose": 0,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "158:-3": {
+      "road_id": 158,
+      "lane_id": -3,
+      "n_samples": 41,
+      "n_agree": 41,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 1.1020629831536324
+    },
+    "1077:-1": {
+      "road_id": 1077,
+      "lane_id": -1,
+      "n_samples": 102,
+      "n_agree": 95,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 62.169392878013745
+    },
+    "24:3": {
+      "road_id": 24,
+      "lane_id": 3,
+      "n_samples": 83,
+      "n_agree": 82,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.81674166092898
+    },
+    "137:-1": {
+      "road_id": 137,
+      "lane_id": -1,
+      "n_samples": 290,
+      "n_agree": 264,
+      "n_oppose": 26,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.73086541195539
+    },
+    "1570:-1": {
+      "road_id": 1570,
+      "lane_id": -1,
+      "n_samples": 107,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 101,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "83:-1": {
+      "road_id": 83,
+      "lane_id": -1,
+      "n_samples": 201,
+      "n_agree": 184,
+      "n_oppose": 5,
+      "n_other": 12,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.89584146668022
+    },
+    "1099:1": {
+      "road_id": 1099,
+      "lane_id": 1,
+      "n_samples": 45,
+      "n_agree": 27,
+      "n_oppose": 0,
+      "n_other": 18,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "24:-3": {
+      "road_id": 24,
+      "lane_id": -3,
+      "n_samples": 439,
+      "n_agree": 438,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.96375170872419
+    },
+    "95:-3": {
+      "road_id": 95,
+      "lane_id": -3,
+      "n_samples": 7,
+      "n_agree": 7,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "20:-2": {
+      "road_id": 20,
+      "lane_id": -2,
+      "n_samples": 471,
+      "n_agree": 434,
+      "n_oppose": 19,
+      "n_other": 18,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.9266502025655
+    },
+    "154:-1": {
+      "road_id": 154,
+      "lane_id": -1,
+      "n_samples": 641,
+      "n_agree": 638,
+      "n_oppose": 1,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.46974155546366
+    },
+    "1594:-1": {
+      "road_id": 1594,
+      "lane_id": -1,
+      "n_samples": 423,
+      "n_agree": 414,
+      "n_oppose": 1,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.79792368554124
+    },
+    "44:-1": {
+      "road_id": 44,
+      "lane_id": -1,
+      "n_samples": 1451,
+      "n_agree": 1442,
+      "n_oppose": 9,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -179.44629218270015
+    },
+    "95:2": {
+      "road_id": 95,
+      "lane_id": 2,
+      "n_samples": 24,
+      "n_agree": 24,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 99.07158267189163
+    },
+    "1658:-1": {
+      "road_id": 1658,
+      "lane_id": -1,
+      "n_samples": 206,
+      "n_agree": 40,
+      "n_oppose": 6,
+      "n_other": 160,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1650:2": {
+      "road_id": 1650,
+      "lane_id": 2,
+      "n_samples": 191,
+      "n_agree": 177,
+      "n_oppose": 2,
+      "n_other": 12,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.24373744435516
+    },
+    "132:2": {
+      "road_id": 132,
+      "lane_id": 2,
+      "n_samples": 83,
+      "n_agree": 83,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.93256295692804
+    },
+    "138:2": {
+      "road_id": 138,
+      "lane_id": 2,
+      "n_samples": 41,
+      "n_agree": 39,
+      "n_oppose": 2,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 94.45200333336686
+    },
+    "1581:2": {
+      "road_id": 1581,
+      "lane_id": 2,
+      "n_samples": 308,
+      "n_agree": 282,
+      "n_oppose": 15,
+      "n_other": 11,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.75179176114858
+    },
+    "137:2": {
+      "road_id": 137,
+      "lane_id": 2,
+      "n_samples": 527,
+      "n_agree": 515,
+      "n_oppose": 6,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.64046476554013
+    },
+    "83:2": {
+      "road_id": 83,
+      "lane_id": 2,
+      "n_samples": 281,
+      "n_agree": 275,
+      "n_oppose": 1,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 94.97439930713175
+    },
+    "132:3": {
+      "road_id": 132,
+      "lane_id": 3,
+      "n_samples": 64,
+      "n_agree": 64,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 104.13334893992007
+    },
+    "138:3": {
+      "road_id": 138,
+      "lane_id": 3,
+      "n_samples": 28,
+      "n_agree": 28,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.5931187363412
+    },
+    "1576:1": {
+      "road_id": 1576,
+      "lane_id": 1,
+      "n_samples": 56,
+      "n_agree": 44,
+      "n_oppose": 0,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1581:3": {
+      "road_id": 1581,
+      "lane_id": 3,
+      "n_samples": 172,
+      "n_agree": 155,
+      "n_oppose": 1,
+      "n_other": 16,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.72825350118198
+    },
+    "1650:1": {
+      "road_id": 1650,
+      "lane_id": 1,
+      "n_samples": 275,
+      "n_agree": 255,
+      "n_oppose": 0,
+      "n_other": 20,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.23295994958113
+    },
+    "76:5": {
+      "road_id": 76,
+      "lane_id": 5,
+      "n_samples": 97,
+      "n_agree": 95,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -178.6512572498405
+    },
+    "150:-2": {
+      "road_id": 150,
+      "lane_id": -2,
+      "n_samples": 458,
+      "n_agree": 447,
+      "n_oppose": 0,
+      "n_other": 11,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 91.31862900652338
+    },
+    "150:-3": {
+      "road_id": 150,
+      "lane_id": -3,
+      "n_samples": 203,
+      "n_agree": 198,
+      "n_oppose": 2,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 91.2085217656822
+    },
+    "83:1": {
+      "road_id": 83,
+      "lane_id": 1,
+      "n_samples": 154,
+      "n_agree": 154,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.86370396899098
+    },
+    "133:2": {
+      "road_id": 133,
+      "lane_id": 2,
+      "n_samples": 278,
+      "n_agree": 260,
+      "n_oppose": 9,
+      "n_other": 9,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 94.73256925339702
+    },
+    "83:-3": {
+      "road_id": 83,
+      "lane_id": -3,
+      "n_samples": 64,
+      "n_agree": 62,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.47516948526469
+    },
+    "83:4": {
+      "road_id": 83,
+      "lane_id": 4,
+      "n_samples": 75,
+      "n_agree": 65,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.41499328673494
+    },
+    "107:3": {
+      "road_id": 107,
+      "lane_id": 3,
+      "n_samples": 244,
+      "n_agree": 234,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 107.88681856532448
+    },
+    "107:4": {
+      "road_id": 107,
+      "lane_id": 4,
+      "n_samples": 122,
+      "n_agree": 96,
+      "n_oppose": 7,
+      "n_other": 19,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "771:1": {
+      "road_id": 771,
+      "lane_id": 1,
+      "n_samples": 11,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 71.71279018841199
+    },
+    "1581:1": {
+      "road_id": 1581,
+      "lane_id": 1,
+      "n_samples": 175,
+      "n_agree": 170,
+      "n_oppose": 4,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.24709659205733
+    },
+    "150:-1": {
+      "road_id": 150,
+      "lane_id": -1,
+      "n_samples": 531,
+      "n_agree": 525,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 88.64485944993442
+    },
+    "0:1": {
+      "road_id": 0,
+      "lane_id": 1,
+      "n_samples": 10,
+      "n_agree": 10,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 91.4716791357226
+    },
+    "1422:1": {
+      "road_id": 1422,
+      "lane_id": 1,
+      "n_samples": 59,
+      "n_agree": 56,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.90754517311935
+    },
+    "1389:1": {
+      "road_id": 1389,
+      "lane_id": 1,
+      "n_samples": 40,
+      "n_agree": 31,
+      "n_oppose": 0,
+      "n_other": 9,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "195:1": {
+      "road_id": 195,
+      "lane_id": 1,
+      "n_samples": 21,
+      "n_agree": 21,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -145.18415304104192
+    },
+    "184:-1": {
+      "road_id": 184,
+      "lane_id": -1,
+      "n_samples": 12,
+      "n_agree": 12,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -132.14258191250633
+    },
+    "135:1": {
+      "road_id": 135,
+      "lane_id": 1,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -136.63917367299783
+    },
+    "24:1": {
+      "road_id": 24,
+      "lane_id": 1,
+      "n_samples": 260,
+      "n_agree": 260,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.9865342620728
+    },
+    "224:1": {
+      "road_id": 224,
+      "lane_id": 1,
+      "n_samples": 145,
+      "n_agree": 140,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.94571654784424
+    },
+    "23:1": {
+      "road_id": 23,
+      "lane_id": 1,
+      "n_samples": 163,
+      "n_agree": 163,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.78188564184079
+    },
+    "95:1": {
+      "road_id": 95,
+      "lane_id": 1,
+      "n_samples": 14,
+      "n_agree": 13,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.95376321089941
+    },
+    "132:1": {
+      "road_id": 132,
+      "lane_id": 1,
+      "n_samples": 77,
+      "n_agree": 77,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.39132168999919
+    },
+    "138:1": {
+      "road_id": 138,
+      "lane_id": 1,
+      "n_samples": 41,
+      "n_agree": 41,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 96.86152392609984
+    },
+    "137:1": {
+      "road_id": 137,
+      "lane_id": 1,
+      "n_samples": 400,
+      "n_agree": 390,
+      "n_oppose": 4,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.46029022079365
+    },
+    "38:3": {
+      "road_id": 38,
+      "lane_id": 3,
+      "n_samples": 482,
+      "n_agree": 471,
+      "n_oppose": 11,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -179.86874463359203
+    },
+    "133:-3": {
+      "road_id": 133,
+      "lane_id": -3,
+      "n_samples": 17,
+      "n_agree": 15,
+      "n_oppose": 1,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.70484978615015
+    },
+    "83:-4": {
+      "road_id": 83,
+      "lane_id": -4,
+      "n_samples": 1,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "137:-4": {
+      "road_id": 137,
+      "lane_id": -4,
+      "n_samples": 12,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.48030656523382
+    },
+    "1582:-4": {
+      "road_id": 1582,
+      "lane_id": -4,
+      "n_samples": 33,
+      "n_agree": 33,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.64051302040481
+    },
+    "138:-4": {
+      "road_id": 138,
+      "lane_id": -4,
+      "n_samples": 6,
+      "n_agree": 5,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "132:-4": {
+      "road_id": 132,
+      "lane_id": -4,
+      "n_samples": 11,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.31020539930608
+    },
+    "1649:-4": {
+      "road_id": 1649,
+      "lane_id": -4,
+      "n_samples": 27,
+      "n_agree": 23,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.58947475598191
+    },
+    "95:-4": {
+      "road_id": 95,
+      "lane_id": -4,
+      "n_samples": 2,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "23:-4": {
+      "road_id": 23,
+      "lane_id": -4,
+      "n_samples": 34,
+      "n_agree": 31,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -78.09987759651143
+    },
+    "223:-4": {
+      "road_id": 223,
+      "lane_id": -4,
+      "n_samples": 89,
+      "n_agree": 72,
+      "n_oppose": 0,
+      "n_other": 17,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -85.03964102015556
+    },
+    "213:-1": {
+      "road_id": 213,
+      "lane_id": -1,
+      "n_samples": 44,
+      "n_agree": 36,
+      "n_oppose": 0,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -131.9752258268038
+    },
+    "24:-4": {
+      "road_id": 24,
+      "lane_id": -4,
+      "n_samples": 89,
+      "n_agree": 77,
+      "n_oppose": 11,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -90.7328564249533
+    },
+    "44:1": {
+      "road_id": 44,
+      "lane_id": 1,
+      "n_samples": 147,
+      "n_agree": 131,
+      "n_oppose": 16,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 2.073647473291768
+    },
+    "218:-1": {
+      "road_id": 218,
+      "lane_id": -1,
+      "n_samples": 9,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "73:-4": {
+      "road_id": 73,
+      "lane_id": -4,
+      "n_samples": 68,
+      "n_agree": 67,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -101.153113979462
+    },
+    "1446:-1": {
+      "road_id": 1446,
+      "lane_id": -1,
+      "n_samples": 3,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "79:-2": {
+      "road_id": 79,
+      "lane_id": -2,
+      "n_samples": 145,
+      "n_agree": 142,
+      "n_oppose": 2,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -175.8416411227372
+    },
+    "150:5": {
+      "road_id": 150,
+      "lane_id": 5,
+      "n_samples": 75,
+      "n_agree": 75,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.27166550658627
+    },
+    "43:2": {
+      "road_id": 43,
+      "lane_id": 2,
+      "n_samples": 219,
+      "n_agree": 216,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -179.00911216178847
+    },
+    "1468:2": {
+      "road_id": 1468,
+      "lane_id": 2,
+      "n_samples": 138,
+      "n_agree": 133,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -179.73367507567954
+    },
+    "462:-1": {
+      "road_id": 462,
+      "lane_id": -1,
+      "n_samples": 90,
+      "n_agree": 0,
+      "n_oppose": 8,
+      "n_other": 82,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1391:1": {
+      "road_id": 1391,
+      "lane_id": 1,
+      "n_samples": 27,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 9,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "115:-1": {
+      "road_id": 115,
+      "lane_id": -1,
+      "n_samples": 84,
+      "n_agree": 84,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 90.30851834002615
+    },
+    "115:1": {
+      "road_id": 115,
+      "lane_id": 1,
+      "n_samples": 28,
+      "n_agree": 26,
+      "n_oppose": 2,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -92.66177470343868
+    },
+    "681:-1": {
+      "road_id": 681,
+      "lane_id": -1,
+      "n_samples": 92,
+      "n_agree": 30,
+      "n_oppose": 10,
+      "n_other": 52,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "143:1": {
+      "road_id": 143,
+      "lane_id": 1,
+      "n_samples": 35,
+      "n_agree": 33,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -4.526159518023695
+    },
+    "143:2": {
+      "road_id": 143,
+      "lane_id": 2,
+      "n_samples": 18,
+      "n_agree": 17,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -0.18881756237860842
+    },
+    "1682:2": {
+      "road_id": 1682,
+      "lane_id": 2,
+      "n_samples": 55,
+      "n_agree": 52,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 3.1348726222944157
+    },
+    "1684:-1": {
+      "road_id": 1684,
+      "lane_id": -1,
+      "n_samples": 21,
+      "n_agree": 21,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -3.0047730732018167
+    },
+    "142:2": {
+      "road_id": 142,
+      "lane_id": 2,
+      "n_samples": 799,
+      "n_agree": 792,
+      "n_oppose": 4,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 6.573987314195764
+    },
+    "143:-2": {
+      "road_id": 143,
+      "lane_id": -2,
+      "n_samples": 231,
+      "n_agree": 224,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 172.69604151663552
+    },
+    "460:2": {
+      "road_id": 460,
+      "lane_id": 2,
+      "n_samples": 62,
+      "n_agree": 48,
+      "n_oppose": 3,
+      "n_other": 11,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "466:-1": {
+      "road_id": 466,
+      "lane_id": -1,
+      "n_samples": 51,
+      "n_agree": 46,
+      "n_oppose": 1,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 124.51168100058163
+    },
+    "27:3": {
+      "road_id": 27,
+      "lane_id": 3,
+      "n_samples": 27,
+      "n_agree": 12,
+      "n_oppose": 11,
+      "n_other": 4,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "115:-2": {
+      "road_id": 115,
+      "lane_id": -2,
+      "n_samples": 152,
+      "n_agree": 148,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 90.6531632295718
+    },
+    "76:4": {
+      "road_id": 76,
+      "lane_id": 4,
+      "n_samples": 16,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 179.27305770772523
+    },
+    "42:2": {
+      "road_id": 42,
+      "lane_id": 2,
+      "n_samples": 103,
+      "n_agree": 89,
+      "n_oppose": 0,
+      "n_other": 14,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 177.01998642394986
+    },
+    "472:1": {
+      "road_id": 472,
+      "lane_id": 1,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 178.90002744845492
+    },
+    "158:-1": {
+      "road_id": 158,
+      "lane_id": -1,
+      "n_samples": 136,
+      "n_agree": 134,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -1.3902770436997085
+    },
+    "73:-2": {
+      "road_id": 73,
+      "lane_id": -2,
+      "n_samples": 103,
+      "n_agree": 101,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -92.32898561988868
+    },
+    "1620:-2": {
+      "road_id": 1620,
+      "lane_id": -2,
+      "n_samples": 13,
+      "n_agree": 13,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -159.22481697261748
+    },
+    "74:-2": {
+      "road_id": 74,
+      "lane_id": -2,
+      "n_samples": 9,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "565:-2": {
+      "road_id": 565,
+      "lane_id": -2,
+      "n_samples": 7,
+      "n_agree": 2,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1390:1": {
+      "road_id": 1390,
+      "lane_id": 1,
+      "n_samples": 12,
+      "n_agree": 9,
+      "n_oppose": 3,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "113:3": {
+      "road_id": 113,
+      "lane_id": 3,
+      "n_samples": 26,
+      "n_agree": 26,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 64.59557543135519
+    },
+    "78:-4": {
+      "road_id": 78,
+      "lane_id": -4,
+      "n_samples": 37,
+      "n_agree": 35,
+      "n_oppose": 2,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 150.01335858186977
+    },
+    "578:-1": {
+      "road_id": 578,
+      "lane_id": -1,
+      "n_samples": 17,
+      "n_agree": 17,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 82.20856657081708
+    },
+    "565:-4": {
+      "road_id": 565,
+      "lane_id": -4,
+      "n_samples": 10,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "565:-3": {
+      "road_id": 565,
+      "lane_id": -3,
+      "n_samples": 18,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 129.15664543798806
+    },
+    "75:-2": {
+      "road_id": 75,
+      "lane_id": -2,
+      "n_samples": 53,
+      "n_agree": 53,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 93.10813676367599
+    },
+    "1717:-1": {
+      "road_id": 1717,
+      "lane_id": -1,
+      "n_samples": 26,
+      "n_agree": 26,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 69.68281467864867
+    },
+    "113:2": {
+      "road_id": 113,
+      "lane_id": 2,
+      "n_samples": 11,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 69.76990771075891
+    },
+    "1041:1": {
+      "road_id": 1041,
+      "lane_id": 1,
+      "n_samples": 80,
+      "n_agree": 73,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 117.27501209944967
+    },
+    "1425:1": {
+      "road_id": 1425,
+      "lane_id": 1,
+      "n_samples": 58,
+      "n_agree": 56,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.4988394999593
+    },
+    "115:4": {
+      "road_id": 115,
+      "lane_id": 4,
+      "n_samples": 200,
+      "n_agree": 197,
+      "n_oppose": 1,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.8828710266469
+    },
+    "1398:1": {
+      "road_id": 1398,
+      "lane_id": 1,
+      "n_samples": 20,
+      "n_agree": 20,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -107.29714607207508
+    },
+    "155:5": {
+      "road_id": 155,
+      "lane_id": 5,
+      "n_samples": 49,
+      "n_agree": 44,
+      "n_oppose": 5,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -82.99433054500673
+    },
+    "75:-3": {
+      "road_id": 75,
+      "lane_id": -3,
+      "n_samples": 67,
+      "n_agree": 67,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.03159551136636
+    },
+    "108:-4": {
+      "road_id": 108,
+      "lane_id": -4,
+      "n_samples": 15,
+      "n_agree": 15,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.06969379112589
+    },
+    "1631:-4": {
+      "road_id": 1631,
+      "lane_id": -4,
+      "n_samples": 11,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.1429505932275
+    },
+    "109:-4": {
+      "road_id": 109,
+      "lane_id": -4,
+      "n_samples": 4,
+      "n_agree": 4,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1627:-1": {
+      "road_id": 1627,
+      "lane_id": -1,
+      "n_samples": 22,
+      "n_agree": 19,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -99.31251037466014
+    },
+    "759:1": {
+      "road_id": 759,
+      "lane_id": 1,
+      "n_samples": 29,
+      "n_agree": 29,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -75.50419692745525
+    },
+    "142:-2": {
+      "road_id": 142,
+      "lane_id": -2,
+      "n_samples": 723,
+      "n_agree": 714,
+      "n_oppose": 5,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -173.8278067919715
+    },
+    "108:-2": {
+      "road_id": 108,
+      "lane_id": -2,
+      "n_samples": 79,
+      "n_agree": 78,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.50783559131037
+    },
+    "1631:-2": {
+      "road_id": 1631,
+      "lane_id": -2,
+      "n_samples": 35,
+      "n_agree": 35,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.30917849749189
+    },
+    "109:-2": {
+      "road_id": 109,
+      "lane_id": -2,
+      "n_samples": 17,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.00019783579589
+    },
+    "158:1": {
+      "road_id": 158,
+      "lane_id": 1,
+      "n_samples": 217,
+      "n_agree": 217,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 177.43523884625634
+    },
+    "115:3": {
+      "road_id": 115,
+      "lane_id": 3,
+      "n_samples": 262,
+      "n_agree": 258,
+      "n_oppose": 1,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.14343830182845
+    },
+    "115:2": {
+      "road_id": 115,
+      "lane_id": 2,
+      "n_samples": 250,
+      "n_agree": 248,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.97589583952073
+    },
+    "105:-1": {
+      "road_id": 105,
+      "lane_id": -1,
+      "n_samples": 69,
+      "n_agree": 64,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -178.35523301137326
+    },
+    "105:1": {
+      "road_id": 105,
+      "lane_id": 1,
+      "n_samples": 40,
+      "n_agree": 0,
+      "n_oppose": 35,
+      "n_other": 5,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -89.39493182896933
+    },
+    "108:-3": {
+      "road_id": 108,
+      "lane_id": -3,
+      "n_samples": 32,
+      "n_agree": 31,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -91.06373324947288
+    },
+    "1631:-3": {
+      "road_id": 1631,
+      "lane_id": -3,
+      "n_samples": 54,
+      "n_agree": 54,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.78604551861038
+    },
+    "109:-3": {
+      "road_id": 109,
+      "lane_id": -3,
+      "n_samples": 26,
+      "n_agree": 26,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -90.41852641105307
+    },
+    "73:-3": {
+      "road_id": 73,
+      "lane_id": -3,
+      "n_samples": 145,
+      "n_agree": 135,
+      "n_oppose": 2,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -92.05445366305489
+    },
+    "1715:-1": {
+      "road_id": 1715,
+      "lane_id": -1,
+      "n_samples": 15,
+      "n_agree": 15,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 52.355569498150714
+    },
+    "75:-4": {
+      "road_id": 75,
+      "lane_id": -4,
+      "n_samples": 15,
+      "n_agree": 15,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.84274000562996
+    },
+    "113:4": {
+      "road_id": 113,
+      "lane_id": 4,
+      "n_samples": 29,
+      "n_agree": 22,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "78:-5": {
+      "road_id": 78,
+      "lane_id": -5,
+      "n_samples": 7,
+      "n_agree": 3,
+      "n_oppose": 4,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1682:1": {
+      "road_id": 1682,
+      "lane_id": 1,
+      "n_samples": 32,
+      "n_agree": 21,
+      "n_oppose": 2,
+      "n_other": 9,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "570:-1": {
+      "road_id": 570,
+      "lane_id": -1,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "158:-2": {
+      "road_id": 158,
+      "lane_id": -2,
+      "n_samples": 69,
+      "n_agree": 67,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 0.015698172654675685
+    },
+    "1681:-2": {
+      "road_id": 1681,
+      "lane_id": -2,
+      "n_samples": 238,
+      "n_agree": 238,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -178.45098330358437
+    },
+    "1:-1": {
+      "road_id": 1,
+      "lane_id": -1,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "95:-1": {
+      "road_id": 95,
+      "lane_id": -1,
+      "n_samples": 3,
+      "n_agree": 0,
+      "n_oppose": 3,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "27:-4": {
+      "road_id": 27,
+      "lane_id": -4,
+      "n_samples": 45,
+      "n_agree": 23,
+      "n_oppose": 22,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "46:-2": {
+      "road_id": 46,
+      "lane_id": -2,
+      "n_samples": 125,
+      "n_agree": 125,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 89.7435283912992
+    },
+    "144:-2": {
+      "road_id": 144,
+      "lane_id": -2,
+      "n_samples": 12,
+      "n_agree": 12,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 89.1699164071936
+    },
+    "46:-1": {
+      "road_id": 46,
+      "lane_id": -1,
+      "n_samples": 65,
+      "n_agree": 43,
+      "n_oppose": 22,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "144:-1": {
+      "road_id": 144,
+      "lane_id": -1,
+      "n_samples": 11,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 88.68409901984155
+    },
+    "1178:1": {
+      "road_id": 1178,
+      "lane_id": 1,
+      "n_samples": 15,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 15,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1205:-1": {
+      "road_id": 1205,
+      "lane_id": -1,
+      "n_samples": 54,
+      "n_agree": 39,
+      "n_oppose": 3,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1170:-1": {
+      "road_id": 1170,
+      "lane_id": -1,
+      "n_samples": 15,
+      "n_agree": 0,
+      "n_oppose": 3,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1173:-1": {
+      "road_id": 1173,
+      "lane_id": -1,
+      "n_samples": 58,
+      "n_agree": 43,
+      "n_oppose": 0,
+      "n_other": 15,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1193:-1": {
+      "road_id": 1193,
+      "lane_id": -1,
+      "n_samples": 30,
+      "n_agree": 24,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -16.757726215043046
+    },
+    "1169:-1": {
+      "road_id": 1169,
+      "lane_id": -1,
+      "n_samples": 3,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 3,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "115:-3": {
+      "road_id": 115,
+      "lane_id": -3,
+      "n_samples": 454,
+      "n_agree": 450,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 90.77553560754724
+    },
+    "1172:1": {
+      "road_id": 1172,
+      "lane_id": 1,
+      "n_samples": 52,
+      "n_agree": 43,
+      "n_oppose": 1,
+      "n_other": 8,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -90.23914286157722
+    },
+    "1191:1": {
+      "road_id": 1191,
+      "lane_id": 1,
+      "n_samples": 14,
+      "n_agree": 14,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -111.00973129677995
+    },
+    "115:5": {
+      "road_id": 115,
+      "lane_id": 5,
+      "n_samples": 21,
+      "n_agree": 21,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -88.66518948271582
+    },
+    "5:3": {
+      "road_id": 5,
+      "lane_id": 3,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -89.5937066831502
+    },
+    "1186:-1": {
+      "road_id": 1186,
+      "lane_id": -1,
+      "n_samples": 12,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 58.90686424261015
+    },
+    "1206:1": {
+      "road_id": 1206,
+      "lane_id": 1,
+      "n_samples": 22,
+      "n_agree": 16,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "101:-1": {
+      "road_id": 101,
+      "lane_id": -1,
+      "n_samples": 44,
+      "n_agree": 44,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -1.999919256568284
+    },
+    "1431:-1": {
+      "road_id": 1431,
+      "lane_id": -1,
+      "n_samples": 60,
+      "n_agree": 59,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 38.980798002469996
+    },
+    "25:-2": {
+      "road_id": 25,
+      "lane_id": -2,
+      "n_samples": 62,
+      "n_agree": 52,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -50.67170582828521
+    },
+    "25:-3": {
+      "road_id": 25,
+      "lane_id": -3,
+      "n_samples": 38,
+      "n_agree": 31,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -84.0238332897961
+    },
+    "200:-2": {
+      "road_id": 200,
+      "lane_id": -2,
+      "n_samples": 10,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "199:-1": {
+      "road_id": 199,
+      "lane_id": -1,
+      "n_samples": 42,
+      "n_agree": 42,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -43.73853344413392
+    },
+    "101:-2": {
+      "road_id": 101,
+      "lane_id": -2,
+      "n_samples": 48,
+      "n_agree": 48,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -0.38637146198480044
+    },
+    "1197:-1": {
+      "road_id": 1197,
+      "lane_id": -1,
+      "n_samples": 6,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1439:-1": {
+      "road_id": 1439,
+      "lane_id": -1,
+      "n_samples": 47,
+      "n_agree": 47,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 19.81040127996688
+    },
+    "1171:1": {
+      "road_id": 1171,
+      "lane_id": 1,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "115:-4": {
+      "road_id": 115,
+      "lane_id": -4,
+      "n_samples": 6,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1183:1": {
+      "road_id": 1183,
+      "lane_id": 1,
+      "n_samples": 30,
+      "n_agree": 19,
+      "n_oppose": 9,
+      "n_other": 2,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "124:1": {
+      "road_id": 124,
+      "lane_id": 1,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "124:-1": {
+      "road_id": 124,
+      "lane_id": -1,
+      "n_samples": 4,
+      "n_agree": 4,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "136:1": {
+      "road_id": 136,
+      "lane_id": 1,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "187:1": {
+      "road_id": 187,
+      "lane_id": 1,
+      "n_samples": 3,
+      "n_agree": 3,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "150:-4": {
+      "road_id": 150,
+      "lane_id": -4,
+      "n_samples": 2,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "155:-3": {
+      "road_id": 155,
+      "lane_id": -3,
+      "n_samples": 39,
+      "n_agree": 39,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 97.40375090902126
+    },
+    "27:-3": {
+      "road_id": 27,
+      "lane_id": -3,
+      "n_samples": 1,
+      "n_agree": 1,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1713:-1": {
+      "road_id": 1713,
+      "lane_id": -1,
+      "n_samples": 35,
+      "n_agree": 35,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 64.4126028668067
+    },
+    "1045:-1": {
+      "road_id": 1045,
+      "lane_id": -1,
+      "n_samples": 8,
+      "n_agree": 8,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "74:-3": {
+      "road_id": 74,
+      "lane_id": -3,
+      "n_samples": 13,
+      "n_agree": 13,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 178.20817235320757
+    },
+    "59:-2": {
+      "road_id": 59,
+      "lane_id": -2,
+      "n_samples": 1087,
+      "n_agree": 1074,
+      "n_oppose": 4,
+      "n_other": 9,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 118.03078164891032
+    },
+    "59:2": {
+      "road_id": 59,
+      "lane_id": 2,
+      "n_samples": 476,
+      "n_agree": 405,
+      "n_oppose": 18,
+      "n_other": 53,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -58.65822393575486
+    },
+    "59:-1": {
+      "road_id": 59,
+      "lane_id": -1,
+      "n_samples": 1011,
+      "n_agree": 870,
+      "n_oppose": 139,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 121.85133431926572
+    },
+    "59:1": {
+      "road_id": 59,
+      "lane_id": 1,
+      "n_samples": 1471,
+      "n_agree": 1440,
+      "n_oppose": 7,
+      "n_other": 24,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -59.87192346713945
+    },
+    "54:-3": {
+      "road_id": 54,
+      "lane_id": -3,
+      "n_samples": 105,
+      "n_agree": 101,
+      "n_oppose": 4,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 120.07855954746871
+    },
+    "1255:-2": {
+      "road_id": 1255,
+      "lane_id": -2,
+      "n_samples": 48,
+      "n_agree": 45,
+      "n_oppose": 3,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 120.26979108466776
+    },
+    "1255:-3": {
+      "road_id": 1255,
+      "lane_id": -3,
+      "n_samples": 28,
+      "n_agree": 26,
+      "n_oppose": 1,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 120.34751487291253
+    },
+    "166:1": {
+      "road_id": 166,
+      "lane_id": 1,
+      "n_samples": 68,
+      "n_agree": 23,
+      "n_oppose": 0,
+      "n_other": 45,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "176:-1": {
+      "road_id": 176,
+      "lane_id": -1,
+      "n_samples": 32,
+      "n_agree": 32,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.27718443144393
+    },
+    "54:-2": {
+      "road_id": 54,
+      "lane_id": -2,
+      "n_samples": 226,
+      "n_agree": 224,
+      "n_oppose": 2,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 107.8757348837613
+    },
+    "59:-3": {
+      "road_id": 59,
+      "lane_id": -3,
+      "n_samples": 121,
+      "n_agree": 116,
+      "n_oppose": 1,
+      "n_other": 4,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 110.95407478553182
+    },
+    "21:-1": {
+      "road_id": 21,
+      "lane_id": -1,
+      "n_samples": 130,
+      "n_agree": 130,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.4000739481963
+    },
+    "172:-1": {
+      "road_id": 172,
+      "lane_id": -1,
+      "n_samples": 37,
+      "n_agree": 22,
+      "n_oppose": 15,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "161:-1": {
+      "road_id": 161,
+      "lane_id": -1,
+      "n_samples": 21,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 21,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "54:-1": {
+      "road_id": 54,
+      "lane_id": -1,
+      "n_samples": 97,
+      "n_agree": 55,
+      "n_oppose": 42,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1255:-1": {
+      "road_id": 1255,
+      "lane_id": -1,
+      "n_samples": 30,
+      "n_agree": 30,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 120.71694846925612
+    },
+    "54:1": {
+      "road_id": 54,
+      "lane_id": 1,
+      "n_samples": 33,
+      "n_agree": 33,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -78.7733899862384
+    },
+    "177:1": {
+      "road_id": 177,
+      "lane_id": 1,
+      "n_samples": 42,
+      "n_agree": 42,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -87.8237057665419
+    },
+    "21:1": {
+      "road_id": 21,
+      "lane_id": 1,
+      "n_samples": 389,
+      "n_agree": 388,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -81.77623217753344
+    },
+    "21:-2": {
+      "road_id": 21,
+      "lane_id": -2,
+      "n_samples": 1081,
+      "n_agree": 1077,
+      "n_oppose": 1,
+      "n_other": 3,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 95.56448429753623
+    },
+    "162:-1": {
+      "road_id": 162,
+      "lane_id": -1,
+      "n_samples": 37,
+      "n_agree": 35,
+      "n_oppose": 0,
+      "n_other": 2,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 130.42096886069822
+    },
+    "171:1": {
+      "road_id": 171,
+      "lane_id": 1,
+      "n_samples": 34,
+      "n_agree": 12,
+      "n_oppose": 17,
+      "n_other": 5,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1273:-1": {
+      "road_id": 1273,
+      "lane_id": -1,
+      "n_samples": 35,
+      "n_agree": 26,
+      "n_oppose": 8,
+      "n_other": 1,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "10:1": {
+      "road_id": 10,
+      "lane_id": 1,
+      "n_samples": 52,
+      "n_agree": 45,
+      "n_oppose": 2,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 32.39367141059073
+    },
+    "1235:-1": {
+      "road_id": 1235,
+      "lane_id": -1,
+      "n_samples": 12,
+      "n_agree": 0,
+      "n_oppose": 6,
+      "n_other": 6,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1257:-1": {
+      "road_id": 1257,
+      "lane_id": -1,
+      "n_samples": 1,
+      "n_agree": 0,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "21:3": {
+      "road_id": 21,
+      "lane_id": 3,
+      "n_samples": 31,
+      "n_agree": 10,
+      "n_oppose": 12,
+      "n_other": 9,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "21:2": {
+      "road_id": 21,
+      "lane_id": 2,
+      "n_samples": 432,
+      "n_agree": 430,
+      "n_oppose": 1,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -78.74642832728053
+    },
+    "1613:2": {
+      "road_id": 1613,
+      "lane_id": 2,
+      "n_samples": 24,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "17:-2": {
+      "road_id": 17,
+      "lane_id": -2,
+      "n_samples": 15,
+      "n_agree": 15,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 11.531093113089376
+    },
+    "17:-1": {
+      "road_id": 17,
+      "lane_id": -1,
+      "n_samples": 11,
+      "n_agree": 11,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 11.842204068067725
+    },
+    "1476:-1": {
+      "road_id": 1476,
+      "lane_id": -1,
+      "n_samples": 124,
+      "n_agree": 56,
+      "n_oppose": 0,
+      "n_other": 68,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "127:-2": {
+      "road_id": 127,
+      "lane_id": -2,
+      "n_samples": 35,
+      "n_agree": 35,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 102.24427327947114
+    },
+    "54:2": {
+      "road_id": 54,
+      "lane_id": 2,
+      "n_samples": 20,
+      "n_agree": 20,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -75.44366353655566
+    },
+    "139:-1": {
+      "road_id": 139,
+      "lane_id": -1,
+      "n_samples": 19,
+      "n_agree": 0,
+      "n_oppose": 1,
+      "n_other": 18,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "103:-3": {
+      "road_id": 103,
+      "lane_id": -3,
+      "n_samples": 95,
+      "n_agree": 95,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 99.33354326962325
+    },
+    "629:1": {
+      "road_id": 629,
+      "lane_id": 1,
+      "n_samples": 9,
+      "n_agree": 9,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "616:1": {
+      "road_id": 616,
+      "lane_id": 1,
+      "n_samples": 6,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "52:-1": {
+      "road_id": 52,
+      "lane_id": -1,
+      "n_samples": 8,
+      "n_agree": 8,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "652:-1": {
+      "road_id": 652,
+      "lane_id": -1,
+      "n_samples": 21,
+      "n_agree": 21,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -15.359662293153788
+    },
+    "588:-1": {
+      "road_id": 588,
+      "lane_id": -1,
+      "n_samples": 18,
+      "n_agree": 18,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -13.395530156801295
+    },
+    "617:-3": {
+      "road_id": 617,
+      "lane_id": -3,
+      "n_samples": 15,
+      "n_agree": 0,
+      "n_oppose": 3,
+      "n_other": 12,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "617:-2": {
+      "road_id": 617,
+      "lane_id": -2,
+      "n_samples": 18,
+      "n_agree": 0,
+      "n_oppose": 16,
+      "n_other": 2,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -49.87865860756455
+    },
+    "52:-2": {
+      "road_id": 52,
+      "lane_id": -2,
+      "n_samples": 44,
+      "n_agree": 16,
+      "n_oppose": 6,
+      "n_other": 22,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "618:-1": {
+      "road_id": 618,
+      "lane_id": -1,
+      "n_samples": 1,
+      "n_agree": 0,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1256:-1": {
+      "road_id": 1256,
+      "lane_id": -1,
+      "n_samples": 2,
+      "n_agree": 2,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "65:1": {
+      "road_id": 65,
+      "lane_id": 1,
+      "n_samples": 72,
+      "n_agree": 44,
+      "n_oppose": 28,
+      "n_other": 0,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "127:1": {
+      "road_id": 127,
+      "lane_id": 1,
+      "n_samples": 22,
+      "n_agree": 18,
+      "n_oppose": 4,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -78.66351269823315
+    },
+    "140:2": {
+      "road_id": 140,
+      "lane_id": 2,
+      "n_samples": 6,
+      "n_agree": 6,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "103:-2": {
+      "road_id": 103,
+      "lane_id": -2,
+      "n_samples": 24,
+      "n_agree": 23,
+      "n_oppose": 1,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 98.96459786261785
+    },
+    "1567:-2": {
+      "road_id": 1567,
+      "lane_id": -2,
+      "n_samples": 34,
+      "n_agree": 34,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 99.80770180925408
+    },
+    "106:-1": {
+      "road_id": 106,
+      "lane_id": -1,
+      "n_samples": 19,
+      "n_agree": 15,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "106:2": {
+      "road_id": 106,
+      "lane_id": 2,
+      "n_samples": 56,
+      "n_agree": 49,
+      "n_oppose": 0,
+      "n_other": 7,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 108.59661467533168
+    },
+    "106:3": {
+      "road_id": 106,
+      "lane_id": 3,
+      "n_samples": 38,
+      "n_agree": 37,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 105.87566526775923
+    },
+    "140:3": {
+      "road_id": 140,
+      "lane_id": 3,
+      "n_samples": 31,
+      "n_agree": 31,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 102.9507841733352
+    },
+    "1567:-3": {
+      "road_id": 1567,
+      "lane_id": -3,
+      "n_samples": 73,
+      "n_agree": 73,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": 100.10343127796938
+    },
+    "1482:1": {
+      "road_id": 1482,
+      "lane_id": 1,
+      "n_samples": 33,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 33,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1538:1": {
+      "road_id": 1538,
+      "lane_id": 1,
+      "n_samples": 27,
+      "n_agree": 22,
+      "n_oppose": 0,
+      "n_other": 5,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -80.10207645991306
+    },
+    "1529:-1": {
+      "road_id": 1529,
+      "lane_id": -1,
+      "n_samples": 21,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 21,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1550:-1": {
+      "road_id": 1550,
+      "lane_id": -1,
+      "n_samples": 10,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 10,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "139:-2": {
+      "road_id": 139,
+      "lane_id": -2,
+      "n_samples": 13,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 13,
+      "verdict": "UNRELIABLE",
+      "motion_forward_yaw_deg": null
+    },
+    "1614:1": {
+      "road_id": 1614,
+      "lane_id": 1,
+      "n_samples": 1,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 1,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1616:1": {
+      "road_id": 1616,
+      "lane_id": 1,
+      "n_samples": 6,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 6,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "127:2": {
+      "road_id": 127,
+      "lane_id": 2,
+      "n_samples": 39,
+      "n_agree": 39,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -78.22699195649629
+    },
+    "1566:1": {
+      "road_id": 1566,
+      "lane_id": 1,
+      "n_samples": 113,
+      "n_agree": 113,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -79.1715469639532
+    },
+    "103:1": {
+      "road_id": 103,
+      "lane_id": 1,
+      "n_samples": 52,
+      "n_agree": 52,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -80.97348298934487
+    },
+    "140:-1": {
+      "road_id": 140,
+      "lane_id": -1,
+      "n_samples": 14,
+      "n_agree": 14,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "TRUST_CARLA",
+      "motion_forward_yaw_deg": -76.97512430815833
+    },
+    "1496:-1": {
+      "road_id": 1496,
+      "lane_id": -1,
+      "n_samples": 18,
+      "n_agree": 0,
+      "n_oppose": 18,
+      "n_other": 0,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -79.36947905131183
+    },
+    "103:-1": {
+      "road_id": 103,
+      "lane_id": -1,
+      "n_samples": 43,
+      "n_agree": 3,
+      "n_oppose": 40,
+      "n_other": 0,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -79.99246048624197
+    },
+    "140:1": {
+      "road_id": 140,
+      "lane_id": 1,
+      "n_samples": 58,
+      "n_agree": 0,
+      "n_oppose": 58,
+      "n_other": 0,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -76.36609572184568
+    },
+    "106:1": {
+      "road_id": 106,
+      "lane_id": 1,
+      "n_samples": 26,
+      "n_agree": 0,
+      "n_oppose": 22,
+      "n_other": 4,
+      "verdict": "INVERT_CARLA",
+      "motion_forward_yaw_deg": -75.30963440957944
+    },
+    "139:2": {
+      "road_id": 139,
+      "lane_id": 2,
+      "n_samples": 4,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "127:-1": {
+      "road_id": 127,
+      "lane_id": -1,
+      "n_samples": 5,
+      "n_agree": 5,
+      "n_oppose": 0,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "106:-2": {
+      "road_id": 106,
+      "lane_id": -2,
+      "n_samples": 4,
+      "n_agree": 0,
+      "n_oppose": 0,
+      "n_other": 4,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    },
+    "1216:-1": {
+      "road_id": 1216,
+      "lane_id": -1,
+      "n_samples": 5,
+      "n_agree": 0,
+      "n_oppose": 5,
+      "n_other": 0,
+      "verdict": "UNDER_SAMPLED",
+      "motion_forward_yaw_deg": null
+    }
+  }
+}

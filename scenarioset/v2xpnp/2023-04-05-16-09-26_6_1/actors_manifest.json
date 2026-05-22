@@ -100,15 +100,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_26_npc.xml",
-      "route_id": "2023-04-05-16-09-26_6_1",
-      "town": "ucla_v2",
-      "name": "26",
-      "kind": "npc",
-      "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_28_npc.xml",
       "route_id": "2023-04-05-16-09-26_6_1",
       "town": "ucla_v2",
@@ -219,15 +210,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_5_static.xml",
-      "route_id": "2023-04-05-16-09-26_6_1",
-      "town": "ucla_v2",
-      "name": "5",
-      "kind": "static",
-      "model": "vehicle.audi.tt",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_8_static.xml",
       "route_id": "2023-04-05-16-09-26_6_1",
       "town": "ucla_v2",
@@ -270,15 +252,6 @@
       "name": "16",
       "kind": "static",
       "model": "vehicle.mini.cooper_s_2021",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_18_static.xml",
-      "route_id": "2023-04-05-16-09-26_6_1",
-      "town": "ucla_v2",
-      "name": "18",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
       "control_mode": "replay"
     },
     {

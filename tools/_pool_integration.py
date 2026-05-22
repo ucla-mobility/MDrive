@@ -1472,6 +1472,12 @@ def build_grandchild_pool_env(
     env["CARLA_POOL_GENERATION"] = str(lease.generation)
     env["CARLA_POOL_INSTANCE_ID"] = str(lease.instance_id)
     env["CARLA_POOL_LEASE_ID"] = str(lease.lease_id)
+    # Mark this as a re-spawned planner subprocess so it doesn't
+    # auto-fill its --planner conda_env from the inherited
+    # CONDA_DEFAULT_ENV and then incorrectly flip into multi-planner
+    # mode (which would run an external-CARLA preflight against ports
+    # the pool never opened on this lease).
+    env["COLMDRIVER_PLANNER_SUBPROCESS"] = "1"
     # Also set the standard CUDA_VISIBLE_DEVICES so planner weights
     # co-locate with the CARLA instance.
     env["CUDA_VISIBLE_DEVICES"] = str(lease.gpu_id)

@@ -7,14 +7,6 @@
       "name": "ego_0",
       "kind": "ego",
       "model": "vehicle.lincoln.mkz_2020"
-    },
-    {
-      "file": "ucla_v2_custom_ego_vehicle_1.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "ego_1",
-      "kind": "ego",
-      "model": "vehicle.lincoln.mkz_2020"
     }
   ],
   "npc": [
@@ -79,15 +71,6 @@
       "name": "90",
       "kind": "npc",
       "model": "vehicle.bmw.grandtourer",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_52_npc.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "52",
-      "kind": "npc",
-      "model": "vehicle.mercedes.coupe_2020",
       "control_mode": "replay"
     },
     {
@@ -214,46 +197,10 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_3_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "3",
-      "kind": "static",
-      "model": "vehicle.toyota.prius",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_4_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "4",
-      "kind": "static",
-      "model": "vehicle.tesla.model3",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_5_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "5",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_6_static.xml",
       "route_id": "2023-04-07-15-08-15_7_0",
       "town": "ucla_v2",
       "name": "6",
-      "kind": "static",
-      "model": "vehicle.dodge.charger_2020",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_7_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "7",
       "kind": "static",
       "model": "vehicle.dodge.charger_2020",
       "control_mode": "replay"
@@ -268,39 +215,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_10_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "10",
-      "kind": "static",
-      "model": "vehicle.audi.tt",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_11_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "11",
-      "kind": "static",
-      "model": "vehicle.dodge.charger_2020",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_13_static.xml",
       "route_id": "2023-04-07-15-08-15_7_0",
       "town": "ucla_v2",
       "name": "13",
       "kind": "static",
       "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_14_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "14",
-      "kind": "static",
-      "model": "vehicle.bmw.grandtourer",
       "control_mode": "replay"
     },
     {
@@ -319,15 +239,6 @@
       "name": "19",
       "kind": "static",
       "model": "vehicle.ford.mustang",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_20_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "20",
-      "kind": "static",
-      "model": "vehicle.dodge.charger_2020",
       "control_mode": "replay"
     },
     {
@@ -355,24 +266,6 @@
       "name": "23",
       "kind": "static",
       "model": "vehicle.audi.tt",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_27_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "27",
-      "kind": "static",
-      "model": "vehicle.chevrolet.impala",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_28_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "28",
-      "kind": "static",
-      "model": "vehicle.ford.mustang",
       "control_mode": "replay"
     },
     {
@@ -634,15 +527,6 @@
       "name": "78",
       "kind": "static",
       "model": "vehicle.audi.etron",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_79_static.xml",
-      "route_id": "2023-04-07-15-08-15_7_0",
-      "town": "ucla_v2",
-      "name": "79",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
       "control_mode": "replay"
     },
     {

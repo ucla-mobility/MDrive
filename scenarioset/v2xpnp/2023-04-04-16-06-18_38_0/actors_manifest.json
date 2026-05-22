@@ -154,15 +154,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_32_npc.xml",
-      "route_id": "2023-04-04-16-06-18_38_0",
-      "town": "ucla_v2",
-      "name": "32",
-      "kind": "npc",
-      "model": "vehicle.seat.leon",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_33_npc.xml",
       "route_id": "2023-04-04-16-06-18_38_0",
       "town": "ucla_v2",

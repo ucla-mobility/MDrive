@@ -65,15 +65,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_14_npc.xml",
-      "route_id": "2023-03-17-16-16-12_7_0",
-      "town": "ucla_v2",
-      "name": "14",
-      "kind": "npc",
-      "model": "vehicle.dodge.charger_2020",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_15_npc.xml",
       "route_id": "2023-03-17-16-16-12_7_0",
       "town": "ucla_v2",
@@ -134,15 +125,6 @@
       "name": "175",
       "kind": "npc",
       "model": "vehicle.lincoln.mkz_2017",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_25_npc.xml",
-      "route_id": "2023-03-17-16-16-12_7_0",
-      "town": "ucla_v2",
-      "name": "25",
-      "kind": "npc",
-      "model": "vehicle.mercedes.coupe",
       "control_mode": "replay"
     },
     {
@@ -307,15 +289,6 @@
       "name": "22",
       "kind": "static",
       "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_26_static.xml",
-      "route_id": "2023-03-17-16-16-12_7_0",
-      "town": "ucla_v2",
-      "name": "26",
-      "kind": "static",
-      "model": "vehicle.volkswagen.t2",
       "control_mode": "replay"
     },
     {

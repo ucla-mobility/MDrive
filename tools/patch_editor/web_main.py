@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .loader import SceneData, load_from_html
 from .patch_model import PatchModel   # only used to reuse patch_path_for()
+from . import replay_index as _replay  # closed-loop replay overlay backend
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,21 @@ _cam_dt: float = 0.1
 _xml_scenario_dir: Optional[Path] = None
 _xml_actor_paths: Dict[str, Path] = {}
 _xml_route_attrs: Dict[str, dict] = {}
+
+# Closed-loop replay overlay state. ``_replay_runs`` is rebuilt at startup
+# from the configured replay roots; ``_replay_active`` is set per scenario
+# via _activate_replay_for_scene() and is None when no run matches.
+_replay_enabled: bool = True
+_replay_roots: List[Path] = []
+_replay_runs: List[Any] = []          # List[ReplayRun]
+_replay_active: Optional[Any] = None  # Optional[ReplayRun]
+# Mapping from scenario-ego-index → run-ego-index (since meta_X ordering
+# doesn't always match the editor's ego XML order). Built per scenario.
+_replay_ego_map: Dict[int, int] = {}
+# Sim tick interval inferred from scenario ego frames; used to convert
+# editor curT (seconds) → replay frame number.
+_replay_tick_dt: float = 0.05
+_replay_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -104,21 +120,19 @@ class BatchState:
             queue_snapshot = list(self.carla_queue)
 
         def _scenario_entry(i: int, d: Path) -> dict:
-            html = d / "trajectory_plot.html"
-            has_html = html.exists()
-            has_patch = False
-            if has_html:
-                try:
-                    pp = PatchModel.patch_path_for(html)
-                    has_patch = pp.exists() and pp.stat().st_size > 10
-                except Exception:
-                    pass
+            # XML-side patch sidecar (the only patch source we care about
+            # for validation — HTML mode is irrelevant here).
+            xml_patch = d / "_patch_editor.patch.json"
+            has_patch = xml_patch.exists() and xml_patch.stat().st_size > 10
+            bev = _scenario_bev_status(d)
             qi = queue_by_name.get(d.name)
             return {
                 "idx": i,
                 "name": d.name,
-                "has_html": has_html,
                 "has_patch": has_patch,
+                "has_bev": bev["has_bev"],
+                "bev_runstamp": bev["runstamp"],
+                "ego_count": bev["ego_count"],
                 "queue_status": qi["status"] if qi else None,
                 "queue_stage":  qi["stage"]  if qi else None,
                 "queue_error":  qi.get("error") if qi else None,
@@ -567,6 +581,11 @@ def _activate_scenario(idx: int) -> bool:
     _patch_path = data["patch_path"]
 
     _batch.current_idx = idx
+
+    # Re-match replay run for the new scene
+    if _scene_data is not None:
+        with _replay_lock:
+            _match_replay_for_scene(_scene_data)
 
     # Kick off preload of next scenario
     next_idx = idx + 1
@@ -1040,6 +1059,271 @@ def _run_background_export_and_eval(scenario_dir: Path, patch_data: dict,
 # Data serialisation
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Replay overlay plumbing
+# ---------------------------------------------------------------------------
+
+# Cache for per-scenario BEV match status; keyed by str(scenario_dir.resolve()).
+# Cleared on each call to _scan_replay_roots() since the underlying run list
+# changes.
+_bev_status_cache: Dict[str, dict] = {}
+
+
+def _scan_replay_roots() -> None:
+    """Refresh ``_replay_runs`` from the configured roots."""
+    global _replay_runs, _bev_status_cache
+    if not _replay_enabled or not _replay_roots:
+        _replay_runs = []
+        _bev_status_cache = {}
+        return
+    runs: List[Any] = []
+    for root in _replay_roots:
+        try:
+            runs.extend(_replay.scan_replay_root(root))
+        except Exception as exc:
+            print(f"[REPLAY] scan failed for {root}: {exc}", flush=True)
+    _replay_runs = runs
+    _bev_status_cache = {}
+    print(f"[REPLAY] indexed {len(runs)} run(s) across "
+          f"{len(_replay_roots)} root(s)", flush=True)
+
+
+def _quick_ego_spawns(scenario_dir: Path) -> List[Tuple[float, float]]:
+    """Read just the first <waypoint> of every ego XML in ``scenario_dir``.
+
+    Faster than ``load_from_xml_scenario`` when we only need spawn pose to
+    match against discovered tcp-vid runs.
+    """
+    import xml.etree.ElementTree as ET
+    out: List[Tuple[float, float]] = []
+    if not scenario_dir.is_dir():
+        return out
+    for p in sorted(scenario_dir.glob("*.xml")):
+        if p.name.endswith("_REPLAY.xml"):
+            continue
+        try:
+            tree = ET.parse(p)
+        except Exception:
+            continue
+        root = tree.getroot()
+        route = root.find("route") if root.tag != "route" else root
+        if route is None:
+            continue
+        if (route.attrib.get("role") or "").lower() != "ego":
+            continue
+        first = route.find("waypoint")
+        if first is None:
+            continue
+        try:
+            x = float(first.attrib.get("x", "0"))
+            y = float(first.attrib.get("y", "0"))
+        except ValueError:
+            continue
+        out.append((x, y))
+    return out
+
+
+def _scenario_bev_status(scenario_dir: Path) -> Dict[str, Any]:
+    """Cached lookup: does ``scenario_dir`` have a tcp-vid run we can replay?
+
+    Returns {has_bev: bool, runstamp: Optional[str], ego_count: int}.
+    """
+    key = str(scenario_dir.resolve())
+    cached = _bev_status_cache.get(key)
+    if cached is not None:
+        return cached
+    spawns = _quick_ego_spawns(scenario_dir)
+    out: Dict[str, Any] = {"has_bev": False, "runstamp": None,
+                           "ego_count": len(spawns)}
+    if spawns and _replay_runs:
+        try:
+            matched = _replay.match_scenario(spawns, _replay_runs, tol_m=3.0)
+        except Exception:
+            matched = None
+        if matched is not None:
+            out["has_bev"] = True
+            out["runstamp"] = matched.runstamp
+    _bev_status_cache[key] = out
+    return out
+
+
+def _match_replay_for_scene(scene: SceneData) -> None:
+    """Pick the run whose ego spawn positions match ``scene`` 's egos
+    and stash it on the module-globals along with the meta_X → ego XML
+    index map.
+    """
+    global _replay_active, _replay_ego_map, _replay_tick_dt
+    _replay_active = None
+    _replay_ego_map = {}
+    if not _replay_enabled or not _replay_runs:
+        return
+
+    # Editor egos are everything with role == 'ego', in the order
+    # they appear in scene.tracks (which is the order ego_vehicle_<n>.xml
+    # was loaded — see loader.load_from_xml_scenario).
+    ego_tracks = [t for t in scene.tracks if t.role == "ego"]
+    if not ego_tracks:
+        return
+    scene_spawns: List[Tuple[float, float]] = []
+    for tr in ego_tracks:
+        f0 = tr.frames[0] if tr.frames else None
+        if f0 is None:
+            return
+        # XML-mode scenarios store CARLA-frame coords in cx/cy.
+        x = f0.cx if f0.cx is not None else f0.x
+        y = f0.cy if f0.cy is not None else f0.y
+        scene_spawns.append((float(x), float(y)))
+
+    matched = _replay.match_scenario(scene_spawns, _replay_runs, tol_m=3.0)
+    if matched is None:
+        print(f"[REPLAY] no run matches scene spawns {scene_spawns}", flush=True)
+        return
+    _replay_active = matched
+
+    # Build the meta_X → ego-track-index map by nearest-neighbor on
+    # actual first-frame pose. (run.egos is sorted by ego_id which is
+    # the meta_<X> ordinal.)
+    used: set = set()
+    for ego_idx, (sx, sy) in enumerate(scene_spawns):
+        best_j, best_d = -1, math.inf
+        for j, run_ego in enumerate(matched.egos):
+            if j in used or run_ego.spawn_xy is None:
+                continue
+            d = math.hypot(sx - run_ego.spawn_xy[0], sy - run_ego.spawn_xy[1])
+            if d < best_d:
+                best_d, best_j = d, j
+        if best_j >= 0 and best_d < 5.0:
+            _replay_ego_map[ego_idx] = best_j
+            used.add(best_j)
+
+    # Tick dt from ego_0 timing if recorded
+    if ego_tracks and len(ego_tracks[0].frames) >= 2:
+        dt = ego_tracks[0].frames[1].t - ego_tracks[0].frames[0].t
+        if 0.005 < dt < 1.0:
+            _replay_tick_dt = dt
+
+    print(f"[REPLAY] matched run {matched.runstamp} "
+          f"(ego map {_replay_ego_map}, dt={_replay_tick_dt:.3f}s)",
+          flush=True)
+
+
+# Disk-backed JPEG cache for downscaled cine frames. Each cache lives
+# next to the run dir so it can be wiped per-run if needed.
+_REPLAY_CACHE_LRU_LIMIT = 2048  # frames kept on disk per run
+_replay_cache_lock = threading.Lock()
+
+
+def _replay_cache_dir(run: Any) -> Path:
+    d = run.run_dir / ".editor_replay_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _replay_frame_jpeg(run: Any, ego_idx: int, frame: int, kind: str,
+                       max_dim: int) -> Optional[bytes]:
+    """Return JPEG bytes for the requested cine frame, downscaled so
+    its longer edge is ``max_dim`` px. Cached on disk between requests.
+    """
+    if not (0 <= ego_idx < len(run.egos)):
+        return None
+    ego = run.egos[ego_idx]
+    src = ego.image_path(kind, frame)
+    if src is None:
+        return None
+    cache_path = _replay_cache_dir(run) / f"{kind}_{ego_idx}_{frame:04d}_{max_dim}.jpg"
+    with _replay_cache_lock:
+        if cache_path.exists():
+            try:
+                return cache_path.read_bytes()
+            except Exception:
+                pass
+        try:
+            from PIL import Image
+        except Exception as exc:
+            print(f"[REPLAY] Pillow not available ({exc}); serving original PNG",
+                  flush=True)
+            try:
+                return src.read_bytes()
+            except Exception:
+                return None
+        try:
+            im = Image.open(src).convert("RGB")
+            w, h = im.size
+            longer = max(w, h)
+            if longer > max_dim:
+                scale = max_dim / float(longer)
+                im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))),
+                               Image.BILINEAR)
+            from io import BytesIO
+            buf = BytesIO()
+            im.save(buf, format="JPEG", quality=78, optimize=False)
+            data = buf.getvalue()
+        except Exception as exc:
+            print(f"[REPLAY] encode failed for {src.name}: {exc}", flush=True)
+            return None
+        try:
+            cache_path.write_bytes(data)
+        except Exception:
+            pass
+        # Best-effort LRU prune
+        try:
+            entries = sorted(cache_path.parent.glob(f"{kind}_{ego_idx}_*.jpg"),
+                             key=lambda p: p.stat().st_atime)
+            if len(entries) > _REPLAY_CACHE_LRU_LIMIT:
+                for old in entries[:-_REPLAY_CACHE_LRU_LIMIT]:
+                    try:
+                        old.unlink()
+                    except FileNotFoundError:
+                        pass
+        except Exception:
+            pass
+        return data
+
+
+def _replay_manifest_for_active() -> Dict[str, Any]:
+    """Serialise the currently active replay run for the frontend."""
+    if _replay_active is None:
+        return {"enabled": _replay_enabled, "matched": False}
+    run = _replay_active
+    # Camera intrinsics for the BEV footprint (constants from tcp_agent)
+    footprint_w, footprint_h, m_per_px = _replay.cine_top_wide_footprint_m()
+    egos_out = []
+    diags = run.diagnostics()
+    for ego_idx, run_ego_idx in sorted(_replay_ego_map.items()):
+        ego = run.egos[run_ego_idx]
+        # Load pose timeline lazily; key by frame
+        poses = ego.poses(dt=_replay_tick_dt)
+        # Stringify keys for JSON
+        pose_map = {str(k): {
+            "x": p.x, "y": p.y, "yaw_deg": p.yaw_deg, "t": p.sim_time,
+            "src": p.source, "speed": p.speed,
+        } for k, p in poses.items()}
+        egos_out.append({
+            "scene_ego_idx": ego_idx,
+            "meta_ego_idx":  run_ego_idx,
+            "frames":        ego.frame_numbers,
+            "frame_count":   ego.frame_count(),
+            "alignment":     ego.alignment_source,
+            "poses":         pose_map,
+            "has_cine_top_wide": ego.cine_top_wide_dir is not None,
+            "has_cine_front":    ego.cine_front_dir is not None,
+            "spawn_xy":      ego.spawn_xy,
+            "spawn_yaw_deg": ego.spawn_yaw_deg,
+            "diagnostics":   diags.get(ego.ego_id, {}),
+        })
+    return {
+        "enabled":          _replay_enabled,
+        "matched":          True,
+        "run_tag":          run.run_tag,
+        "runstamp":         run.runstamp,
+        "run_dir":          str(run.run_dir),
+        "tick_dt":          _replay_tick_dt,
+        "bev_footprint_m":  {"w": footprint_w, "h": footprint_h, "m_per_px": m_per_px},
+        "bev_image_size":   {"w": _replay.CINE_TOP_WIDE_W, "h": _replay.CINE_TOP_WIDE_H},
+        "egos":             egos_out,
+    }
+
+
 def _jf(v) -> Optional[float]:
     """Return float v, or None if NaN/Inf (JSON can't encode those)."""
     try:
@@ -1208,10 +1492,14 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/batch_status":
             body = json.dumps(_batch.status_dict()).encode()
             self._send(200, "application/json", body)
-        elif path == "/carla_status":
-            with _carla_status_lock:
-                body = json.dumps(_carla_status).encode()
-            self._send(200, "application/json", body)
+        elif path == "/replay/manifest":
+            self._serve_replay_manifest()
+        elif path == "/replay/frame":
+            self._serve_replay_frame(qs)
+        elif path == "/replay/pose":
+            self._serve_replay_pose(qs)
+        elif path == "/replay/diagnostics":
+            self._serve_replay_diagnostics()
         else:
             self._send(404, "text/plain", b"not found")
 
@@ -1272,22 +1560,6 @@ class _Handler(BaseHTTPRequestHandler):
                            json.dumps({"error": str(exc)}).encode())
         elif path == "/skip":
             self._handle_skip()
-        elif path == "/carla_reconnect":
-            length = int(self.headers.get("Content-Length", 0))
-            body   = self.rfile.read(length)
-            try:
-                req = json.loads(body)
-                host = str(req.get("host", _batch.carla_host))
-                port = int(req.get("port", _batch.carla_port))
-                _batch.carla_host = host
-                _batch.carla_port = port
-                result = _check_carla_health(host, port)
-                with _carla_status_lock:
-                    _carla_status.update(result)
-                self._send(200, "application/json", json.dumps(result).encode())
-            except Exception as exc:
-                self._send(400, "application/json",
-                           json.dumps({"error": str(exc)}).encode())
         else:
             self._send(404, "text/plain", b"not found")
 
@@ -1397,6 +1669,111 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    # ── replay overlay endpoints ──────────────────────────────────────────
+
+    def _serve_replay_manifest(self) -> None:
+        with _replay_lock:
+            try:
+                manifest = _replay_manifest_for_active()
+            except Exception as exc:
+                traceback.print_exc()
+                self._send(500, "application/json",
+                           json.dumps({"error": str(exc)}).encode())
+                return
+        body = json.dumps(manifest, separators=(",", ":")).encode()
+        self._send(200, "application/json", body)
+
+    def _serve_replay_frame(self, qs: Dict[str, List[str]]) -> None:
+        with _replay_lock:
+            run = _replay_active
+        if run is None:
+            self.send_response(204); self.end_headers(); return
+        try:
+            ego = int(qs.get("ego", ["0"])[0])
+            frame = int(qs.get("frame", ["0"])[0])
+        except ValueError:
+            self._send(400, "application/json", b'{"error":"bad query"}')
+            return
+        kind = (qs.get("kind", ["cine_top_wide"])[0] or "cine_top_wide").strip()
+        try:
+            max_dim = int(qs.get("max", ["720"])[0])
+        except ValueError:
+            max_dim = 720
+        max_dim = max(64, min(2048, max_dim))
+        # Resolve scene-ego-idx → meta_X index via the per-scenario map
+        run_ego_idx = _replay_ego_map.get(ego, ego)
+        data = _replay_frame_jpeg(run, run_ego_idx, frame, kind, max_dim)
+        if data is None:
+            self.send_response(204); self.end_headers(); return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        # Frame contents are immutable per (run, ego, frame, max_dim); allow
+        # the browser to cache aggressively while scrubbing.
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_replay_pose(self, qs: Dict[str, List[str]]) -> None:
+        with _replay_lock:
+            run = _replay_active
+        if run is None:
+            self._send(204, "application/json", b""); return
+        try:
+            ego = int(qs.get("ego", ["0"])[0])
+            frame = int(qs.get("frame", ["0"])[0])
+        except ValueError:
+            self._send(400, "application/json", b'{"error":"bad query"}')
+            return
+        run_ego_idx = _replay_ego_map.get(ego, ego)
+        if not (0 <= run_ego_idx < len(run.egos)):
+            self._send(204, "application/json", b""); return
+        poses = run.egos[run_ego_idx].poses(dt=_replay_tick_dt)
+        p = poses.get(frame)
+        if p is None:
+            self._send(204, "application/json", b""); return
+        out = {
+            "frame":     p.frame,
+            "t":         p.sim_time,
+            "x":         p.x,
+            "y":         p.y,
+            "yaw_deg":   p.yaw_deg,
+            "src":       p.source,
+            "speed":     p.speed,
+            "throttle":  p.throttle,
+            "brake":     p.brake,
+            "steer":     p.steer,
+        }
+        self._send(200, "application/json",
+                   json.dumps(out, separators=(",", ":")).encode())
+
+    def _serve_replay_diagnostics(self) -> None:
+        with _replay_lock:
+            run = _replay_active
+            ego_map = dict(_replay_ego_map)
+        if run is None:
+            self._send(200, "application/json", b'{"matched":false}')
+            return
+        try:
+            diags = run.diagnostics()
+        except Exception as exc:
+            self._send(500, "application/json",
+                       json.dumps({"error": str(exc)}).encode())
+            return
+        # Re-key by scene-ego-idx so the frontend can render in scenario order
+        out_per_ego: Dict[str, dict] = {}
+        for scene_idx, run_ego_idx in ego_map.items():
+            if 0 <= run_ego_idx < len(run.egos):
+                eid = run.egos[run_ego_idx].ego_id
+                out_per_ego[str(scene_idx)] = diags.get(eid, {})
+        body = json.dumps({
+            "matched":  True,
+            "run_tag":  run.run_tag,
+            "runstamp": run.runstamp,
+            "per_ego":  out_per_ego,
+        }, separators=(",", ":")).encode()
+        self._send(200, "application/json", body)
 
 
 # ---------------------------------------------------------------------------
@@ -1534,7 +1911,8 @@ button:disabled{opacity:.35;cursor:default}
 .si.cur .si-name{color:#eee}
 .si-badge{flex-shrink:0;font-size:9px;font-weight:bold;padding:1px 5px;border-radius:8px;
           letter-spacing:.3px;white-space:nowrap}
-.si-badge.nohtml{background:#222;color:#555;border:1px solid #333}
+.si-badge.nobev{background:#222;color:#666;border:1px solid #333}
+.si-badge.bev{background:#1a2a1a;color:#9c7;border:1px solid #2a5a2a}
 .si-badge.ready{background:#222;color:#888;border:1px solid #444}
 .si-badge.patched{background:#332200;color:#fc0;border:1px solid #664400}
 .si-badge.queued{background:#0a1a2e;color:#8af;border:1px solid #2a4a6e}
@@ -1590,31 +1968,6 @@ button:disabled{opacity:.35;cursor:default}
 #batch-queue-info:hover{border-color:#555;color:#aaa}
 #batch-queue-info.active{color:#8af;border-color:#4466aa}
 
-/* ── CARLA status ── */
-#carla-bar{display:none;flex-shrink:0;background:#111;border-bottom:1px solid #333;
-           padding:3px 10px;align-items:center;gap:8px;font-size:11px}
-#carla-bar.active{display:flex}
-#carla-dot{width:10px;height:10px;border-radius:50%;background:#555;flex-shrink:0}
-#carla-dot.ok{background:#4f4}
-#carla-dot.err{background:#f44;animation:carla-pulse 1.5s infinite}
-@keyframes carla-pulse{0%,100%{opacity:1}50%{opacity:.3}}
-#carla-text{color:#aaa;flex:1}
-#carla-reconnect{color:#4af;background:none;border:1px solid #4af;padding:2px 10px;
-                 font-size:10px;cursor:pointer}
-#carla-reconnect:hover{background:#1a2a4a}
-
-/* ── reconnect modal ── */
-#reconnect-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;
-                  background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center}
-#reconnect-modal.show{display:flex}
-#reconnect-box{background:#1a1a2e;border:2px solid #4488cc;border-radius:8px;padding:20px;
-               min-width:320px;color:#ccc}
-#reconnect-box h3{color:#4af;margin-bottom:10px}
-#reconnect-box label{display:block;margin:6px 0 2px;color:#aaa;font-size:11px}
-#reconnect-box input{background:#222;border:1px solid #555;color:#eee;padding:5px 8px;
-                      width:100%;font:13px monospace;border-radius:3px}
-#reconnect-box .btn-row{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
-#reconnect-box button{padding:6px 16px}
 
 /* ── done overlay ── */
 #done-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;
@@ -1625,13 +1978,6 @@ button:disabled{opacity:.35;cursor:default}
 </style>
 </head>
 <body>
-
-<!-- CARLA status bar -->
-<div id="carla-bar">
-  <div id="carla-dot"></div>
-  <span id="carla-text">CARLA: checking...</span>
-  <button id="carla-reconnect" onclick="showReconnect()">Reconnect</button>
-</div>
 
 <!-- Batch progress bar -->
 <div id="batch-bar">
@@ -1644,20 +1990,6 @@ button:disabled{opacity:.35;cursor:default}
   <button id="btn-next" onclick="batchNext()" title="Save patch and go to next scenario">Next &#9654;</button>
 </div>
 
-<!-- Reconnect modal -->
-<div id="reconnect-modal">
-  <div id="reconnect-box">
-    <h3>CARLA Connection</h3>
-    <label>Host</label>
-    <input type="text" id="rc-host" value="localhost">
-    <label>Port</label>
-    <input type="number" id="rc-port" value="2000">
-    <div class="btn-row">
-      <button onclick="hideReconnect()">Cancel</button>
-      <button onclick="doReconnect()" style="background:#1a4a6a;color:#4af">Connect</button>
-    </div>
-  </div>
-</div>
 
 <!-- Done overlay -->
 <div id="done-overlay">
@@ -1719,6 +2051,25 @@ button:disabled{opacity:.35;cursor:default}
   </div>
   <div class="vsep"></div>
 
+  <!-- Closed-loop replay overlay -->
+  <div class="tg">
+    <span class="tg-label">Replay:</span>
+    <button id="btn-replay" onclick="toggleReplay()" title="B — toggle BEV replay overlay">BEV off</button>
+    <input id="replay-opacity" type="range" min="10" max="100" value="90"
+           oninput="setReplayOpacity(this.value)" title="BEV overlay opacity"
+           style="width:60px;height:14px;accent-color:#ffaa44">
+    <select id="replay-quality" onchange="setReplayQuality(this.value)"
+            title="BEV image quality (higher = sharper but slower scrub)"
+            style="background:#222;border:1px solid #555;color:#ccd;
+                   font:11px monospace;padding:2px 4px;border-radius:3px">
+      <option value="720">720</option>
+      <option value="1280" selected>1280</option>
+      <option value="1920">1920</option>
+    </select>
+    <span id="replay-info" style="color:#fa6;font:10px monospace"></span>
+  </div>
+  <div class="vsep"></div>
+
   <!-- Undo/Redo/Save -->
   <div class="tg">
     <button id="btn-undo" onclick="doUndo()" title="Ctrl+Z" disabled>&#8630; Undo</button>
@@ -1756,6 +2107,7 @@ button:disabled{opacity:.35;cursor:default}
   <div id="right">
     <div id="right-tabs">
       <button class="rtab on" id="rtab-actors"  onclick="switchRightTab('actors')">Actors</button>
+      <button class="rtab"    id="rtab-diag"    onclick="switchRightTab('diag')">Diagnostics</button>
       <button class="rtab"    id="rtab-scenarios" onclick="switchRightTab('scenarios')" style="display:none">Scenarios</button>
     </div>
     <div id="actors-panel" class="active">
@@ -1763,6 +2115,12 @@ button:disabled{opacity:.35;cursor:default}
       <div id="actor-list"></div>
       <div id="patch-hdr">Patch Info</div>
       <div id="patch-sum">&lt;no patches&gt;</div>
+    </div>
+    <div id="diag-panel" style="display:none;flex-direction:column;flex:1;overflow:auto;min-height:0;padding:6px">
+      <div id="diag-hdr" style="color:#fa6;font-weight:bold;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin-bottom:4px">Replay diagnostics</div>
+      <div id="diag-body" style="font:11px/1.5 monospace;color:#bbb">No replay run loaded.</div>
+      <div id="diag-spawn-hdr" style="color:#fa6;font-weight:bold;text-transform:uppercase;font-size:11px;letter-spacing:.5px;margin:8px 0 4px">Spawn validation</div>
+      <div id="diag-spawn" style="font:11px/1.5 monospace;color:#bbb"></div>
     </div>
     <div id="scenarios-panel">
       <div id="scenario-list"></div>
@@ -3093,6 +3451,11 @@ function redrawMap(){
     }
   }
 
+  // Closed-loop replay BEV — drawn right after the static map so the
+  // schematic actor boxes / CARLA lines render on top of it (the BEV is
+  // a backdrop; the editor's overlays are what the user is validating).
+  if(typeof drawReplayOverlay==='function') drawReplayOverlay(mapCtx);
+
   // CARLA lines
   for(const l of carlaLines){
     if(l.pts.length<2) continue;
@@ -3839,6 +4202,10 @@ function setCurT(t){
     }
   }
   updateCam(); redrawTimeline(); redrawMap();
+  if(replayOn) _prefetchReplayAroundCurT();
+  // Keep the spawn-overlap line in the Diagnostics tab in sync with curT.
+  // Cheap DOM update; no-op when the tab isn't visible.
+  if(typeof refreshDiagSpawn==='function') refreshDiagSpawn();
 }
 
 // ============================================================
@@ -4234,6 +4601,7 @@ document.addEventListener('keydown',e=>{
   else if(k==='w'){ e.preventDefault(); setTool('wp'); }
   else if(k==='y'&&!e.ctrlKey){ e.preventDefault(); setTool('yaw'); }
   else if(k==='r'&&tool==='yaw'){ e.preventDefault(); doYawReset(); }
+  else if(k==='b'&&!e.ctrlKey){ e.preventDefault(); toggleReplay(); }
   else if(k==='v'&&tool==='yaw'){ e.preventDefault(); doYawAlignLane(); }
   else if(k==='d'&&tool!=='wp'){ e.preventDefault(); doDelete(); }
   else if(k==='o'){ e.preventDefault(); doOuter(); }
@@ -4289,6 +4657,346 @@ function status(msg){ document.getElementById('status').textContent=msg; }
 // ============================================================
 // Init
 // ============================================================
+// ============================================================
+// Closed-loop replay overlay
+// ============================================================
+let replayOn=false;
+let replayManifest=null;       // server-returned manifest for the active run
+let replayOpacity=0.9;
+let replayPoseByEgo={};        // sceneEgoIdx \u2192 {frame \u2192 pose}
+let replayFrameImgs={};        // cache: key 'ego_frame' \u2192 {img:HTMLImageElement, blobUrl:string}
+let replayInflight={};         // key 'ego_frame' \u2192 AbortController
+let replayLastDrawnKeys=new Set();
+const REPLAY_MAX_CACHE=256;     // cap cached BEV image entries
+// Server-side max edge in px for the JPEG re-encode. 1280 keeps source detail
+// (1920\u00d71080 source \u2192 1280\u00d7720) at ~80KB/frame which is fast for scrubbing.
+// Bump to 1920 if you want the original resolution; drop to 720 for a faster
+// (but visibly soft) preview.
+let replayMaxPx=1280;
+
+function _replayKey(ego, frame){ return ego+'_'+frame; }
+function _replayLog(){ /* console.log.apply(console, ['[replay]'].concat([...arguments])); */ }
+
+function _clearReplayCache(){
+  for(const k of Object.keys(replayFrameImgs)){
+    const e = replayFrameImgs[k];
+    if(e && e.blobUrl) URL.revokeObjectURL(e.blobUrl);
+  }
+  replayFrameImgs = {};
+  for(const k of Object.keys(replayInflight)){
+    try{ replayInflight[k].abort(); }catch(_){}
+  }
+  replayInflight = {};
+}
+
+async function loadReplayManifest(){
+  replayManifest = null;
+  replayPoseByEgo = {};
+  _clearReplayCache();
+  try{
+    const r = await fetch('/replay/manifest');
+    if(!r.ok){ replayManifest = {enabled:false, matched:false}; return; }
+    replayManifest = await r.json();
+    if(replayManifest && replayManifest.matched){
+      // Flatten the per-ego pose maps for fast lookup
+      for(const ego of (replayManifest.egos||[])){
+        replayPoseByEgo[ego.scene_ego_idx] = ego.poses || {};
+      }
+    }
+  }catch(e){
+    console.warn('[replay] manifest fetch failed', e);
+    replayManifest = {enabled:false, matched:false, error:String(e)};
+  }
+  _updateReplayUi();
+  refreshDiagPanel();
+}
+
+function _updateReplayUi(){
+  const btn = document.getElementById('btn-replay');
+  const info = document.getElementById('replay-info');
+  if(!btn) return;
+  if(!replayManifest || !replayManifest.matched){
+    btn.textContent = replayOn ? 'BEV on (no run)' : 'BEV off';
+    btn.classList.toggle('on', replayOn);
+    if(info) info.textContent = replayManifest && replayManifest.enabled===false ?
+                                  '(replay disabled)' : '(no run matched)';
+    return;
+  }
+  btn.textContent = replayOn ? 'BEV on' : 'BEV off';
+  btn.classList.toggle('on', replayOn);
+  if(info) info.textContent = replayManifest.runstamp;
+}
+
+function toggleReplay(){
+  replayOn = !replayOn;
+  if(replayOn && (!replayManifest || !replayManifest.matched)){
+    // (still toggle on; the UI will reflect "no run matched")
+  }
+  _updateReplayUi();
+  redrawMap();
+  // Prime a few frames around curT so the first scrub feels instant
+  if(replayOn) _prefetchReplayAroundCurT();
+}
+
+function setReplayOpacity(v){
+  replayOpacity = Math.max(0, Math.min(1, Number(v)/100));
+  if(replayOn) redrawMap();
+}
+
+function setReplayQuality(v){
+  const px = Math.max(256, Math.min(2048, Number(v)||1280));
+  if(px === replayMaxPx) return;
+  replayMaxPx = px;
+  // Invalidate the in-memory cache so the next draw re-fetches at new size.
+  _clearReplayCache();
+  if(replayOn){
+    _prefetchReplayAroundCurT();
+    redrawMap();
+  }
+}
+
+function _replayFrameForT(egoIdx, t){
+  // Find the nearest recorded frame to ``t``. Returns {frame, pose} or null.
+  //
+  // Always returns the closest available frame \u2014 no tolerance window. With
+  // TCP_VID_SAVE_INTERVAL > 1 the saved frames are sparser than the editor's
+  // play DT, and a tolerance filter would blink the BEV in/out. Holding the
+  // nearest frame instead reads as "step-wise BEV at sample rate", which is
+  // what the user actually wants.
+  const poses = replayPoseByEgo[egoIdx];
+  if(!poses) return null;
+  const dt = (replayManifest && replayManifest.tick_dt) || 0.05;
+  const target = Math.round(t/dt);
+  let bestN = null, bestD = Infinity;
+  for(const k of Object.keys(poses)){
+    const n = Number(k);
+    const d = Math.abs(n - target);
+    if(d < bestD){ bestD = d; bestN = n; }
+  }
+  if(bestN === null) return null;
+  return {frame: bestN, pose: poses[String(bestN)]};
+}
+
+function _prefetchReplayAroundCurT(){
+  if(!replayOn || !replayManifest || !replayManifest.matched) return;
+  const dt = (replayManifest && replayManifest.tick_dt) || 0.05;
+  // Saved frames are stepped by ≥ save_interval ticks; walk along the actual
+  // saved frame list around the current one so we stay aligned with the
+  // sparse keys instead of guessing ±N raw tick numbers.
+  for(const ego of (replayManifest.egos||[])){
+    const e = ego.scene_ego_idx;
+    const sortedFrames = (ego.frames||[]).slice().sort((a,b)=>a-b);
+    if(!sortedFrames.length) continue;
+    const hit = _replayFrameForT(e, curT);
+    if(!hit) continue;
+    const idx = sortedFrames.indexOf(hit.frame);
+    if(idx < 0) continue;
+    // Prime current frame + 8 ahead + 2 behind (play moves forward)
+    for(const off of [0, 1, 2, 3, 4, 5, 6, 7, 8, -1, -2]){
+      const j = idx + off;
+      if(j >= 0 && j < sortedFrames.length){
+        _ensureReplayFrame(e, sortedFrames[j]);
+      }
+    }
+  }
+}
+
+function _ensureReplayFrame(egoIdx, frame){
+  const key = _replayKey(egoIdx, frame);
+  if(replayFrameImgs[key]) return replayFrameImgs[key];
+  if(replayInflight[key]) return null;
+  const ac = new AbortController();
+  replayInflight[key] = ac;
+  const url = '/replay/frame?ego='+egoIdx+'&frame='+frame
+            +'&kind=cine_top_wide&max='+replayMaxPx;
+  fetch(url, {signal: ac.signal})
+    .then(r => {
+      if(r.status === 204) return null;
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.blob();
+    })
+    .then(blob => {
+      if(!blob) return;
+      const blobUrl = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        const existing = replayFrameImgs[key];
+        if(existing && existing.blobUrl !== blobUrl){
+          URL.revokeObjectURL(existing.blobUrl);
+        }
+        replayFrameImgs[key] = {img, blobUrl};
+        // LRU cap
+        const keys = Object.keys(replayFrameImgs);
+        if(keys.length > REPLAY_MAX_CACHE){
+          for(const k of keys.slice(0, keys.length - REPLAY_MAX_CACHE)){
+            const e = replayFrameImgs[k];
+            if(e && e.blobUrl) URL.revokeObjectURL(e.blobUrl);
+            delete replayFrameImgs[k];
+          }
+        }
+        if(replayOn && replayLastDrawnKeys && !replayLastDrawnKeys.has(key)){
+          redrawMap();
+        }
+      };
+      img.src = blobUrl;
+    })
+    .catch(err => {
+      if(err && err.name !== 'AbortError') console.warn('[replay] frame', key, err);
+    })
+    .finally(()=>{ delete replayInflight[key]; });
+  return null;
+}
+
+function drawReplayOverlay(ctx){
+  if(!replayOn || !replayManifest || !replayManifest.matched) return;
+  const fpr = replayManifest.bev_footprint_m;
+  if(!fpr) return;
+  const drawnKeys = new Set();
+  ctx.save();
+  ctx.globalAlpha = replayOpacity;
+  for(const ego of (replayManifest.egos||[])){
+    const e = ego.scene_ego_idx;
+    const hit = _replayFrameForT(e, curT);
+    if(!hit){ continue; }
+    const pose = hit.pose;
+    const key = _replayKey(e, hit.frame);
+    drawnKeys.add(key);
+    const cached = replayFrameImgs[key] || _ensureReplayFrame(e, hit.frame);
+    if(!cached || !cached.img) continue;
+    const img = cached.img;
+
+    // Build the BEV\u2192world affine from the camera geometry, then compose with
+    // w2c to get the BEV\u2192canvas affine. This mirrors the way the v2xpnp
+    // pipeline anchors its static carla_topdown image (corners projected
+    // via w2c) \u2014 except the cine_top_wide footprint is a rotated rectangle
+    // that follows the ego, so we have to build its world-frame corners
+    // from the ego pose and the camera intrinsics. The CARLA convention
+    // for a pitch=-90 ego-attached camera:
+    //   * image-up (v=0)    = vehicle forward  (world +X for yaw=0)
+    //   * image-right (u=W) = vehicle right    (world +Y for yaw=0)
+    // Vehicle forward and right world unit vectors derived from yaw:
+    //   forward = ( cos \u03b8,  sin \u03b8 )
+    //   right   = (-sin \u03b8,  cos \u03b8 )   (matches CARLA's left-handed Z-down
+    //                                  rotation: yaw=0 \u2192 right=+Y/south)
+    const yaw = (pose.yaw_deg||0) * Math.PI/180;
+    const fwd_wx =  Math.cos(yaw), fwd_wy =  Math.sin(yaw);
+    const rgt_wx = -Math.sin(yaw), rgt_wy =  Math.cos(yaw);
+
+    // Footprint half-extents in world metres.
+    const halfFwd_m   = fpr.h / 2;   // vehicle forward/back
+    const halfRight_m = fpr.w / 2;   // vehicle right/left
+
+    // World positions of the four image corners (anchored on ego pose):
+    //   pixel (0,    0)    = top-left      = forward,  left
+    //   pixel (W_px, 0)    = top-right     = forward,  right
+    //   pixel (W_px, H_px) = bottom-right  = backward, right
+    //   pixel (0,    H_px) = bottom-left   = backward, left
+    const TL = [pose.x + fwd_wx*halfFwd_m + rgt_wx*(-halfRight_m),
+                pose.y + fwd_wy*halfFwd_m + rgt_wy*(-halfRight_m)];
+    const TR = [pose.x + fwd_wx*halfFwd_m + rgt_wx*( halfRight_m),
+                pose.y + fwd_wy*halfFwd_m + rgt_wy*( halfRight_m)];
+    const BR = [pose.x + fwd_wx*(-halfFwd_m) + rgt_wx*( halfRight_m),
+                pose.y + fwd_wy*(-halfFwd_m) + rgt_wy*( halfRight_m)];
+
+    // Project to canvas via the SAME w2c the editor uses for actors / lanes
+    // / static bg image. Any zoom/pan/follow rotation transforms are baked
+    // in automatically.
+    const [tlx, tly] = w2c(TL[0], TL[1]);
+    const [trx, try_] = w2c(TR[0], TR[1]);
+    const [brx, bry] = w2c(BR[0], BR[1]);
+
+    // Derive the affine that maps the image's local (u, v) \u2208 [0, W_px]\u00d7[0, H_px]
+    // to the canvas quad TL\u2192TR\u2192BR. Because the BEV is rigid (no shear), the
+    // mapping is a pure rotation+translation+uniform scale in world space,
+    // and w2c is itself linear, so the per-pixel basis vectors come straight
+    // out of the corners:
+    //   per-px along u:  (TR - TL) / W_px
+    //   per-px along v:  (BR - TR) / H_px
+    const W_px = img.naturalWidth  || 1;
+    const H_px = img.naturalHeight || 1;
+    const ax = (trx - tlx) / W_px;
+    const ay = (try_ - tly) / W_px;
+    const cx = (brx - trx) / H_px;
+    const cy = (bry - try_) / H_px;
+
+    // Compose with the prevailing canvas transform (dpr scale) using
+    // ctx.transform(...) rather than setTransform(...).
+    ctx.save();
+    ctx.transform(ax, ay, cx, cy, tlx, tly);
+    ctx.drawImage(img, 0, 0);
+    ctx.restore();
+
+    // Tiny ego tick at the BEV centre \u2014 quick sanity check for alignment.
+    const [sx, sy] = w2c(pose.x, pose.y);
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffcc44';
+    ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  replayLastDrawnKeys = drawnKeys;
+}
+
+function refreshDiagPanel(){
+  const body = document.getElementById('diag-body');
+  const spawn = document.getElementById('diag-spawn');
+  if(!body || !spawn) return;
+  if(!replayManifest){
+    body.textContent = 'Replay manifest not loaded yet.';
+    spawn.textContent = '';
+    return;
+  }
+  if(!replayManifest.matched){
+    let reason = '(no run matched this scenario)';
+    if(replayManifest.enabled === false) reason = '(replay disabled by --no-replay)';
+    body.textContent = reason;
+  } else {
+    const parts = [];
+    parts.push('<div><b style="color:#fa6">Run:</b> '+replayManifest.run_tag+' / '+replayManifest.runstamp+'</div>');
+    parts.push('<div style="color:#888">tick dt = '+(replayManifest.tick_dt||0).toFixed(3)+'s</div>');
+    for(const ego of (replayManifest.egos||[])){
+      const d = ego.diagnostics || {};
+      const rc = (d.route_completion!=null) ? (100*d.route_completion).toFixed(1)+'%' : '\u2013';
+      const ds = (d.driving_score!=null) ? d.driving_score.toFixed(3) : '\u2013';
+      const pdm = (d.pdm_score!=null) ? d.pdm_score.toFixed(3) : '\u2013';
+      const status = d.status || '?';
+      const spawnSt = d.spawn_status || '?';
+      const colTotal = (d.collisions_vehicle||0)+(d.collisions_pedestrian||0)+(d.collisions_layout||0);
+      const align = ego.alignment;
+      parts.push(
+        '<div style="margin-top:6px;border-top:1px solid #2a2a3a;padding-top:4px">'+
+          '<b style="color:#4af">Ego '+ego.scene_ego_idx+'</b>'+
+          ' <span style="color:#666">(meta_'+ego.meta_ego_idx+', '+ego.frame_count+' frames, '+align+')</span>'+
+          '<div>RC: <b style="color:#fa6">'+rc+'</b> &nbsp; DS: <b style="color:#fa6">'+ds+'</b> &nbsp; PDM: '+pdm+'</div>'+
+          '<div>Status: '+status+'</div>'+
+          '<div>Spawn: '+spawnSt+(d.partial_spawn?' <span style="color:#f88">(partial)</span>':'')+'</div>'+
+          '<div>Collisions: veh='+(d.collisions_vehicle||0)+' ped='+(d.collisions_pedestrian||0)+' layout='+(d.collisions_layout||0)+'</div>'+
+          '<div style="color:#888">red-light: '+(d.red_light||0)+', outside-lanes: '+(d.outside_route_lanes||0)+', blocked: '+(d.vehicle_blocked||0)+'</div>'+
+        '</div>'
+      );
+    }
+    body.innerHTML = parts.join('');
+  }
+  refreshDiagSpawn();
+}
+
+function refreshDiagSpawn(){
+  const spawn = document.getElementById('diag-spawn');
+  if(!spawn) return;
+  try{
+    const overlaps = (typeof computeOverlaps==='function') ? computeOverlaps() : new Set();
+    const tStr = curT.toFixed(2)+'s';
+    if(overlaps && overlaps.size>0){
+      spawn.innerHTML = '<span style="color:#f88">'+overlaps.size+' actor(s) overlap at t='+tStr+'</span>: '+
+                       Array.from(overlaps).slice(0,10).join(', ');
+    } else {
+      spawn.innerHTML = '<span style="color:#4a9">no actor overlaps at t='+tStr+'</span>';
+    }
+  }catch(_){ spawn.textContent=''; }
+}
+
+
 async function init(){
   status('Loading dataset\u2026');
   let data;
@@ -4332,6 +5040,7 @@ async function init(){
   }catch(_){}
 
   await loadCamSubdirs();
+  await loadReplayManifest();
   onResize();
   fitAll();
   rebuildActorList();
@@ -4379,11 +5088,6 @@ async function initBatch(){
     document.getElementById('rtab-scenarios').style.display='';
     updateBatchUI(bs);
 
-    // Start CARLA health polling
-    document.getElementById('carla-bar').classList.add('active');
-    pollCarla();
-    setInterval(pollCarla, 5000);
-
     // Start batch status polling (replaces old bg task polling)
     setInterval(pollBatchStatus, 3000);
   }catch(e){
@@ -4394,31 +5098,44 @@ async function initBatch(){
 function switchRightTab(tab){
   const actorsPanel=document.getElementById('actors-panel');
   const scenariosPanel=document.getElementById('scenarios-panel');
+  const diagPanel=document.getElementById('diag-panel');
   const tabActors=document.getElementById('rtab-actors');
   const tabScenarios=document.getElementById('rtab-scenarios');
-  if(tab==='scenarios'){
-    actorsPanel.classList.remove('active');
-    scenariosPanel.classList.add('active');
+  const tabDiag=document.getElementById('rtab-diag');
+  function clearAll(){
+    actorsPanel.classList.remove('active'); actorsPanel.style.display='none';
+    scenariosPanel.classList.remove('active'); scenariosPanel.style.display='none';
+    if(diagPanel){ diagPanel.style.display='none'; }
     tabActors.classList.remove('on');
+    if(tabScenarios) tabScenarios.classList.remove('on');
+    if(tabDiag) tabDiag.classList.remove('on');
+  }
+  clearAll();
+  if(tab==='scenarios'){
+    scenariosPanel.classList.add('active'); scenariosPanel.style.display='';
     tabScenarios.classList.add('on');
-  }else{
-    scenariosPanel.classList.remove('active');
-    actorsPanel.classList.add('active');
-    tabScenarios.classList.remove('on');
+  } else if(tab==='diag'){
+    if(diagPanel){ diagPanel.style.display='flex'; }
+    if(tabDiag) tabDiag.classList.add('on');
+    if(typeof refreshDiagPanel==='function') refreshDiagPanel();
+  } else {
+    actorsPanel.classList.add('active'); actorsPanel.style.display='';
     tabActors.classList.add('on');
   }
 }
 
 function _scenarioBadge(sc){
-  // Returns {cls, label} for the scenario status badge
+  // Returns {cls, label} for the scenario status badge. Closed-loop replay
+  // availability is the primary signal \u2014 HTML is irrelevant for the XML
+  // validation workflow.
   const qs=sc.queue_status;
   if(qs==='running') return {cls:'running', label:'\u21bb running'};
   if(qs==='pending') return {cls:'queued',  label:'\u25b6 queued'};
   if(qs==='done')    return {cls:'done',    label:'\u2713 done'};
   if(qs==='error')   return {cls:'error',   label:'\u2717 error'};
-  if(!sc.has_html)   return {cls:'nohtml',  label:'no html'};
+  if(sc.has_bev)     return {cls:'bev',     label:'\u25ce BEV'};
   if(sc.has_patch)   return {cls:'patched', label:'\u25c6 patched'};
-  return {cls:'ready', label:'\u25cb ready'};
+  return {cls:'nobev', label:'no BEV'};
 }
 
 function updateScenarioList(bs){
@@ -4429,7 +5146,10 @@ function updateScenarioList(bs){
   for(const sc of _batchScenarioList){
     const div=document.createElement('div');
     div.className='si'+(sc.idx===batchCurrent?' cur':'');
-    div.title=sc.name;
+    const titleParts=[sc.name, (sc.ego_count||0)+' ego'];
+    if(sc.has_bev && sc.bev_runstamp) titleParts.push('BEV: '+sc.bev_runstamp);
+    if(sc.has_patch) titleParts.push('patched');
+    div.title=titleParts.join(' — ');
 
     const badge=_scenarioBadge(sc);
     const badgeEl=document.createElement('span');
@@ -4630,6 +5350,7 @@ async function reloadEditorData(){
     }catch(_){}
 
     await loadCamSubdirs();
+    await loadReplayManifest();
     // Scenario switch: invalidate any in-flight or queued frame requests so the
     // new scenario's first updateCam() isn't dropped or merged with stale state.
     camLoading = false;
@@ -4653,28 +5374,6 @@ async function reloadEditorData(){
   }
 }
 
-// ============================================================
-// CARLA Health Monitor
-// ============================================================
-async function pollCarla(){
-  try{
-    const r=await fetch('/carla_status');
-    if(!r.ok) return;
-    const s=await r.json();
-    const dot=document.getElementById('carla-dot');
-    const txt=document.getElementById('carla-text');
-    if(s.connected){
-      dot.className='ok';
-      txt.textContent='CARLA: '+s.host+':'+s.port+(s.map?' ('+s.map+')':'');
-      txt.style.color='#8f8';
-    }else{
-      dot.className='err';
-      txt.textContent='CARLA disconnected: '+(s.error||'unknown');
-      txt.style.color='#f88';
-    }
-  }catch(_){}
-}
-
 async function pollBatchStatus(){
   if(!batchEnabled) return;
   try{
@@ -4685,40 +5384,6 @@ async function pollBatchStatus(){
     updateScenarioList(bs);
     updateQueueSummary(bs);
   }catch(_){}
-}
-
-function showReconnect(){
-  const modal=document.getElementById('reconnect-modal');
-  modal.classList.add('show');
-  // Pre-fill current values
-  fetch('/carla_status').then(r=>r.json()).then(s=>{
-    document.getElementById('rc-host').value=s.host||'localhost';
-    document.getElementById('rc-port').value=s.port||2000;
-  }).catch(_=>{});
-}
-
-function hideReconnect(){
-  document.getElementById('reconnect-modal').classList.remove('show');
-}
-
-async function doReconnect(){
-  const host=document.getElementById('rc-host').value.trim()||'localhost';
-  const port=parseInt(document.getElementById('rc-port').value)||2000;
-  try{
-    const r=await fetch('/carla_reconnect',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({host,port})});
-    const s=await r.json();
-    if(s.connected){
-      hideReconnect();
-      pollCarla();
-      status('CARLA reconnected to '+host+':'+port);
-    }else{
-      status('CARLA connection failed: '+(s.error||'unknown'));
-    }
-  }catch(e){
-    status('Reconnect error: '+e.message);
-  }
 }
 
 init().catch(e=>{ status('Init error: '+e.message); console.error('[init] uncaught:',e); });
@@ -4819,6 +5484,22 @@ def main() -> None:
     parser.add_argument("--carla-map-offset-json",
                         help="CARLA map offset JSON for pipeline")
 
+    # Closed-loop replay overlay
+    parser.add_argument(
+        "--replay-root",
+        action="append",
+        help=(
+            "Root containing TCP-vid closed-loop runs to overlay on the editor. "
+            "May be passed multiple times. Default: <workspace>/results/"
+            "results_driving_custom/tcp-videos/tcp-vid/."
+        ),
+    )
+    parser.add_argument(
+        "--no-replay",
+        action="store_true",
+        help="Disable the closed-loop replay overlay entirely.",
+    )
+
     # Auto-export pipeline stage toggles (batch mode)
     parser.add_argument(
         "--no-eval",
@@ -4842,6 +5523,34 @@ def main() -> None:
     global _scene_data, _patch, _patch_path
 
     input_path = Path(args.input).expanduser().resolve()
+
+    # ---------- Replay overlay setup (before scenario load so the
+    # first activation can match a run) ----------
+    global _replay_enabled, _replay_roots
+    _replay_enabled = not bool(args.no_replay)
+    if _replay_enabled:
+        roots: List[Path] = []
+        if args.replay_root:
+            for r in args.replay_root:
+                p = Path(r).expanduser().resolve()
+                if p.is_dir():
+                    roots.append(p)
+                else:
+                    print(f"[REPLAY] --replay-root {p} does not exist", flush=True)
+        else:
+            workspace = Path(__file__).resolve().parents[2]
+            default_root = workspace / "results" / "results_driving_custom" / \
+                "tcp-videos" / "tcp-vid"
+            if default_root.is_dir():
+                roots.append(default_root)
+        _replay_roots = roots
+        if roots:
+            _scan_replay_roots()
+        else:
+            print("[REPLAY] no replay roots configured; overlay will be inactive",
+                  flush=True)
+    else:
+        print("[REPLAY] overlay disabled by --no-replay", flush=True)
 
     # ---------- Determine mode ----------
     is_batch = input_path.is_dir()
@@ -4883,15 +5592,16 @@ def main() -> None:
         _batch.pipeline_args = args
 
         print(f"BATCH MODE: {len(scenario_dirs)} scenarios in {input_path.name}")
+        bev_total = 0
         for i, d in enumerate(scenario_dirs):
-            has_html = (d / "trajectory_plot.html").exists()
-            if has_html:
-                marker = " (HTML ready)"
-            elif _is_xml_scenario_directory(d):
-                marker = " (XML — direct edit)"
+            bev = _scenario_bev_status(d)
+            if bev["has_bev"]:
+                bev_total += 1
+                marker = f" (BEV: {bev['runstamp']})"
             else:
-                marker = " (needs pipeline)"
+                marker = " (no BEV)"
             print(f"  [{i}] {d.name}{marker}")
+        print(f"BEV availability: {bev_total}/{len(scenario_dirs)} scenario(s) have a matched closed-loop run")
 
         # Load first scenario
         print(f"\nLoading first scenario: {scenario_dirs[0].name} ...", flush=True)
@@ -4899,13 +5609,6 @@ def main() -> None:
         if not ok:
             print("ERROR: Failed to load first scenario", file=sys.stderr)
             sys.exit(1)
-
-        # Start CARLA health monitor thread
-        carla_thread = threading.Thread(
-            target=_carla_health_loop, daemon=True, name="carla-health",
-        )
-        carla_thread.start()
-        print(f"CARLA health monitor started ({args.carla_host}:{args.carla_port})")
 
     else:
         # ── Single file mode (original behavior) ──
@@ -4924,6 +5627,8 @@ def main() -> None:
         print(f"Loading {html_path.name} …", flush=True)
         _scene_data = load_from_html(html_path)
         _discover_cam(html_path, _scene_data)
+        with _replay_lock:
+            _match_replay_for_scene(_scene_data)
 
         if patch_path.exists():
             try:

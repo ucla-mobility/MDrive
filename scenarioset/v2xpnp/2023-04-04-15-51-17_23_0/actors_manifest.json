@@ -138,15 +138,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_1_static.xml",
-      "route_id": "2023-04-04-15-51-17_23_0",
-      "town": "ucla_v2",
-      "name": "1",
-      "kind": "static",
-      "model": "vehicle.seat.leon",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_3_static.xml",
       "route_id": "2023-04-04-15-51-17_23_0",
       "town": "ucla_v2",

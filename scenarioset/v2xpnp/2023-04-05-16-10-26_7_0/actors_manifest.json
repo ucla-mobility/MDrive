@@ -273,15 +273,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_10_static.xml",
-      "route_id": "2023-04-05-16-10-26_7_0",
-      "town": "ucla_v2",
-      "name": "10",
-      "kind": "static",
-      "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_11_static.xml",
       "route_id": "2023-04-05-16-10-26_7_0",
       "town": "ucla_v2",

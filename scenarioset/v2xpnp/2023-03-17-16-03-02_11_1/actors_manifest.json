@@ -37,15 +37,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_3_npc.xml",
-      "route_id": "2023-03-17-16-03-02_11_1",
-      "town": "ucla_v2",
-      "name": "3",
-      "kind": "npc",
-      "model": "vehicle.audi.tt",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_4_npc.xml",
       "route_id": "2023-03-17-16-03-02_11_1",
       "town": "ucla_v2",
@@ -214,15 +205,6 @@
       "name": "37",
       "kind": "npc",
       "model": "vehicle.citroen.c3",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_42_npc.xml",
-      "route_id": "2023-03-17-16-03-02_11_1",
-      "town": "ucla_v2",
-      "name": "42",
-      "kind": "npc",
-      "model": "vehicle.mini.cooper_s",
       "control_mode": "replay"
     },
     {

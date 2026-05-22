@@ -14,5 +14,17 @@
       "route_id": "247",
       "town": "Town02"
     }
+  ],
+  "npc": [
+    {
+      "file": "actors/npc/town02_npc_brake.xml",
+      "kind": "npc",
+      "name": "npc_brake",
+      "route_id": "247",
+      "town": "Town02",
+      "model": "vehicle.tesla.model3",
+      "speed": 1.0,
+      "control_mode": "policy"
+    }
   ]
 }

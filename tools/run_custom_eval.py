@@ -1075,7 +1075,9 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help=(
             "Planner preset to run. Repeat to launch multiple planners. Each value can be "
-            "<planner> or [<planner>,<conda_env>]. "
+            "<planner> or [<planner>,<conda_env>]. When the bracketed form is omitted, "
+            "the planner is launched under the parent's active conda env (CONDA_DEFAULT_ENV) "
+            "if any; otherwise it inherits sys.executable. "
             f"Available planners: {', '.join(sorted(PLANNER_SPECS.keys()))}. "
             f"Defaults to {DEFAULT_PLANNER} if not set."
         ),
@@ -6615,21 +6617,32 @@ class EmergencyGuard:
         # peak. Catches cascade where existing CARLAs die faster than
         # replacements spawn. Threshold (50%) calibrated against observed
         # b2d_zoo cascade (29 → 13 over ~75 min, post-peak phase ~41% in 18 min).
+        #
+        # Tail-of-run suppression: cap the effective peak by queued+running
+        # remaining work. Once the queue drains below the trailing peak, the
+        # pool legitimately winds down CARLAs and a "collapse" reading is
+        # just healthy shrinkage. Collapse should only fire when there's
+        # still substantial work pending but the pool is shedding CARLAs.
         carla_count = self._count_running_carlas()
         self._carla_history.append((now, carla_count))
         cutoff = now - self.carla_drop_window_s
         self._carla_history = [(t, c) for t, c in self._carla_history if t > cutoff]
         if self._carla_history:
             peak = max(c for _, c in self._carla_history)
+            remaining = self._read_pool_evals_remaining()
+            effective_peak = peak if remaining is None else min(peak, remaining)
             if (
-                peak >= self.carla_drop_min_peak
-                and carla_count < peak * self.carla_drop_ratio
+                effective_peak >= self.carla_drop_min_peak
+                and carla_count < effective_peak * self.carla_drop_ratio
             ):
                 if self._carla_drop_first_seen_at is None:
                     self._carla_drop_first_seen_at = now
                 elif now - self._carla_drop_first_seen_at >= self.carla_drop_sustained_s:
+                    suffix = (f" capped_to_remaining={remaining}"
+                              if remaining is not None and remaining < peak else "")
                     return (f"carla_collapse (current={carla_count} < "
-                            f"{self.carla_drop_ratio:.0%} of peak={peak} for "
+                            f"{self.carla_drop_ratio:.0%} of effective_peak="
+                            f"{effective_peak} (peak={peak}{suffix}) for "
                             f"{now - self._carla_drop_first_seen_at:.0f}s)")
             else:
                 self._carla_drop_first_seen_at = None
@@ -7279,8 +7292,34 @@ def sanitize_run_id(value: str) -> str:
     return sanitized or "run"
 
 
+_PLANNER_SUBPROCESS_SENTINEL_ENV = "COLMDRIVER_PLANNER_SUBPROCESS"
+
+
+def _current_conda_env_default() -> str | None:
+    """Return the parent process's active conda env name, or ``None`` if the
+    parent isn't running under a usable conda env.
+
+    Used so ``--planner <name>`` (no brackets) can fall back to launching
+    children in whatever conda env the user invoked the script from, without
+    forcing them to spell it out as ``--planner [<name>,<env>]``.
+
+    Skipped inside re-spawned planner children / pool grandchildren (marked
+    via ``COLMDRIVER_PLANNER_SUBPROCESS=1``): those are single-scenario
+    workers, and silently auto-filling a conda env there would flip them
+    into multi-planner mode and trip the external-CARLA preflight against
+    ports the pool/parent never opened on them.
+    """
+    if os.environ.get(_PLANNER_SUBPROCESS_SENTINEL_ENV) == "1":
+        return None
+    env_name = (os.environ.get("CONDA_DEFAULT_ENV") or "").strip()
+    if not env_name or env_name.lower() == "base":
+        return None
+    return env_name
+
+
 def parse_planner_requests(raw_values: Sequence[str] | None) -> List[PlannerRequest]:
     requests: List[PlannerRequest] = []
+    inherited_conda_env = _current_conda_env_default()
     for raw in raw_values or []:
         token = str(raw).strip()
         if not token:
@@ -7293,7 +7332,7 @@ def parse_planner_requests(raw_values: Sequence[str] | None) -> List[PlannerRequ
                 )
             planner_name, conda_env = parts
         else:
-            planner_name, conda_env = token, None
+            planner_name, conda_env = token, inherited_conda_env
         if planner_name not in PLANNER_SPECS:
             raise ValueError(
                 f"Unknown planner '{planner_name}'. "
@@ -7302,7 +7341,9 @@ def parse_planner_requests(raw_values: Sequence[str] | None) -> List[PlannerRequ
         requests.append(PlannerRequest(name=planner_name, conda_env=conda_env))
 
     if not requests:
-        requests.append(PlannerRequest(name=DEFAULT_PLANNER))
+        requests.append(
+            PlannerRequest(name=DEFAULT_PLANNER, conda_env=inherited_conda_env)
+        )
 
     name_counts: dict[str, int] = {}
     for req in requests:
@@ -14103,6 +14144,7 @@ def main() -> None:
                 if slot.gpu is not None:
                     child_env["CUDA_VISIBLE_DEVICES"] = str(slot.gpu)
                 child_env[DASHBOARD_STATUS_ENV] = str(dashboard_state.status_path)
+                child_env[_PLANNER_SUBPROCESS_SENTINEL_ENV] = "1"
                 planner_child_timeout_s = None
                 if (
                     not args.dry_run

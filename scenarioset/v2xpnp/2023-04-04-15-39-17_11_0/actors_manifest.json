@@ -91,15 +91,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_16_npc.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "16",
-      "kind": "npc",
-      "model": "vehicle.mercedes.sprinter",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_18_npc.xml",
       "route_id": "2023-04-04-15-39-17_11_0",
       "town": "ucla_v2",
@@ -190,30 +181,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_68_npc.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "68",
-      "kind": "npc",
-      "model": "vehicle.nissan.micra",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_69_npc.xml",
       "route_id": "2023-04-04-15-39-17_11_0",
       "town": "ucla_v2",
       "name": "69",
       "kind": "npc",
       "model": "vehicle.bmw.grandtourer",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_71_npc.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "71",
-      "kind": "npc",
-      "model": "vehicle.lincoln.mkz_2017",
       "control_mode": "replay"
     },
     {
@@ -365,30 +338,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_13_static.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "13",
-      "kind": "static",
-      "model": "vehicle.audi.etron",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_24_static.xml",
       "route_id": "2023-04-04-15-39-17_11_0",
       "town": "ucla_v2",
       "name": "24",
       "kind": "static",
       "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_30_static.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "30",
-      "kind": "static",
-      "model": "vehicle.audi.etron",
       "control_mode": "replay"
     },
     {
@@ -506,15 +461,6 @@
       "name": "59",
       "kind": "static",
       "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_62_static.xml",
-      "route_id": "2023-04-04-15-39-17_11_0",
-      "town": "ucla_v2",
-      "name": "62",
-      "kind": "static",
-      "model": "vehicle.mercedes.sprinter",
       "control_mode": "replay"
     },
     {

@@ -121,15 +121,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_4_static.xml",
-      "route_id": "2023-04-05-15-11-13_2_0",
-      "town": "ucla_v2",
-      "name": "4",
-      "kind": "static",
-      "model": "vehicle.toyota.prius",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_6_static.xml",
       "route_id": "2023-04-05-15-11-13_2_0",
       "town": "ucla_v2",

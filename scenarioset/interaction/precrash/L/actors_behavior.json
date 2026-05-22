@@ -1,0 +1,23 @@
+{
+  "behaviors": [
+    {
+      "route_id": "247",
+      "actor_name": "npc_brake",
+      "trigger": {
+        "type": "distance_to_vehicle",
+        "vehicle": "Vehicle 2",
+        "distance_m": 6.0,
+        "evidence": "NPC paces at 1.5 m/s (slow but not crawl), ego_1 (TCP cruise ~3.5 m/s) closes at ~2 m/s. Brake fires at point-blank (6m c-c) around t=9.5s with ego_1 at ~y=253 and NPC at ~y=259 — TTC ~1.7s vs TCP stopping distance ~1.75m, so emergency brake is a coin-flip. ego_1's goal was extended to y=260 (was y=244) so the brake fires while ego is still en-route to its last waypoint. After brake, NPC resumes at 5 m/s (no crawl) and the encounter resolves quickly."
+      },
+      "action": {
+        "type": "hard_brake",
+        "direction": null,
+        "target_vehicle": null,
+        "brake_hold_s": 2.0,
+        "resume_speed_mps": 5.0,
+        "pacing": false,
+        "min_drive_distance_m": 3.0
+      }
+    }
+  ]
+}

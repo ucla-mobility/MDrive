@@ -6,13 +6,18 @@
       "name": "town01_custom_ego_vehicle_0",
       "route_id": "247",
       "town": "Town01"
-    },
+    }
+  ],
+  "npc": [
     {
-      "file": "town01_custom_ego_vehicle_1.xml",
-      "kind": "ego",
-      "name": "town01_custom_ego_vehicle_1",
+      "file": "actors/npc/town01_npc_zigzag.xml",
+      "kind": "npc",
+      "name": "npc_zigzag",
       "route_id": "247",
-      "town": "Town01"
+      "town": "Town01",
+      "model": "vehicle.tesla.model3",
+      "speed": 5.0,
+      "control_mode": "policy"
     }
   ]
 }

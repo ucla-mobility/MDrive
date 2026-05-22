@@ -448,15 +448,6 @@
   ],
   "static": [
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_1_static.xml",
-      "route_id": "2023-04-05-16-31-26_28_1",
-      "town": "ucla_v2",
-      "name": "1",
-      "kind": "static",
-      "model": "vehicle.citroen.c3",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_2_static.xml",
       "route_id": "2023-04-05-16-31-26_28_1",
       "town": "ucla_v2",
@@ -607,15 +598,6 @@
       "name": "31",
       "kind": "static",
       "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_32_static.xml",
-      "route_id": "2023-04-05-16-31-26_28_1",
-      "town": "ucla_v2",
-      "name": "32",
-      "kind": "static",
-      "model": "vehicle.tesla.model3",
       "control_mode": "replay"
     },
     {

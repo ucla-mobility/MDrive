@@ -82,15 +82,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_29_npc.xml",
-      "route_id": "2023-04-04-16-12-17_44_0",
-      "town": "ucla_v2",
-      "name": "29",
-      "kind": "npc",
-      "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_36_npc.xml",
       "route_id": "2023-04-04-16-12-17_44_0",
       "town": "ucla_v2",

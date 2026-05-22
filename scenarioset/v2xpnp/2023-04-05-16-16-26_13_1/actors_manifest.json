@@ -100,15 +100,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_16_npc.xml",
-      "route_id": "2023-04-05-16-16-26_13_1",
-      "town": "ucla_v2",
-      "name": "16",
-      "kind": "npc",
-      "model": "vehicle.mini.cooper_s",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_18_npc.xml",
       "route_id": "2023-04-05-16-16-26_13_1",
       "town": "ucla_v2",

@@ -210,30 +210,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/static/ucla_v2_custom_Vehicle_6_static.xml",
-      "route_id": "2023-04-04-13-58-53_15_0",
-      "town": "ucla_v2",
-      "name": "6",
-      "kind": "static",
-      "model": "vehicle.dodge.charger_2020",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/static/ucla_v2_custom_Vehicle_7_static.xml",
       "route_id": "2023-04-04-13-58-53_15_0",
       "town": "ucla_v2",
       "name": "7",
       "kind": "static",
       "model": "vehicle.carlamotors.carlacola",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_8_static.xml",
-      "route_id": "2023-04-04-13-58-53_15_0",
-      "town": "ucla_v2",
-      "name": "8",
-      "kind": "static",
-      "model": "vehicle.nissan.micra",
       "control_mode": "replay"
     },
     {

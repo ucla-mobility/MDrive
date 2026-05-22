@@ -172,15 +172,6 @@
       "kind": "static",
       "model": "vehicle.ford.crown",
       "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_24_static.xml",
-      "route_id": "2023-04-07-15-04-15_3_1",
-      "town": "ucla_v2",
-      "name": "24",
-      "kind": "static",
-      "model": "vehicle.chevrolet.impala",
-      "control_mode": "replay"
     }
   ],
   "walker": [

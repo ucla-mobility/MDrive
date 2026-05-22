@@ -82,15 +82,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_12_npc.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "12",
-      "kind": "npc",
-      "model": "vehicle.tesla.model3",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_13_npc.xml",
       "route_id": "2023-04-07-15-05-15_4_1",
       "town": "ucla_v2",
@@ -145,15 +136,6 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_38_npc.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "38",
-      "kind": "npc",
-      "model": "vehicle.chevrolet.impala",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_40_npc.xml",
       "route_id": "2023-04-07-15-05-15_4_1",
       "town": "ucla_v2",
@@ -190,39 +172,12 @@
       "control_mode": "replay"
     },
     {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_63_npc.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "63",
-      "kind": "npc",
-      "model": "vehicle.nissan.micra",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_66_npc.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "66",
-      "kind": "npc",
-      "model": "vehicle.volkswagen.t2",
-      "control_mode": "replay"
-    },
-    {
       "file": "actors/npc/ucla_v2_custom_Vehicle_68_npc.xml",
       "route_id": "2023-04-07-15-05-15_4_1",
       "town": "ucla_v2",
       "name": "68",
       "kind": "npc",
       "model": "vehicle.mini.cooper_s",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/npc/ucla_v2_custom_Vehicle_72_npc.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "72",
-      "kind": "npc",
-      "model": "vehicle.ford.crown",
       "control_mode": "replay"
     },
     {
@@ -342,42 +297,6 @@
       "name": "36",
       "kind": "static",
       "model": "vehicle.mini.cooper_s",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_54_static.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "54",
-      "kind": "static",
-      "model": "vehicle.audi.a2",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_56_static.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "56",
-      "kind": "static",
-      "model": "vehicle.ford.crown",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_57_static.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "57",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe",
-      "control_mode": "replay"
-    },
-    {
-      "file": "actors/static/ucla_v2_custom_Vehicle_58_static.xml",
-      "route_id": "2023-04-07-15-05-15_4_1",
-      "town": "ucla_v2",
-      "name": "58",
-      "kind": "static",
-      "model": "vehicle.mercedes.coupe_2020",
       "control_mode": "replay"
     },
     {
