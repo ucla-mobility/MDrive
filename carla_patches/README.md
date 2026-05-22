@@ -19,7 +19,8 @@ The same bug family also exists in the streaming layer
 
 ### Binary hotpatch (LD_PRELOAD shim)
 
-**File**: `tools/close_ebadf_suppress.c` → `tools/close_ebadf_suppress.so`
+**Source**: `tools/close_ebadf_suppress.c` (tracked in git)
+**Compiled**: `tools/close_ebadf_suppress.so` (built per-machine by `download_and_setup_carla.sh`)
 **Mechanism**: `LD_PRELOAD` + runtime binary patching in `__attribute__((constructor))`
 
 | Fix | What | Binary Address | Technique |
@@ -42,34 +43,42 @@ Changes:
 
 ## Build Instructions
 
+`download_and_setup_carla.sh` builds the shim and patches `CarlaUE4.sh`
+automatically — no manual steps required for a fresh clone. To rebuild
+manually:
+
 ```bash
-# Rebuild the LD_PRELOAD shim
 gcc -O2 -shared -fPIC -o tools/close_ebadf_suppress.so \
     tools/close_ebadf_suppress.c -ldl
 
-# Verify patches apply against the binary
+# Verify patches activate against the binary
 LD_PRELOAD=$(pwd)/tools/close_ebadf_suppress.so \
     ./carla912/CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping --help 2>&1 \
     | grep '\[carla_rpc_fix\]'
-# Expected: all four fixes show "OK"
+# Expected: Fix 1 "active", Fix 2/3/4 each "OK"
 ```
 
 ## How It's Activated
 
-The shim is loaded automatically via two paths:
-1. `carla912/CarlaUE4.sh` (lines 351-358): unconditionally sets `LD_PRELOAD` if `.so` exists
-2. `tools/run_carla_rootcause_capture.sh`: conditionally sets `LD_PRELOAD` (default: on; `--no-ebadf-suppressor` to disable)
+`download_and_setup_carla.sh` injects an `LD_PRELOAD` block into
+`carla912/CarlaUE4.sh` after each fresh tarball extraction (the block is
+idempotent — re-runs are no-ops). Activation paths:
+1. `carla912/CarlaUE4.sh` — unconditionally sets `LD_PRELOAD` if the `.so` exists. All MDrive tools (`hitl_start_carla.py`, `run_custom_eval.py`, `_carla_pool.py`) launch CARLA through this wrapper, so the shim activates automatically.
+2. `tools/run_carla_rootcause_capture.sh` — conditionally sets `LD_PRELOAD` (default: on; `--no-ebadf-suppressor` to disable)
+
+Note: the shim only activates if CARLA is launched via `CarlaUE4.sh`. Running the raw `CarlaUE4/Binaries/Linux/CarlaUE4-Linux-Shipping` binary skips the wrapper and the patches won't apply, but nothing in the repo invokes the binary that way.
 
 ## Files in This Directory
 
 - `README.md` — this file
-- `close_ebadf_suppress.c` — copy of the hotpatch source at time of patch
-- `ServerSession.h.patched` — patched streaming header
-- `ServerSession.cpp.patched` — patched streaming implementation
-- `ServerSession.h.original` — original streaming header (for diffing)
-- `ServerSession.cpp.original` — original streaming implementation (for diffing)
+- `ServerSession.h.patched` — patched streaming header (inert reference; only takes effect if the carlaviz plugin is rebuilt from source)
+- `ServerSession.cpp.patched` — patched streaming implementation (same)
+- `ServerSession.h.original` / `ServerSession.cpp.original` — pre-patch originals for diffing
+- `ServerSession.h.diff` / `ServerSession.cpp.diff` — unified diffs
 - `binary_addresses.txt` — verified disassembly of all patch sites
 - `verification_output.txt` — output from smoke test confirming all patches apply
+
+The shim source itself lives at `tools/close_ebadf_suppress.c` (tracked in git).
 
 ## Upstream References
 

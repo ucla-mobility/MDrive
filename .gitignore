@@ -294,6 +294,9 @@ pip-wheel-metadata/
 # Pyre type checker
 logs/
 *.c
+# Track the LD_PRELOAD shim source used by download_and_setup_carla.sh
+# (compiled .so stays ignored — built per-machine).
+!tools/close_ebadf_suppress.c
 
 
 # others
