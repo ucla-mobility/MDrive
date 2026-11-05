@@ -508,8 +508,8 @@ main() {
   local stamp_dir="$work_dir/stamps"
   local log_dir="$repo_root/logs"
 
-  local carla_url="https://tiny.carla.org/carla-0-9-12-linux"
-  local add_maps_url="https://tiny.carla.org/additional-maps-0-9-12-linux"
+  local carla_url="https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/CARLA_0.9.12.tar.gz"
+  local add_maps_url="https://carla-releases.s3.us-east-005.backblazeb2.com/Linux/AdditionalMaps_0.9.12.tar.gz"
 
   local carla_archive="$work_dir/carla-0-9-12-linux"
   local cache_uasset="$work_dir/cache/WeatherMaterialParameters.uasset"
